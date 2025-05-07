@@ -69,6 +69,10 @@ final case class DistCollection[A](plan: Plan[A]):
     println("--- Take Action Triggered ---")
     DistCollection(Plan.Source(() => LocalExecutor.execute(this.plan).take(n)))
 
+  def first(): A =
+    println("--- First Action Triggered ---")
+    LocalExecutor.execute(this.plan).headOption.get
+
   /**
    * Action: Executes the plan to reduce the elements.
    */
@@ -76,6 +80,13 @@ final case class DistCollection[A](plan: Plan[A]):
     println("--- Reduce Action Triggered ---")
     LocalExecutor.execute(this.plan).reduceOption(op).get
 
+  /**
+   * Action: Executes the plan to fold the elements.
+   */
+  def fold(initial: A)(op: (A, A) => A): A =
+    println("--- Fold Action Triggered ---")
+    LocalExecutor.execute(this.plan).fold(initial)(op)
+    
 end DistCollection
 
 // Companion object for easy creation from source data
