@@ -56,4 +56,22 @@ class TestLocalActions extends AnyFlatSpec with Matchers {
 
     result shouldEqual expected
   }
+
+  it should "execute a simple aggregate operation" in {
+    val source = DistCollection(Seq(1, 2, 3, 4, 5))
+    val aggregated = source.aggregate(0)(_ + _, _ + _)
+    val result = aggregated
+    val expected = 15
+
+    result shouldEqual expected
+  }
+
+  it should "execute a complex aggregate operation for sum and count" in {
+    val source = DistCollection(Seq(1, 2, 3, 4, 5))
+    val aggregated = source.aggregate((0, 0))((x, y) => (x._1 + y, x._2 + 1), (x, y) => (x._1 + y._1, x._2 + y._2))
+    val result = aggregated
+    val expected = (15, 5)
+
+    result shouldEqual expected
+  }
 }

@@ -86,6 +86,10 @@ final case class DistCollection[A](plan: Plan[A]):
   def fold(initial: A)(op: (A, A) => A): A =
     println("--- Fold Action Triggered ---")
     LocalExecutor.execute(this.plan).fold(initial)(op)
+
+  def aggregate[B](zero: B)(seqOp: (B, A) => B, combOp: (B, B) => B): B =
+    println("--- Aggregate Action Triggered ---")
+    LocalExecutor.execute(this.plan).aggregate(zero)(seqOp, combOp)
     
 end DistCollection
 
