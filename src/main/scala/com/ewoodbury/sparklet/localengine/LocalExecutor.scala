@@ -18,25 +18,33 @@ object LocalExecutor:
         println(s" -> Source data materialized (first few): ${data.take(5).mkString("[", ", ", "...]")}")
         data // Return the source data
 
-      case Plan.MapOp(source, f) =>
+      case Plan.MapOp(source, mapFunction) =>
         println(s" -> Executing MapOp")
         // Recursively execute the source plan
-        val sourceResults = execute(source) // Results have type I for some I
+        val sourceResults = execute(source)
         // Apply the function f (which is I => A)
-        // We need to cast `f` because the type `I` is lost in the recursive call's return type.
-        val typedF = f.asInstanceOf[Any => A]
-        val results = sourceResults.map(typedF)
+        val results = sourceResults.map(mapFunction)
         println(s" -> MapOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
         results
 
-      case Plan.FilterOp(source, p) =>
+      case Plan.FilterOp(source, predicateFunction) =>
         println(s" -> Executing FilterOp")
         // Recursively execute the source plan
         val sourceResults = execute(source) // Results have type A
         // Apply the predicate p (which is A => Boolean)
-        val results = sourceResults.filter(p)
+        val results = sourceResults.filter(predicateFunction)
         println(s" -> FilterOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
         results
+
+      case Plan.FlatMapOp(source, flatMapFunction) =>
+        println(s" -> Executing FlatMapOp")
+        // Recursively execute the source plan
+        val sourceResults = execute(source)
+        // Apply the function f (which is I -> IterableOnce[A])
+        val results = sourceResults.flatMap(flatMapFunction)
+        println(s" -> FlatMapOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
+        results
+        
     }
   }
 end LocalExecutor

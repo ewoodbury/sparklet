@@ -30,6 +30,13 @@ object Plan:
    */
   case class FilterOp[A](source: Plan[A], p: A => Boolean) extends Plan[A]
 
+  /** Represents a flatMap transformation.
+   * @param source The preceding plan node (producing elements of type A).
+   * @param f The flatMap function from A to IterableOnce[B].
+   * @tparam B The type of elements in the resulting DistCollection.
+   */
+  case class FlatMapOp[A, B](source: Plan[A], f: A => IterableOnce[B]) extends Plan[B]
+
   // --- Add more operations here later (e.g., FlatMap, Reduce, GroupBy) ---
 
 end Plan

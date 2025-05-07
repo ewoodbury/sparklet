@@ -31,4 +31,13 @@ class TestLocalExecutor extends AnyFlatSpec with Matchers {
 
     result shouldEqual expected
   }
+
+  it should "execute a simple flatMap operation" in {
+    val source = DistCollection(Seq(1, 2, 3, 4))
+    val flatMapped = source.flatMap(x => Seq(x, x * 2))
+    val result = flatMapped.collect()
+    val expected = Seq(1, 2, 2, 4, 3, 6, 4, 8)
+
+    result shouldEqual expected
+  }
 }

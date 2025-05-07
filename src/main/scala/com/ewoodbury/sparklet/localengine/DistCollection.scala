@@ -25,7 +25,15 @@ final case class DistCollection[A](plan: Plan[A]):
   def filter(p: A => Boolean): DistCollection[A] =
     DistCollection(Plan.FilterOp(this.plan, p))
 
-  // --- TODO: Add ore transformations here ---
+  /**
+   * Applies a flatMap function lazily.
+   * Returns a new DistCollection representing the result of the flatMap.
+   * Does not trigger computation.
+   */
+  def flatMap[B](f: A => IterableOnce[B]): DistCollection[B] =
+    DistCollection(Plan.FlatMapOp(this.plan, f))
+
+  // --- TODO: Add more transformations here ---
 
   // --- Actions ---
 
