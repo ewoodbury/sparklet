@@ -84,4 +84,32 @@ class TestLocalExecutor extends AnyFlatSpec with Matchers {
 
     result shouldEqual expected
   }
+
+  it should "execute a simple reduce operation" in {
+    val source = DistCollection(Seq(1, 2, 3, 4, 5))
+    val reduced = source.reduce(_ + _)
+    val result = reduced
+    val expected = 15
+
+    result shouldEqual expected
+  }
+
+  it should "execute a simple reduce operation with strings" in {
+    val source = DistCollection(Seq("a", "b", "c"))
+    val reduced = source.reduce(_ + _)
+    val result = reduced
+    val expected = "abc"
+
+    result shouldEqual expected
+  }
+
+  it should "execute a simple take operation" in {
+    val source = DistCollection(Seq(1, 2, 3, 4, 5))
+    val taken = source.take(3)
+    val result = taken.collect()
+    val expected = Seq(1, 2, 3)
+
+    result shouldEqual expected
+  }
+  
 }

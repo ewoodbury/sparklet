@@ -48,6 +48,4 @@ object Plan:
    */
   case class UnionOp[A](left: Plan[A], right: Plan[A]) extends Plan[A]
 
-  // --- Add more operations here later (e.g., FlatMap, Reduce, GroupBy) ---
-
 end Plan

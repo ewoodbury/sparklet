@@ -9,6 +9,9 @@ package com.ewoodbury.sparklet.localengine
  */
 final case class DistCollection[A](plan: Plan[A]):
 
+  // --- Helper to view the plan ---
+  override def toString: String = s"DistCollection(plan = $plan)"
+
   /**
    * Applies a mapping function lazily.
    * Returns a new DistCollection representing the result of the map.
@@ -39,6 +42,7 @@ final case class DistCollection[A](plan: Plan[A]):
   def union(other: DistCollection[A]): DistCollection[A] =
     DistCollection(Plan.UnionOp(this.plan, other.plan))
 
+
   // --- TODO: Add more transformations here ---
 
   // --- Actions ---
@@ -58,8 +62,19 @@ final case class DistCollection[A](plan: Plan[A]):
     println("--- Count Action Triggered ---")
     LocalExecutor.execute(this.plan).size.toLong // Naive implementation for local
 
-  // --- Helper to view the plan ---
-  override def toString: String = s"DistCollection(plan = $plan)"
+  /**
+   * Action: Executes the plan to take the first n elements.
+   */
+  def take(n: Int): DistCollection[A] =
+    println("--- Take Action Triggered ---")
+    DistCollection(Plan.Source(() => LocalExecutor.execute(this.plan).take(n)))
+
+  /**
+   * Action: Executes the plan to reduce the elements.
+   */
+  def reduce(op: (A, A) => A): A =
+    println("--- Reduce Action Triggered ---")
+    LocalExecutor.execute(this.plan).reduceOption(op).get
 
 end DistCollection
 
