@@ -90,6 +90,10 @@ final case class DistCollection[A](plan: Plan[A]):
   def aggregate[B](zero: B)(seqOp: (B, A) => B, combOp: (B, B) => B): B =
     println("--- Aggregate Action Triggered ---")
     LocalExecutor.execute(this.plan).aggregate(zero)(seqOp, combOp)
+
+  def foreach(f: A => Unit): Unit =
+    println("--- ForEach Action Triggered ---")
+    LocalExecutor.execute(this.plan).foreach(f)
     
 end DistCollection
 

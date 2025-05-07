@@ -74,4 +74,18 @@ class TestLocalActions extends AnyFlatSpec with Matchers {
 
     result shouldEqual expected
   }
+
+  
+  it should "execute a simple foreach operation" in {
+    val source = DistCollection(Seq(1, 2, 3, 4, 5))
+
+    @SuppressWarnings(Array("org.wartremover.warts.Var"))
+    var sum = 0
+    
+    val _ = source.foreach(sum += _)
+    val result = sum
+    val expected = 15
+
+    result shouldEqual expected
+  }
 }
