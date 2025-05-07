@@ -37,6 +37,11 @@ object Plan:
    */
   case class FlatMapOp[A, B](source: Plan[A], f: A => IterableOnce[B]) extends Plan[B]
 
+  /** Represents a distinct transformation.
+   * @param source The preceding plan node (producing elements of type A).
+   */
+  case class DistinctOp[A](source: Plan[A]) extends Plan[A]
+
   // --- Add more operations here later (e.g., FlatMap, Reduce, GroupBy) ---
 
 end Plan

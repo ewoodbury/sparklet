@@ -33,6 +33,9 @@ final case class DistCollection[A](plan: Plan[A]):
   def flatMap[B](f: A => IterableOnce[B]): DistCollection[B] =
     DistCollection(Plan.FlatMapOp(this.plan, f))
 
+  def distinct(): DistCollection[A] =
+    DistCollection(Plan.DistinctOp(this.plan))
+    
   // --- TODO: Add more transformations here ---
 
   // --- Actions ---

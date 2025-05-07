@@ -44,7 +44,13 @@ object LocalExecutor:
         val results = sourceResults.flatMap(flatMapFunction)
         println(s" -> FlatMapOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
         results
-        
+
+      case Plan.DistinctOp(source) =>
+        println(s" -> Executing DistinctOp")
+        val sourceResults = execute(source)
+        val results = sourceResults.toSeq.distinct
+        println(s" -> DistinctOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
+        results
     }
   }
 end LocalExecutor

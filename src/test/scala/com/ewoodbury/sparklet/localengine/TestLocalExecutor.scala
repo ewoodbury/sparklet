@@ -40,4 +40,13 @@ class TestLocalExecutor extends AnyFlatSpec with Matchers {
 
     result shouldEqual expected
   }
+
+  it should "execute a simple distinct operation" in {
+    val source = DistCollection(Seq(1, 2, 2, 3, 4, 4))
+    val distinct = source.distinct()
+    val result = distinct.collect()
+    val expected = Seq(1, 2, 3, 4)
+
+    result shouldEqual expected
+  }
 }
