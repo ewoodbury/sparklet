@@ -42,6 +42,12 @@ object Plan:
    */
   case class DistinctOp[A](source: Plan[A]) extends Plan[A]
 
+  /** Represents a union transformation.
+   * @param left The left preceding plan node (producing elements of type A).
+   * @param right The right preceding plan node (producing elements of type A).
+   */
+  case class UnionOp[A](left: Plan[A], right: Plan[A]) extends Plan[A]
+
   // --- Add more operations here later (e.g., FlatMap, Reduce, GroupBy) ---
 
 end Plan

@@ -51,6 +51,14 @@ object LocalExecutor:
         val results = sourceResults.toSeq.distinct
         println(s" -> DistinctOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
         results
+
+      case Plan.UnionOp(left, right) =>
+        println(s" -> Executing UnionOp")
+        val leftResults = execute(left)
+        val rightResults = execute(right)
+        val results = leftResults ++ rightResults
+        println(s" -> UnionOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
+        results
     }
   }
 end LocalExecutor

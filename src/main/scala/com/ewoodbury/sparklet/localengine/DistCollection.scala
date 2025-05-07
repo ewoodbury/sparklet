@@ -35,7 +35,10 @@ final case class DistCollection[A](plan: Plan[A]):
 
   def distinct(): DistCollection[A] =
     DistCollection(Plan.DistinctOp(this.plan))
-    
+
+  def union(other: DistCollection[A]): DistCollection[A] =
+    DistCollection(Plan.UnionOp(this.plan, other.plan))
+
   // --- TODO: Add more transformations here ---
 
   // --- Actions ---
