@@ -19,4 +19,12 @@ class TestLocalKeyValueTransformations extends AnyFlatSpec with Matchers {
 
     result shouldEqual expected
   }
+
+  it should "execute a simple flatMapValues operation" in {
+    val source = DistCollection(Seq(1 -> "one", 2 -> "two"))
+    val result = source.flatMapValues[Int, String, String](_.split("")).collect()
+    val expected = Seq(1 -> "o", 1 -> "n", 1 -> "e", 2 -> "t", 2 -> "w", 2 -> "o")
+
+    result shouldEqual expected
+  }
 }

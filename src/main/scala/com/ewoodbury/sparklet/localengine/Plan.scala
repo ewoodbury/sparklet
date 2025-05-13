@@ -64,4 +64,13 @@ object Plan:
    * @tparam V The value type of the source plan.
    */
   case class FilterKeysOp[K, V](source: Plan[(K, V)], predicateFunction: K => Boolean) extends Plan[(K, V)]
+
+  /** Represents a flatMapValues transformation.
+   * @param source The preceding plan node (producing elements of type (K, V)).
+   * @param flatMapFunction The flatMap function from V to IterableOnce[B].
+   * @tparam K The key type.
+   * @tparam V The value type of the source plan.
+   * @tparam B The type of elements in the resulting DistCollection.
+   */
+  case class FlatMapValuesOp[K, V, B](source: Plan[(K, V)], flatMapFunction: V => IterableOnce[B]) extends Plan[(K, B)]
 end Plan

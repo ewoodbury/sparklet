@@ -76,6 +76,13 @@ object LocalExecutor:
         println(s" -> FilterKeysOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
         results
 
+      case Plan.FlatMapValuesOp(source, flatMapFunction) =>
+        println(s" -> Executing FlatMapValuesOp")
+        val sourceResults = execute(source)
+        val results = sourceResults.flatMap { (k, v) => flatMapFunction(v).map(b => (k, b)) }
+        println(s" -> FlatMapValuesOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
+        results
+
     }
   }
 end LocalExecutor
