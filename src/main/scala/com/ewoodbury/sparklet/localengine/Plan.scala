@@ -48,4 +48,12 @@ object Plan:
    */
   case class UnionOp[A](left: Plan[A], right: Plan[A]) extends Plan[A]
 
+  /** Represents a mapValues transformation.
+   * @param source The preceding plan node (producing elements of type (K, A)).
+   * @param mapFunction The mapping function from A to B.
+   * @tparam K The key type.
+   * @tparam A The value type of the source plan.
+   * @tparam B The type of elements in the resulting DistCollection.
+   */
+  case class MapValuesOp[K, A, B](source: Plan[(K, A)], mapFunction: A => B) extends Plan[(K, B)]
 end Plan

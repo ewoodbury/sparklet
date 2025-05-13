@@ -12,6 +12,8 @@ final case class DistCollection[A](plan: Plan[A]):
   // --- Helper to view the plan ---
   override def toString: String = s"DistCollection(plan = $plan)"
 
+  // --- Basic Transformations ---
+
   /**
    * Applies a mapping function lazily.
    * Returns a new DistCollection representing the result of the map.
@@ -41,6 +43,11 @@ final case class DistCollection[A](plan: Plan[A]):
 
   def union(other: DistCollection[A]): DistCollection[A] =
     DistCollection(Plan.UnionOp(this.plan, other.plan))
+
+  // --- Key-Value Transformations ---
+
+  def mapValues[K, V, B](f: V => B)(using ev: A =:= (K, V)): DistCollection[(K, B)] =
+    DistCollection(Plan.MapValuesOp(this.plan.asInstanceOf[Plan[(K, V)]], f))
 
 
   // --- TODO: Add more transformations here ---

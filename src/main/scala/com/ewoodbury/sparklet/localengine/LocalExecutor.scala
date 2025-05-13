@@ -59,6 +59,16 @@ object LocalExecutor:
         val results = leftResults ++ rightResults
         println(s" -> UnionOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
         results
+
+      //  ---- Key-Value Transformations ----
+
+      case Plan.MapValuesOp(source, mapFunction) =>
+        println(s" -> Executing MapValuesOp")
+        val sourceResults = execute(source)
+        val results = sourceResults.map((k, v) => (k, mapFunction(v)))
+        println(s" -> MapValuesOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
+        results
+
     }
   }
 end LocalExecutor
