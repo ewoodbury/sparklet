@@ -19,4 +19,20 @@ class TestLocalKeyValueActions extends AnyFlatSpec with Matchers {
 
     result shouldEqual expected
   }
+
+  it should "execute a simple groupByKey operation" in {
+    val source = DistCollection(Seq("one" -> 1, "one" -> 1, "two" -> 2, "two" -> 2))
+    val result = source.groupByKey[String, Int]
+    val expected = Map("one" -> Seq(1, 1), "two" -> Seq(2, 2))
+
+    result shouldEqual expected
+  }
+
+  it should "execute a simple groupByKey operation with strings" in {
+    val source = DistCollection(Seq("one" -> "one", "one" -> "one", "two" -> "two", "two" -> "two"))
+    val result = source.groupByKey[String, String]
+    val expected = Map("one" -> Seq("one", "one"), "two" -> Seq("two", "two"))
+
+    result shouldEqual expected
+  }
 }

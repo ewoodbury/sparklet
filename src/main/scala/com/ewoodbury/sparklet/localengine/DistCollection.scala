@@ -120,6 +120,15 @@ final case class DistCollection[A](plan: Plan[A]):
       (k, values.reduceOption(op).get)
     }.toMap
 
+  /**
+    * Action: Groups the elements by key.
+    */
+  def groupByKey[K, V](using ev: A =:= (K, V)): Map[K, Iterable[V]] =
+    println("--- GroupByKey Action Triggered ---")
+    LocalExecutor.execute(this.plan.asInstanceOf[Plan[(K, V)]])
+    .groupBy(_._1)
+    .map { case (k, pairs) => (k, pairs.map(_._2)) }
+
 end DistCollection
 
 // Companion object for easy creation from source data
