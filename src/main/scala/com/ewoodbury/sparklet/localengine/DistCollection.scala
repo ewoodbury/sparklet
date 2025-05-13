@@ -54,6 +54,8 @@ final case class DistCollection[A](plan: Plan[A]):
 
   def flatMapValues[K, V, B](f: V => IterableOnce[B])(using ev: A =:= (K, V)): DistCollection[(K, B)] =
     DistCollection(Plan.FlatMapValuesOp(this.plan.asInstanceOf[Plan[(K, V)]], f))
+  
+  
   // --- TODO: Add more transformations here ---
 
   // --- Actions ---
@@ -105,7 +107,19 @@ final case class DistCollection[A](plan: Plan[A]):
   def foreach(f: A => Unit): Unit =
     println("--- ForEach Action Triggered ---")
     LocalExecutor.execute(this.plan).foreach(f)
-    
+
+  /**
+   * Action: Executes the plan to reduce the elements by key.
+   */
+  def reduceByKey[K, V](op: (V, V) => V)(using ev: A =:= (K, V)): Map[K, V] =
+    println("--- ReduceByKey Action Triggered ---")
+    LocalExecutor.execute(this.plan.asInstanceOf[Plan[(K, V)]])
+    .groupBy(_._1)
+    .map { case (k, pairs) => 
+      val values = pairs.map(_._2)
+      (k, values.reduceOption(op).get)
+    }.toMap
+
 end DistCollection
 
 // Companion object for easy creation from source data
