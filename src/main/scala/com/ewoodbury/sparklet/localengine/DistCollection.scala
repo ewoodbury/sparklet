@@ -15,7 +15,7 @@ final case class DistCollection[A](plan: Plan[A]):
   // --- Basic Transformations ---
 
   /**
-   * Applies a mapping function lazily.
+   * Transformation: Applies a mapping function lazily.
    * Returns a new DistCollection representing the result of the map.
    * Does not trigger computation.
    */
@@ -23,7 +23,7 @@ final case class DistCollection[A](plan: Plan[A]):
     DistCollection(Plan.MapOp(this.plan, f))
 
   /**
-   * Applies a filter predicate lazily.
+   * Transformation: Applies a filter predicate lazily.
    * Returns a new DistCollection representing the filtered result.
    * Does not trigger computation.
    */
@@ -31,27 +31,50 @@ final case class DistCollection[A](plan: Plan[A]):
     DistCollection(Plan.FilterOp(this.plan, p))
 
   /**
-   * Applies a flatMap function lazily.
+   * Transformation: Applies a flatMap function lazily.
    * Returns a new DistCollection representing the result of the flatMap.
    * Does not trigger computation.
    */
   def flatMap[B](f: A => IterableOnce[B]): DistCollection[B] =
     DistCollection(Plan.FlatMapOp(this.plan, f))
 
+  /**
+   * Transformation: Returns a new DistCollection with distinct elements.
+   * Does not trigger computation.
+   */
   def distinct(): DistCollection[A] =
     DistCollection(Plan.DistinctOp(this.plan))
 
+  /**
+   * Transformation: Returns a new DistCollection with the elements of two collections.
+   * Does not trigger computation.
+   */
   def union(other: DistCollection[A]): DistCollection[A] =
     DistCollection(Plan.UnionOp(this.plan, other.plan))
 
   // --- Key-Value Transformations ---
 
+  /**
+   * Transformation: Applies a function to the values of the elements in the collection.
+   * Returns a new DistCollection representing the result of the map.
+   * Does not trigger computation.
+   */
   def mapValues[K, V, B](f: V => B)(using ev: A =:= (K, V)): DistCollection[(K, B)] =
     DistCollection(Plan.MapValuesOp(this.plan.asInstanceOf[Plan[(K, V)]], f))
 
+  /**
+   * Transformation: Filters the elements of the collection by the keys.
+   * Returns a new DistCollection representing the filtered result.
+   * Does not trigger computation.
+   */
   def filterKeys[K, V](p: K => Boolean)(using ev: A =:= (K, V)): DistCollection[(K, V)] =
     DistCollection(Plan.FilterKeysOp(this.plan.asInstanceOf[Plan[(K, V)]], p))
 
+  /**
+   * Transformation: Applies a function to the values of the elements in the collection.
+   * Returns a new DistCollection representing the result of the flatMap.
+   * Does not trigger computation.
+   */
   def flatMapValues[K, V, B](f: V => IterableOnce[B])(using ev: A =:= (K, V)): DistCollection[(K, B)] =
     DistCollection(Plan.FlatMapValuesOp(this.plan.asInstanceOf[Plan[(K, V)]], f))
   
@@ -82,6 +105,9 @@ final case class DistCollection[A](plan: Plan[A]):
     println("--- Take Action Triggered ---")
     DistCollection(Plan.Source(() => LocalExecutor.execute(this.plan).take(n)))
 
+  /**
+   * Action: Executes the plan to take the first element.
+   */
   def first(): A =
     println("--- First Action Triggered ---")
     LocalExecutor.execute(this.plan).headOption.get
@@ -100,10 +126,16 @@ final case class DistCollection[A](plan: Plan[A]):
     println("--- Fold Action Triggered ---")
     LocalExecutor.execute(this.plan).fold(initial)(op)
 
+  /**
+   * Action: Executes the plan to aggregate the elements.
+   */
   def aggregate[B](zero: B)(seqOp: (B, A) => B, combOp: (B, B) => B): B =
     println("--- Aggregate Action Triggered ---")
     LocalExecutor.execute(this.plan).aggregate(zero)(seqOp, combOp)
 
+  /**
+   * Action: Executes the plan to apply a function to each element.
+   */
   def foreach(f: A => Unit): Unit =
     println("--- ForEach Action Triggered ---")
     LocalExecutor.execute(this.plan).foreach(f)
