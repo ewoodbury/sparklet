@@ -55,6 +55,22 @@ final case class DistCollection[A](plan: Plan[A]):
   // --- Key-Value Transformations ---
 
   /**
+    * Transformation: Extracts the keys from the elements in the collection.
+    * Returns a new DistCollection representing the keys.
+    * Does not trigger computation.
+    */
+  def keys[K, V](using ev: A =:= (K, V)): DistCollection[K] =
+    DistCollection(Plan.KeysOp(this.plan.asInstanceOf[Plan[(K, V)]]))
+
+  /**
+    * Transformation: Extracts the values from the elements in the collection.
+    * Returns a new DistCollection representing the values.
+    * Does not trigger computation.
+    */
+  def values[K, V](using ev: A =:= (K, V)): DistCollection[V] =
+    DistCollection(Plan.ValuesOp(this.plan.asInstanceOf[Plan[(K, V)]]))
+
+  /**
    * Transformation: Applies a function to the values of the elements in the collection.
    * Returns a new DistCollection representing the result of the map.
    * Does not trigger computation.

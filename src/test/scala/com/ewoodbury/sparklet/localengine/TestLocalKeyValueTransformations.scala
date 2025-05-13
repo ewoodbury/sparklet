@@ -4,7 +4,25 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 class TestLocalKeyValueTransformations extends AnyFlatSpec with Matchers {
-  "LocalExecutor" should "execute a simple mapValues operation" in {
+  "LocalExecutor" should "execute a simple keys operation" in {
+    val source = DistCollection(Seq(1 -> "one", 2 -> "two", 3 -> "three"))
+    val keys = source.keys
+    val result = keys.collect()
+    val expected = Seq(1, 2, 3)
+
+    result shouldEqual expected
+  }
+
+  it should "execute a simple values operation" in {
+    val source = DistCollection(Seq(1 -> "one", 2 -> "two", 3 -> "three"))
+    val values = source.values
+    val result = values.collect()
+    val expected = Seq("one", "two", "three")
+
+    result shouldEqual expected
+  }
+
+  it should "execute a simple mapValues operation" in {
     val source = DistCollection(Seq(1 -> "one", 2 -> "two", 3 -> "three"))
     val result = source.mapValues[Int, String, String](_ + "!").collect()
     val expected = Seq(1 -> "one!", 2 -> "two!", 3 -> "three!")

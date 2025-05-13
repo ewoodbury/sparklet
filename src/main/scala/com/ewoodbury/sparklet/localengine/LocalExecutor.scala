@@ -62,6 +62,20 @@ object LocalExecutor:
 
       //  ---- Key-Value Transformations ----
 
+      case Plan.KeysOp(source) =>
+        println(s" -> Executing KeysOp")
+        val sourceResults = execute(source)
+        val results = sourceResults.map(_._1)
+        println(s" -> KeysOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
+        results
+
+      case Plan.ValuesOp(source) =>
+        println(s" -> Executing ValuesOp")
+        val sourceResults = execute(source)
+        val results = sourceResults.map(_._2)
+        println(s" -> ValuesOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
+        results
+
       case Plan.MapValuesOp(source, mapFunction) =>
         println(s" -> Executing MapValuesOp")
         val sourceResults = execute(source)
