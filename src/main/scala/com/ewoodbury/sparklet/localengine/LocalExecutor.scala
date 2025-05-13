@@ -69,6 +69,13 @@ object LocalExecutor:
         println(s" -> MapValuesOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
         results
 
+      case Plan.FilterKeysOp(source, predicateFunction) =>
+        println(s" -> Executing FilterKeysOp")
+        val sourceResults = execute(source)
+        val results = sourceResults.filter((k, _) => predicateFunction(k))
+        println(s" -> FilterKeysOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
+        results
+
     }
   }
 end LocalExecutor

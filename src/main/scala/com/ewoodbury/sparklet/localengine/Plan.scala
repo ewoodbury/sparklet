@@ -55,5 +55,13 @@ object Plan:
    * @tparam A The value type of the source plan.
    * @tparam B The type of elements in the resulting DistCollection.
    */
-  case class MapValuesOp[K, A, B](source: Plan[(K, A)], mapFunction: A => B) extends Plan[(K, B)]
+  case class MapValuesOp[K, V, B](source: Plan[(K, V)], mapFunction: V => B) extends Plan[(K, B)]
+
+  /** Represents a filterKeys transformation.
+   * @param source The preceding plan node (producing elements of type (K, A)).
+   * @param predicateFunction The predicate function from K to Boolean.
+   * @tparam K The key type.
+   * @tparam V The value type of the source plan.
+   */
+  case class FilterKeysOp[K, V](source: Plan[(K, V)], predicateFunction: K => Boolean) extends Plan[(K, V)]
 end Plan

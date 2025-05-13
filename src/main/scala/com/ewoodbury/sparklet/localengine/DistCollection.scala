@@ -49,6 +49,8 @@ final case class DistCollection[A](plan: Plan[A]):
   def mapValues[K, V, B](f: V => B)(using ev: A =:= (K, V)): DistCollection[(K, B)] =
     DistCollection(Plan.MapValuesOp(this.plan.asInstanceOf[Plan[(K, V)]], f))
 
+  def filterKeys[K, V](p: K => Boolean)(using ev: A =:= (K, V)): DistCollection[(K, V)] =
+    DistCollection(Plan.FilterKeysOp(this.plan.asInstanceOf[Plan[(K, V)]], p))
 
   // --- TODO: Add more transformations here ---
 

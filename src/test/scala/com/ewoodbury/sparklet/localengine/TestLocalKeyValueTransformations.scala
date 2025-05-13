@@ -11,4 +11,12 @@ class TestLocalKeyValueTransformations extends AnyFlatSpec with Matchers {
 
     result shouldEqual expected
   }
+
+  it should "execute a simple filterKeys operation" in {
+    val source = DistCollection(Seq(1 -> "one", 2 -> "two", 3 -> "three"))
+    val result = source.filterKeys[Int, String](_ % 2 == 0).collect()
+    val expected = Seq(2 -> "two")
+
+    result shouldEqual expected
+  }
 }
