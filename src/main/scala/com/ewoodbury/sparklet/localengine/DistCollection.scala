@@ -93,97 +93,81 @@ final case class DistCollection[A](plan: Plan[A]):
    */
   def flatMapValues[K, V, B](f: V => IterableOnce[B])(using ev: A =:= (K, V)): DistCollection[(K, B)] =
     DistCollection(Plan.FlatMapValuesOp(this.plan.asInstanceOf[Plan[(K, V)]], f))
-  
-  
-  // --- TODO: Add more transformations here ---
+
 
   // --- Actions ---
 
   /**
-   * Action: Executes the plan using the LocalExecutor and returns the results.
-   * This triggers the computation defined by the plan.
+   * Action: Executes the plan and returns the results as a single local Iterable.
+   * This triggers the computation.
    */
   def collect(): Iterable[A] =
     println("--- Collect Action Triggered ---")
-    LocalExecutor.execute(this.plan)
-
-  /**
-   * Action: Executes the plan to count the elements.
-   */
+    // 1. Execute the plan to get the sequence of result partitions
+    val resultPartitions = LocalExecutor.compute(this.plan)
+    // 2. Combine the data from all partitions into a single Iterable
+    val finalResult = resultPartitions.flatMap(_.data)
+    println(s"--- Collection Complete. Total items: ${finalResult.size} ---")
+    finalResult
+    
+  // All other actions (count, take, reduce, etc.) can now be defined
+  // in terms of collect() for simplicity.
+  
   def count(): Long =
     println("--- Count Action Triggered ---")
-    LocalExecutor.execute(this.plan).size.toLong // Naive implementation for local
+    collect().size.toLong
 
-  /**
-   * Action: Executes the plan to take the first n elements.
-   */
-  def take(n: Int): DistCollection[A] =
+  def take(n: Int): List[A] =
     println("--- Take Action Triggered ---")
-    DistCollection(Plan.Source(() => LocalExecutor.execute(this.plan).take(n)))
+    // This is inefficient as it collects everything first. A real implementation
+    // would have a more optimized executor for `take`.
+    collect().take(n).toList
+    
+  def first(): A = take(1).headOption.getOrElse(throw new NoSuchElementException("Collection is empty"))
+  
+  def reduce(op: (A, A) => A): A = collect().reduceOption(op).getOrElse(throw new NoSuchElementException("Collection is empty"))
+  
+  def fold(initial: A)(op: (A, A) => A): A = collect().fold(initial)(op)
 
-  /**
-   * Action: Executes the plan to take the first element.
-   */
-  def first(): A =
-    println("--- First Action Triggered ---")
-    LocalExecutor.execute(this.plan).headOption.get
-
-  /**
-   * Action: Executes the plan to reduce the elements.
-   */
-  def reduce(op: (A, A) => A): A =
-    println("--- Reduce Action Triggered ---")
-    LocalExecutor.execute(this.plan).reduceOption(op).get
-
-  /**
-   * Action: Executes the plan to fold the elements.
-   */
-  def fold(initial: A)(op: (A, A) => A): A =
-    println("--- Fold Action Triggered ---")
-    LocalExecutor.execute(this.plan).fold(initial)(op)
-
-  /**
-   * Action: Executes the plan to aggregate the elements.
-   */
   def aggregate[B](zero: B)(seqOp: (B, A) => B, combOp: (B, B) => B): B =
-    println("--- Aggregate Action Triggered ---")
-    LocalExecutor.execute(this.plan).aggregate(zero)(seqOp, combOp)
+    collect().aggregate(zero)(seqOp, combOp)
+  
+  def foreach(f: A => Unit): Unit = collect().foreach(f)
 
-  /**
-   * Action: Executes the plan to apply a function to each element.
-   */
-  def foreach(f: A => Unit): Unit =
-    println("--- ForEach Action Triggered ---")
-    LocalExecutor.execute(this.plan).foreach(f)
-
-  /**
-   * Action: Executes the plan to reduce the elements by key.
-   */
+  // These actions still collect all data to the driver first. This is correct for
+  // a local simulation but is not a distributed implementation.
   def reduceByKey[K, V](op: (V, V) => V)(using ev: A =:= (K, V)): Map[K, V] =
-    println("--- ReduceByKey Action Triggered ---")
-    LocalExecutor.execute(this.plan.asInstanceOf[Plan[(K, V)]])
-    .groupBy(_._1)
-    .map { case (k, pairs) => 
-      val values = pairs.map(_._2)
-      (k, values.reduceOption(op).get)
-    }.toMap
+    val collected = this.asInstanceOf[DistCollection[(K, V)]].collect()
+    collected
+      .groupBy(_._1)
+      .map { case (k, pairs) => (k, pairs.map(_._2).reduceOption(op).getOrElse(throw new NoSuchElementException("Collection is empty"))) }
 
-  /**
-    * Action: Groups the elements by key.
-    */
   def groupByKey[K, V](using ev: A =:= (K, V)): Map[K, Iterable[V]] =
-    println("--- GroupByKey Action Triggered ---")
-    LocalExecutor.execute(this.plan.asInstanceOf[Plan[(K, V)]])
-    .groupBy(_._1)
-    .map { case (k, pairs) => (k, pairs.map(_._2)) }
+    val collected = this.asInstanceOf[DistCollection[(K, V)]].collect()
+    collected
+      .groupBy(_._1)
+      .map { case (k, pairs) => (k, pairs.map(_._2)) }
 
 end DistCollection
 
-// Companion object for easy creation from source data
+// Companion object for creating a DistCollection from a source
 object DistCollection:
   /**
-   * Creates a DistCollection from an existing Iterable data source.
+   * Creates a DistCollection from an existing Iterable data source, splitting it
+   * into a specified number of partitions.
+   *
+   * @param data The source data.
+   * @param numPartitions The desired number of partitions.
+   * @return A new DistCollection.
    */
-  def apply[A](data: Iterable[A]): DistCollection[A] =
-    // Store it as a function () => data for lazy access by the executor
-    DistCollection(Plan.Source(() => data))
+  def apply[A](data: Iterable[A], numPartitions: Int): DistCollection[A] =
+    require(numPartitions > 0, "Number of partitions must be positive.")
+    
+    // Split the source data into groups that will become our partitions
+    val groupedData = data.toSeq.grouped(math.ceil(data.size.toDouble / numPartitions).toInt)
+    
+    // Create the actual Partition objects
+    val partitions = groupedData.map(chunk => Partition(chunk)).toSeq
+    
+    // Create the DistCollection, starting its logical plan with a Source node
+    DistCollection(Plan.Source(partitions))

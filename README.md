@@ -15,4 +15,6 @@ A data processing engine inspired by Spark, in pure functional Scala.
 ## Distributed Processing
 
 - [x] Local Mode
-- [ ] Cluster Mode
+- [x] Partitions Support
+- [ ] Simulated Cluster Mode
+- [ ] True Cluster Mode

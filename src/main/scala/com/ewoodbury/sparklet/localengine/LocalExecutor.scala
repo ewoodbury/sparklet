@@ -3,100 +3,94 @@ package com.ewoodbury.sparklet.localengine
 object LocalExecutor:
 
   /**
-   * Executes a Plan locally, interpreting the operations.
-   * Note: This implementation is simple and not optimized (e.g., for fusion).
-   * It demonstrates the principle of interpreting the plan.
+   * Executes a Plan by computing its resulting partitions.
+   * This is the core of our "proto-distributed" engine. For narrow transformations,
+   * it processes each input partition independently to produce an output partition.
    *
-   * Type safety relies on the correct construction of Plan via DistCollection methods.
+   * @param plan The logical plan to execute.
+   * @return A sequence of Partitions representing the result.
    */
-  def execute[A](plan: Plan[A]): Iterable[A] = {
-    println(s"Executing plan node: $plan") // Log execution step
+  def compute[A](plan: Plan[A]): Seq[Partition[A]] = {
+    println(s"Computing partitions for plan node: $plan")
     plan match {
-      case Plan.Source(dataSource) =>
-        println(" -> Executing Source")
-        val data = dataSource()
-        println(s" -> Source data materialized (first few): ${data.take(5).mkString("[", ", ", "...]")}")
-        data // Return the source data
+      // Base case: The Source plan just provides the initial partitions.
+      case Plan.Source(partitions) =>
+        println(s" -> Reached Source with ${partitions.length} partitions.")
+        partitions
 
-      case Plan.MapOp(source, mapFunction) =>
-        println(s" -> Executing MapOp")
-        // Recursively execute the source plan
-        val sourceResults = execute(source)
-        // Apply the function f (which is I => A)
-        val results = sourceResults.map(mapFunction)
-        println(s" -> MapOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
-        results
+      // Narrow transformations:
+      // Process each partition independently.
+      case Plan.MapOp(source, f) =>
+        println(" -> Computing MapOp")
+        val inputPartitions = compute(source) // Recursively compute parent partitions
+        val resultPartitions = inputPartitions.map { part =>
+          // Apply the function to the data within each partition
+          Partition(part.data.map(f))
+        }
+        println(s" -> MapOp produced ${resultPartitions.length} new partitions.")
+        resultPartitions
 
-      case Plan.FilterOp(source, predicateFunction) =>
-        println(s" -> Executing FilterOp")
-        // Recursively execute the source plan
-        val sourceResults = execute(source) // Results have type A
-        // Apply the predicate p (which is A => Boolean)
-        val results = sourceResults.filter(predicateFunction)
-        println(s" -> FilterOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
-        results
+      case Plan.FilterOp(source, p) =>
+        println(" -> Computing FilterOp")
+        val inputPartitions = compute(source)
+        val resultPartitions = inputPartitions.map { part =>
+          Partition(part.data.filter(p))
+        }
+        println(s" -> FilterOp produced ${resultPartitions.length} new partitions.")
+        resultPartitions
+        
+      case Plan.FlatMapOp(source, f) =>
+        println(" -> Computing FlatMapOp")
+        val inputPartitions = compute(source)
+        val resultPartitions = inputPartitions.map { part =>
+          Partition(part.data.flatMap(f))
+        }
+        println(s" -> FlatMapOp produced ${resultPartitions.length} new partitions.")
+        resultPartitions
 
-      case Plan.FlatMapOp(source, flatMapFunction) =>
-        println(s" -> Executing FlatMapOp")
-        // Recursively execute the source plan
-        val sourceResults = execute(source)
-        // Apply the function f (which is I -> IterableOnce[A])
-        val results = sourceResults.flatMap(flatMapFunction)
-        println(s" -> FlatMapOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
-        results
+      // NOTE: Wide transformations like distinct and union are more complex.
+      // A true distributed implementation requires a shuffle.
+      // For now, we simulate it by collecting all data to the "driver" (here),
+      // performing the operation, and then re-partitioning into a single partition.
 
       case Plan.DistinctOp(source) =>
-        println(s" -> Executing DistinctOp")
-        val sourceResults = execute(source)
-        val results = sourceResults.toSeq.distinct
-        println(s" -> DistinctOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
-        results
+        println(" -> Computing DistinctOp (via collect-and-repartition)")
+        val allData = compute(source).flatMap(_.data)
+        val distinctData = allData.distinct
+        Seq(Partition(distinctData))
 
       case Plan.UnionOp(left, right) =>
-        println(s" -> Executing UnionOp")
-        val leftResults = execute(left)
-        val rightResults = execute(right)
-        val results = leftResults ++ rightResults
-        println(s" -> UnionOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
-        results
-
-      //  ---- Key-Value Transformations ----
-
+        println(" -> Computing UnionOp")
+        val leftPartitions = compute(left)
+        val rightPartitions = compute(right)
+        leftPartitions ++ rightPartitions
+        
+      // --- Key-Value Transformations (all narrow) ---
+      
       case Plan.KeysOp(source) =>
-        println(s" -> Executing KeysOp")
-        val sourceResults = execute(source)
-        val results = sourceResults.map(_._1)
-        println(s" -> KeysOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
-        results
+        println(" -> Computing KeysOp")
+        val inputPartitions = compute(source)
+        inputPartitions.map(part => Partition(part.data.map(_._1)))
 
       case Plan.ValuesOp(source) =>
-        println(s" -> Executing ValuesOp")
-        val sourceResults = execute(source)
-        val results = sourceResults.map(_._2)
-        println(s" -> ValuesOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
-        results
+        println(" -> Computing ValuesOp")
+        val inputPartitions = compute(source)
+        inputPartitions.map(part => Partition(part.data.map(_._2)))
 
-      case Plan.MapValuesOp(source, mapFunction) =>
-        println(s" -> Executing MapValuesOp")
-        val sourceResults = execute(source)
-        val results = sourceResults.map((k, v) => (k, mapFunction(v)))
-        println(s" -> MapValuesOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
-        results
+      case Plan.MapValuesOp(source, f) =>
+        println(" -> Computing MapValuesOp")
+        val inputPartitions = compute(source)
+        inputPartitions.map(part => Partition(part.data.map { case (k, v) => (k, f(v)) }))
 
-      case Plan.FilterKeysOp(source, predicateFunction) =>
-        println(s" -> Executing FilterKeysOp")
-        val sourceResults = execute(source)
-        val results = sourceResults.filter((k, _) => predicateFunction(k))
-        println(s" -> FilterKeysOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
-        results
+      case Plan.FilterKeysOp(source, p) =>
+        println(" -> Computing FilterKeysOp")
+        val inputPartitions = compute(source)
+        inputPartitions.map(part => Partition(part.data.filter { case (k, _) => p(k) }))
 
-      case Plan.FlatMapValuesOp(source, flatMapFunction) =>
-        println(s" -> Executing FlatMapValuesOp")
-        val sourceResults = execute(source)
-        val results = sourceResults.flatMap { (k, v) => flatMapFunction(v).map(b => (k, b)) }
-        println(s" -> FlatMapValuesOp applied (first few results): ${results.take(5).mkString("[", ", ", "...]")}")
-        results
-
+      case Plan.FlatMapValuesOp(source, f) =>
+        println(" -> Computing FlatMapValuesOp")
+        val inputPartitions = compute(source)
+        inputPartitions.map(part => Partition(part.data.flatMap { case (k, v) => f(v).map(b => (k, b)) }))
     }
   }
 end LocalExecutor

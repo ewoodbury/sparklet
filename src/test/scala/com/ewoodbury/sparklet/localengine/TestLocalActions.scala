@@ -4,8 +4,10 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 class TestLocalActions extends AnyFlatSpec with Matchers {
+  val toDistCollection = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
+
   "LocalExecutor" should "execute a simple collect operation" in {
-    val source = DistCollection(Seq(1, 2, 3, 4, 5))
+    val source = toDistCollection(Seq(1, 2, 3, 4, 5))
     val result = source.collect()
     val expected = Seq(1, 2, 3, 4, 5)
 
@@ -13,16 +15,15 @@ class TestLocalActions extends AnyFlatSpec with Matchers {
   }
 
   it should "execute a simple take operation" in {
-    val source = DistCollection(Seq(1, 2, 3, 4, 5))
-    val taken = source.take(3)
-    val result = taken.collect()
+    val source = toDistCollection(Seq(1, 2, 3, 4, 5))
+    val result = source.take(3)
     val expected = Seq(1, 2, 3)
 
     result shouldEqual expected
   }
 
   it should "execute a simple first operation" in {
-    val source = DistCollection(Seq(1, 2, 3, 4, 5))
+    val source = toDistCollection(Seq(1, 2, 3, 4, 5))
     val first = source.first()
     val result = first
     val expected = 1
@@ -31,7 +32,7 @@ class TestLocalActions extends AnyFlatSpec with Matchers {
   }
 
   it should "execute a simple reduce operation" in {
-    val source = DistCollection(Seq(1, 2, 3, 4, 5))
+    val source = toDistCollection(Seq(1, 2, 3, 4, 5))
     val reduced = source.reduce(_ + _)
     val result = reduced
     val expected = 15
@@ -40,7 +41,7 @@ class TestLocalActions extends AnyFlatSpec with Matchers {
   }
 
   it should "execute a simple reduce operation with strings" in {
-    val source = DistCollection(Seq("a", "b", "c"))
+    val source = toDistCollection(Seq("a", "b", "c"))
     val reduced = source.reduce(_ + _)
     val result = reduced
     val expected = "abc"
@@ -49,7 +50,7 @@ class TestLocalActions extends AnyFlatSpec with Matchers {
   }
 
   it should "execute a simple fold operation" in {
-    val source = DistCollection(Seq(1, 2, 3, 4, 5))
+    val source = toDistCollection(Seq(1, 2, 3, 4, 5))
     val folded = source.fold(0)(_ + _)
     val result = folded
     val expected = 15
@@ -58,7 +59,7 @@ class TestLocalActions extends AnyFlatSpec with Matchers {
   }
 
   it should "execute a simple aggregate operation" in {
-    val source = DistCollection(Seq(1, 2, 3, 4, 5))
+    val source = toDistCollection(Seq(1, 2, 3, 4, 5))
     val aggregated = source.aggregate(0)(_ + _, _ + _)
     val result = aggregated
     val expected = 15
@@ -67,7 +68,7 @@ class TestLocalActions extends AnyFlatSpec with Matchers {
   }
 
   it should "execute a complex aggregate operation for sum and count" in {
-    val source = DistCollection(Seq(1, 2, 3, 4, 5))
+    val source = toDistCollection(Seq(1, 2, 3, 4, 5))
     val aggregated = source.aggregate((0, 0))((x, y) => (x._1 + y, x._2 + 1), (x, y) => (x._1 + y._1, x._2 + y._2))
     val result = aggregated
     val expected = (15, 5)
@@ -77,7 +78,7 @@ class TestLocalActions extends AnyFlatSpec with Matchers {
 
   
   it should "execute a simple foreach operation" in {
-    val source = DistCollection(Seq(1, 2, 3, 4, 5))
+    val source = toDistCollection(Seq(1, 2, 3, 4, 5))
 
     @SuppressWarnings(Array("org.wartremover.warts.Var"))
     var sum = 0

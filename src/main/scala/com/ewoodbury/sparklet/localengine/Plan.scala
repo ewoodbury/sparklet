@@ -1,5 +1,7 @@
 package com.ewoodbury.sparklet.localengine
 
+final case class Partition[A](data: Iterable[A])
+
 /**
  * Represents the logical plan for computing a DistCollection.
  * This is a Directed Acyclic Graph (DAG) where nodes are operations.
@@ -15,7 +17,7 @@ object Plan:
    * Using a function `() => Iterable[A]` makes it slightly lazier,
    * ensuring the source data isn't iterated until execution starts.
    */
-  case class Source[A](dataSource: () => Iterable[A]) extends Plan[A]
+  case class Source[A](partitions: Seq[Partition[A]]) extends Plan[A]
 
   /** Represents a map transformation.
    * @param source The preceding plan node (producing elements of type I).
