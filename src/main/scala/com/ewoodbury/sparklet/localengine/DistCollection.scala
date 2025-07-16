@@ -99,17 +99,40 @@ final case class DistCollection[A](plan: Plan[A]):
 
   /**
    * Action: Executes the plan and returns the results as a single local Iterable.
-   * This triggers the computation.
+   * This triggers the computation using the concurrent TaskScheduler.
    */
-  def collect(): Iterable[A] =
+  def collect(): Iterable[A] = {
     println("--- Collect Action Triggered ---")
-    // 1. Execute the plan to get the sequence of result partitions
-    val resultPartitions = LocalExecutor.compute(this.plan)
-    // 2. Combine the data from all partitions into a single Iterable
-    val finalResult = resultPartitions.flatMap(_.data)
-    println(s"--- Collection Complete. Total items: ${finalResult.size} ---")
-    finalResult
-    
+
+    // The logic to break a plan into stages and tasks is complex.
+    // For now, let's simulate it for a simple one-stage plan (e.g., source -> map -> filter).
+    // We will manually create the tasks for the FINAL operation in the plan.
+
+    // A more advanced scheduler would analyze the full DAG.
+    // Let's pretend our plan is just a MapOp for this example.
+    this.plan match {
+      case Plan.MapOp(source, f) =>
+        println("Found a MapOp plan. Creating MapTasks for the scheduler.")
+        // 1. Get the partitions from the parent plan
+        val inputPartitions = LocalExecutor.compute(source)
+        // 2. Create a task for each input partition
+        val tasks = inputPartitions.map(p => Task.MapTask(p, f))
+        // 3. Submit tasks to the scheduler
+        val resultPartitions = TaskScheduler.submit(tasks)
+        // 4. Flatten results
+        resultPartitions.flatMap(_.data)
+
+      // You would add cases for FilterOp, etc.
+      // Or handle the simple case of no transformations:
+      case s: Plan.Source[A] =>
+        LocalExecutor.compute(s).flatMap(_.data)
+        
+      case _ =>
+        println("This plan structure is not yet supported by the simple scheduler. Falling back to sequential execution.")
+        LocalExecutor.compute(this.plan).flatMap(_.data)
+    }
+  }
+  
   // All other actions (count, take, reduce, etc.) can now be defined
   // in terms of collect() for simplicity.
   

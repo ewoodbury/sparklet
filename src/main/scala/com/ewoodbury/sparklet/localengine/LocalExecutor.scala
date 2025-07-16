@@ -1,6 +1,35 @@
 package com.ewoodbury.sparklet.localengine
 
 object LocalExecutor:
+  /**
+   * Translates a Plan into a sequence of executable Tasks.
+   * This represents building the physical execution plan for a single stage.
+   * * NOTE: This simplified version only handles a single stage of narrow transformations.
+   * A full implementation would break the plan into a DAG of stages.
+   */
+  def createTasks[A](plan: Plan[A]): Seq[Task[_, A]] = {
+    plan match {
+      // The `compute` method is now a private helper to get parent partitions
+      // This part is a bit tricky, so we'll simplify for now. In a real system,
+      // you'd pass partition data or locations between stages.
+      case Plan.MapOp(source, f) =>
+        val inputPartitions = LocalExecutor.compute(source) // Get parent partitions
+        inputPartitions.map(p => Task.MapTask(p, f))
+
+      case Plan.FilterOp(source, predicate) =>
+        val inputPartitions = LocalExecutor.compute(source)
+        inputPartitions.map(partition => Task.FilterTask(partition, predicate))
+        
+      // TODO: Add other narrow transformations here
+
+      // Base case still needs to be handled:
+      case Plan.Source(partitions) =>
+        // A source doesn't have tasks, it's just data. We return a "pre-computed" result.
+        // This suggests we need a slightly different model, which leads to Stages.
+        // For now, let's adjust the collect method to handle this.
+        throw new UnsupportedOperationException("Cannot create tasks from a source directly. The scheduler needs a stage.")
+    }
+  }
 
   /**
    * Executes a Plan by computing its resulting partitions.
