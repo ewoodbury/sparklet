@@ -97,6 +97,38 @@ class TestTask extends AnyFlatSpec with Matchers {
     result.data shouldEqual Seq("A", "B")
   }
 
+  "FlatMapTask" should "handle nested collections" in {
+    val partition = Partition(Seq(Seq(1, 2), Seq(3, 4)))
+    val flatMapTask = Task.FlatMapTask(partition, (x: Seq[Int]) => x)
+    val result = flatMapTask.run()
+    
+    result.data shouldEqual Seq(1, 2, 3, 4)
+  }
+
+  it should "handle empty nested collections" in {
+    val partition = Partition(Seq(Seq.empty[Int], Seq(1, 2)))
+    val flatMapTask = Task.FlatMapTask(partition, (x: Seq[Int]) => x)
+    val result = flatMapTask.run()
+    
+    result.data shouldEqual Seq(1, 2)
+  }
+  
+  "DistinctTask" should "remove duplicates from partition data" in {
+    val partition = Partition(Seq(1, 2, 3, 2, 4, 1))
+    val distinctTask = Task.DistinctTask(partition)
+    val result = distinctTask.run()
+    
+    result.data shouldEqual Seq(1, 2, 3, 4)
+  }
+
+  it should "handle empty partition" in {
+    val partition = Partition(Seq.empty[Int])
+    val distinctTask = Task.DistinctTask(partition)
+    val result = distinctTask.run()
+    
+    result.data shouldEqual Seq.empty[Int]
+  }
+
   "All Tasks" should "preserve partition structure" in {
     val originalPartition = Partition(Seq(1, 2, 3))
     

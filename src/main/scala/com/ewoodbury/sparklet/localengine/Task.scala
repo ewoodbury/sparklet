@@ -39,4 +39,13 @@ object Task:
       Partition(partition.data.flatMap(f))
     }
 
+  /** A task that applies a distinct function to a partition. */
+  case class DistinctTask[A](
+    partition: Partition[A]
+  ) extends Task[A, A]:
+    override def run(): Partition[A] = {
+      println(s"[Thread: ${Thread.currentThread().getName}] Running DistinctTask on partition...")
+      Partition(partition.data.toSeq.distinct)
+    }
+
 end Task

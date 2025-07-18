@@ -20,7 +20,13 @@ object LocalExecutor:
         val inputPartitions = LocalExecutor.compute(source)
         inputPartitions.map(partition => Task.FilterTask(partition, predicate))
         
-      // TODO: Add other narrow transformations here
+      case Plan.FlatMapOp(source, f) =>
+        val inputPartitions = LocalExecutor.compute(source)
+        inputPartitions.map(partition => Task.FlatMapTask(partition, f))
+
+      case Plan.DistinctOp(source) =>
+        val inputPartitions = LocalExecutor.compute(source)
+        inputPartitions.map(partition => Task.DistinctTask(partition))
 
       // Base case still needs to be handled:
       case Plan.Source(partitions) =>
