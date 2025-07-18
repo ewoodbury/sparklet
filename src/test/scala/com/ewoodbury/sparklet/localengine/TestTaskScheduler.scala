@@ -3,7 +3,7 @@ package com.ewoodbury.sparklet.localengine
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-@SuppressWarnings(Array("org.wartremover.warts.SeqApply"))
+@SuppressWarnings(Array("org.wartremover.warts.SeqApply", "org.wartremover.warts.ThreadSleep"))
 class TestTaskScheduler extends AnyFlatSpec with Matchers {
 
   "TaskScheduler" should "execute multiple tasks concurrently" in {
@@ -131,6 +131,7 @@ class TestTaskScheduler extends AnyFlatSpec with Matchers {
     // Simulate different computation times
     val fastTask = Task.MapTask(partition1, (x: Int) => x * 2)
     val slowTask = Task.MapTask(partition2, (x: Int) => {
+      
       Thread.sleep(100) // Simulate slower computation
       x * 3
     })
@@ -152,7 +153,7 @@ class TestTaskScheduler extends AnyFlatSpec with Matchers {
 
   it should "handle string transformations" in {
     val partition = Partition(Seq("hello", "world"))
-    val mapTask = Task.MapTask(partition, (s: String) => s.toUpperCase)
+    val mapTask = Task.MapTask(partition, (s: String) => s.toUpperCase(java.util.Locale.ENGLISH))
     
     val results = TaskScheduler.submit(Seq(mapTask))
     
