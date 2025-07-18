@@ -28,8 +28,6 @@ object LocalExecutor:
         val inputPartitions = LocalExecutor.compute(source)
         inputPartitions.map(partition => Task.DistinctTask(partition))
 
-      // case Plan.UnionOp(left, right) =>
-
       case Plan.KeysOp(source) =>
         val inputPartitions = LocalExecutor.compute(source)
         inputPartitions.map(partition => Task.KeysTask(partition))
@@ -53,6 +51,10 @@ object LocalExecutor:
       case Plan.FlatMapValuesOp(source, f) =>
         val inputPartitions = LocalExecutor.compute(source)
         inputPartitions.map(partition => Task.FlatMapValuesTask(partition, f))
+
+      case Plan.UnionOp(_, _) =>
+        // UnionOp cannot be a task because it is the direct result of two sources, and must be handled by a scheduler.
+        throw new UnsupportedOperationException("Cannot create tasks from a UnionOp directly. This requires a DAG scheduler.")
 
       // Base case still needs to be handled:
       case Plan.Source(partitions) =>
