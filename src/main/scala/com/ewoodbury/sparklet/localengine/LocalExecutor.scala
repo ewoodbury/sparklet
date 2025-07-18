@@ -28,6 +28,32 @@ object LocalExecutor:
         val inputPartitions = LocalExecutor.compute(source)
         inputPartitions.map(partition => Task.DistinctTask(partition))
 
+      // case Plan.UnionOp(left, right) =>
+
+      case Plan.KeysOp(source) =>
+        val inputPartitions = LocalExecutor.compute(source)
+        inputPartitions.map(partition => Task.KeysTask(partition))
+
+      case Plan.ValuesOp(source) =>
+        val inputPartitions = LocalExecutor.compute(source)
+        inputPartitions.map(partition => Task.ValuesTask(partition))
+
+      case Plan.MapValuesOp(source, f) =>
+        val inputPartitions = LocalExecutor.compute(source)
+        inputPartitions.map(partition => Task.MapValuesTask(partition, f))
+
+      case Plan.FilterKeysOp(source, p) =>
+        val inputPartitions = LocalExecutor.compute(source)
+        inputPartitions.map(partition => Task.FilterKeysTask(partition, p))
+
+      case Plan.FilterValuesOp(source, p) =>
+        val inputPartitions = LocalExecutor.compute(source)
+        inputPartitions.map(partition => Task.FilterValuesTask(partition, p))
+
+      case Plan.FlatMapValuesOp(source, f) =>
+        val inputPartitions = LocalExecutor.compute(source)
+        inputPartitions.map(partition => Task.FlatMapValuesTask(partition, f))
+
       // Base case still needs to be handled:
       case Plan.Source(partitions) =>
         // A source doesn't have tasks, it's just data. We return a "pre-computed" result.

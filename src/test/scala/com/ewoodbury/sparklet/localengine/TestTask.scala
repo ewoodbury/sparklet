@@ -129,6 +129,102 @@ class TestTask extends AnyFlatSpec with Matchers {
     result.data shouldEqual Seq.empty[Int]
   }
 
+  "KeysTask" should "extract keys from partition data" in {
+    val partition = Partition(Seq(1 -> "one", 2 -> "two"))
+    val keysTask = Task.KeysTask(partition)
+    val result = keysTask.run()
+    
+    result.data shouldEqual Seq(1, 2)
+  }
+
+  it should "handle empty partition" in {
+    val partition = Partition(Seq.empty[(Int, String)])
+    val keysTask = Task.KeysTask(partition)
+    val result = keysTask.run()
+    
+    result.data shouldEqual Seq.empty[Int]
+  }
+
+  "ValuesTask" should "extract values from partition data" in {
+    val partition = Partition(Seq(1 -> "one", 2 -> "two"))
+    val valuesTask = Task.ValuesTask(partition)
+    val result = valuesTask.run()
+    
+    result.data shouldEqual Seq("one", "two")
+  }
+
+  it should "handle empty partition" in {
+    val partition = Partition(Seq.empty[(Int, String)])
+    val valuesTask = Task.ValuesTask(partition)
+    val result = valuesTask.run()
+    
+    result.data shouldEqual Seq.empty[String]
+  }
+
+  "MapValuesTask" should "apply a mapValues function to partition data" in {
+    val partition = Partition(Seq(1 -> "one", 2 -> "two"))
+    val mapValuesTask = Task.MapValuesTask(partition, (v: String) => v.toUpperCase(java.util.Locale.ENGLISH))
+    val result = mapValuesTask.run()
+    
+    result.data shouldEqual Seq(1 -> "ONE", 2 -> "TWO")
+  }
+
+  it should "handle empty partition" in {
+    val partition = Partition(Seq.empty[(Int, String)])
+    val mapValuesTask = Task.MapValuesTask(partition, (v: String) => v.toUpperCase(java.util.Locale.ENGLISH))
+    val result = mapValuesTask.run()
+    
+    result.data shouldEqual Seq.empty[Int]
+  }
+
+  "FilterKeysTask" should "filter keys from partition data" in {
+    val partition = Partition(Seq(1 -> "one", 2 -> "two"))
+    val filterKeysTask = Task.FilterKeysTask(partition, (k: Int) => k % 2 == 0)
+    val result = filterKeysTask.run()
+    
+    result.data shouldEqual Seq(2 -> "two")
+  }
+
+  it should "handle empty partition" in {
+    val partition = Partition(Seq.empty[(Int, String)])
+    val filterKeysTask = Task.FilterKeysTask(partition, (k: Int) => k % 2 == 0)
+    val result = filterKeysTask.run()
+    
+    result.data shouldEqual Seq.empty[(Int, String)]
+  }
+
+  "FilterValuesTask" should "filter values from partition data" in {
+    val partition = Partition(Seq(1 -> "one", 2 -> "two", 3 -> "three"))
+    val filterValuesTask = Task.FilterValuesTask(partition, (v: String) => v.length > 3)
+    val result = filterValuesTask.run()
+    
+    result.data shouldEqual Seq(3 -> "three")
+  }
+
+  it should "handle empty partition" in {
+    val partition = Partition(Seq.empty[(Int, String)])
+    val filterValuesTask = Task.FilterValuesTask(partition, (v: String) => v.length > 3)
+    val result = filterValuesTask.run()
+    
+    result.data shouldEqual Seq.empty[Int]
+  }
+
+  "FlatMapValuesTask" should "apply a flatMapValues function to partition data" in {
+    val partition = Partition(Seq(1 -> "one", 2 -> "two"))
+    val flatMapValuesTask = Task.FlatMapValuesTask(partition, (v: String) => Seq(v.toUpperCase(java.util.Locale.ENGLISH)))
+    val result = flatMapValuesTask.run()
+    
+    result.data shouldEqual Seq(1 -> "ONE", 2 -> "TWO")
+  }
+
+  it should "flatten nested collections" in {
+    val partition = Partition(Seq(1 -> Seq("one", "two"), 2 -> Seq("three", "four")))
+    val flatMapValuesTask = Task.FlatMapValuesTask(partition, (v: Seq[String]) => v)
+    val result = flatMapValuesTask.run()
+    
+    result.data shouldEqual Seq(1 -> "one", 1 -> "two", 2 -> "three", 2 -> "four")
+  }
+
   "All Tasks" should "preserve partition structure" in {
     val originalPartition = Partition(Seq(1, 2, 3))
     
