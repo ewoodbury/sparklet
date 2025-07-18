@@ -77,6 +77,14 @@ object Plan:
    */
   case class FilterKeysOp[K, V](source: Plan[(K, V)], predicateFunction: K => Boolean) extends Plan[(K, V)]
 
+  /** Represents a filterValues transformation.
+   * @param source The preceding plan node (producing elements of type (K, V)).
+   * @param predicateFunction The predicate function from V to Boolean.
+   * @tparam K The key type.
+   * @tparam V The value type of the source plan.
+   */
+  case class FilterValuesOp[K, V](source: Plan[(K, V)], predicateFunction: V => Boolean) extends Plan[(K, V)]
+
   /** Represents a flatMapValues transformation.
    * @param source The preceding plan node (producing elements of type (K, V)).
    * @param flatMapFunction The flatMap function from V to IterableOnce[B].

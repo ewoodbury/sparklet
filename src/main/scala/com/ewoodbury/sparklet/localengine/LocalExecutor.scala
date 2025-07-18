@@ -122,6 +122,11 @@ object LocalExecutor:
         val inputPartitions = compute(source)
         inputPartitions.map(part => Partition(part.data.filter { case (k, _) => p(k) }))
 
+      case Plan.FilterValuesOp(source, p) =>
+        println(" -> Computing FilterValuesOp")
+        val inputPartitions = compute(source)
+        inputPartitions.map(part => Partition(part.data.filter { case (_, v) => p(v) }))
+
       case Plan.FlatMapValuesOp(source, f) =>
         println(" -> Computing FlatMapValuesOp")
         val inputPartitions = compute(source)

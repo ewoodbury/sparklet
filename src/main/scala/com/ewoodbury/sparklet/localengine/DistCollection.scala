@@ -87,6 +87,14 @@ final case class DistCollection[A](plan: Plan[A]):
     DistCollection(Plan.FilterKeysOp(this.plan.asInstanceOf[Plan[(K, V)]], p))
 
   /**
+   * Transformation: Filters the elements of the collection by the values.
+   * Returns a new DistCollection representing the filtered result.
+   * Does not trigger computation.
+   */
+  def filterValues[K, V](p: V => Boolean)(using ev: A =:= (K, V)): DistCollection[(K, V)] =
+    DistCollection(Plan.FilterValuesOp(this.plan.asInstanceOf[Plan[(K, V)]], p))
+
+  /**
    * Transformation: Applies a function to the values of the elements in the collection.
    * Returns a new DistCollection representing the result of the flatMap.
    * Does not trigger computation.
