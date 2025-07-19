@@ -135,6 +135,7 @@ final case class DistCollection[A](plan: Plan[A]):
       case s: Plan.Source[A] =>
         LocalExecutor.compute(s).flatMap(_.data)
         
+      // TODO: Need to remove this fallback to force it to use tasks.
       case _ =>
         println("This plan structure is not yet supported by the simple scheduler. Falling back to sequential execution.")
         LocalExecutor.compute(this.plan).flatMap(_.data)
