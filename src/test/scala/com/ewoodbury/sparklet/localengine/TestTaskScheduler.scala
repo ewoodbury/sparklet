@@ -125,30 +125,33 @@ class TestTaskScheduler extends AnyFlatSpec with Matchers {
   }
 
   it should "handle tasks with different computation times" in {
-    val partition1 = Partition(Seq(1))
-    val partition2 = Partition(Seq(2))
+    val partition = Partition(Seq(1))
     
     // Simulate different computation times
-    val fastTask = Task.MapTask(partition1, (x: Int) => x * 2)
-    val slowTask = Task.MapTask(partition2, (x: Int) => {
-      
-      Thread.sleep(100) // Simulate slower computation
+    val fastTask = Task.MapTask(partition, (x: Int) => x * 2)
+    val slowTask1 = Task.MapTask(partition, (x: Int) => {
+      Thread.sleep(50) // Simulate slower computation
+      x * 2
+    })
+    val slowTask2 = Task.MapTask(partition, (x: Int) => {
+      Thread.sleep(50) // Simulate slower computation
       x * 3
     })
     
     val startTime = System.currentTimeMillis()
-    val results = TaskScheduler.submit(Seq(fastTask, slowTask))
+    val results = TaskScheduler.submit(Seq(fastTask, slowTask1, slowTask2))
     val endTime = System.currentTimeMillis()
     
-    results should have length 2
+    results should have length 3
     results(0).data shouldEqual Seq(2)
-    results(1).data shouldEqual Seq(6)
+    results(1).data shouldEqual Seq(2)
+    results(2).data shouldEqual Seq(3)
     
     // Both tasks should complete, and the total time should be roughly the time of the slowest task
     // (not the sum of both tasks, since they run concurrently)
     val totalTime = endTime - startTime
-    totalTime should be >= 100L
-    totalTime should be < 200L // Should be much less than 200ms if truly concurrent
+    totalTime should be >= 50L
+    totalTime should be < 100L // Should be much less than 200ms if truly concurrent
   }
 
   it should "handle string transformations" in {
