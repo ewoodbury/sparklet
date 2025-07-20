@@ -15,7 +15,7 @@ import org.scalatest.matchers.should.Matchers
   * It is important to note that the createTasks() method is not a full DAG scheduler.
   * It is a simple scheduler that only handles a single stage of narrow transformations.
   */
-class TestLocalExecutorPlan extends AnyFlatSpec with Matchers {
+class TestLocalExecutorCreateTasks extends AnyFlatSpec with Matchers {
   /**
    * Helper function to create a DistCollection from a sequence for testing
    */
@@ -63,6 +63,51 @@ class TestLocalExecutorPlan extends AnyFlatSpec with Matchers {
     // Verify the task can be executed
     val result = filterTask.run()
     result.data should contain theSameElementsAs Seq(3)
+  }
+
+  it should "create a Plan with Map and Filter operations" in {
+    // Given: A simple map and filter operation plan
+    val sourcePlan = Plan.Source(Seq(Partition(Seq(1, 2, 3))))
+    val mapPlan = Plan.MapOp(sourcePlan, (x: Int) => x * 2)
+    val filterPlan = Plan.FilterOp(mapPlan, (x: Int) => x > 2)
+    
+    // When: We create tasks from the plan
+    val tasks = LocalExecutor.createTasks(filterPlan)
+
+    println(s"tasks: $tasks")
+    
+    // Then: We should get one FilterTask per input partition
+    tasks should have length 1
+    tasks.headOption shouldBe a[Some[Task.FilterTask[_]]]
+
+    val filterTask = tasks.headOption.get.asInstanceOf[Task.FilterTask[Int]]
+    filterTask.partition.data should contain theSameElementsAs Seq(1, 2, 3)
+    
+    // Verify the task can be executed
+    val result = filterTask.run()
+    result.data should contain theSameElementsAs Seq(3)
+  }
+
+  it should "create FlatMapTask for FlatMapOp plans" in {
+    // Given: A simple flatMap operation plan
+    val sourcePlan = Plan.Source(Seq(Partition(Seq(1, 2, 3))))
+    val flatMapPlan = Plan.FlatMapOp(sourcePlan, (x: Int) => Seq(x, x * 2))
+    
+    // When: We create tasks from the plan
+    val tasks = LocalExecutor.createTasks(flatMapPlan)
+
+    println(s"tasks: $tasks")
+    
+    // Then: We should get one FlatMapTask per input partition
+    tasks should have length 1
+    tasks.headOption shouldBe a[Some[Task.FlatMapTask[_, _]]]
+
+    val flatMapTask = tasks.headOption.get.asInstanceOf[Task.FlatMapTask[Int, Int]]
+    flatMapTask.partition.data should contain theSameElementsAs Seq(1, 2, 3)
+    
+    // Verify the task can be executed
+    val result = flatMapTask.run()
+    result.data should contain theSameElementsAs Seq(1, 2, 2, 4, 3, 6)
   }
 
   // TODO: Add tests for other operations

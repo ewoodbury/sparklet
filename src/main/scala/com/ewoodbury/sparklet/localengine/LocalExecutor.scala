@@ -5,63 +5,48 @@ object LocalExecutor:
    * Translates a Plan into a sequence of executable Tasks.
    * This represents building the physical execution plan for a single stage.
    * * NOTE: This simplified version only handles a single stage of narrow transformations.
-   * A full implementation would break the plan into a DAG of stages.
+   * The full implementation will break the plan into a DAG of stages.
    */
   def createTasks[A](plan: Plan[A]): Seq[Task[_, A]] = {
     plan match {
-      // The `compute` method is now a private helper to get parent partitions
-      // This part is a bit tricky, so we'll simplify for now. In a real system,
-      // you'd pass partition data or locations between stages.
-      case Plan.MapOp(source, f) =>
-        val inputPartitions = LocalExecutor.compute(source) // Get parent partitions
-        inputPartitions.map(p => Task.MapTask(p, f))
+      case Plan.MapOp(Plan.Source(partitions), f) =>
+        partitions.map(p => Task.MapTask(p, f))
 
-      case Plan.FilterOp(source, predicate) =>
-        val inputPartitions = LocalExecutor.compute(source)
-        inputPartitions.map(partition => Task.FilterTask(partition, predicate))
-        
-      case Plan.FlatMapOp(source, f) =>
-        val inputPartitions = LocalExecutor.compute(source)
-        inputPartitions.map(partition => Task.FlatMapTask(partition, f))
+      case Plan.FilterOp(Plan.Source(partitions), p) =>
+        partitions.map(part => Task.FilterTask(part, p))
 
-      case Plan.DistinctOp(source) =>
-        val inputPartitions = LocalExecutor.compute(source)
-        inputPartitions.map(partition => Task.DistinctTask(partition))
+      case Plan.FlatMapOp(Plan.Source(partitions), f) =>
+        partitions.map(part => Task.FlatMapTask(part, f))
 
-      case Plan.KeysOp(source) =>
-        val inputPartitions = LocalExecutor.compute(source)
-        inputPartitions.map(partition => Task.KeysTask(partition))
+      case Plan.DistinctOp(Plan.Source(partitions)) =>
+        partitions.map(part => Task.DistinctTask(part))
 
-      case Plan.ValuesOp(source) =>
-        val inputPartitions = LocalExecutor.compute(source)
-        inputPartitions.map(partition => Task.ValuesTask(partition))
+      case Plan.KeysOp(Plan.Source(partitions)) =>
+        partitions.map(part => Task.KeysTask(part))
 
-      case Plan.MapValuesOp(source, f) =>
-        val inputPartitions = LocalExecutor.compute(source)
-        inputPartitions.map(partition => Task.MapValuesTask(partition, f))
+      case Plan.ValuesOp(Plan.Source(partitions)) =>
+        partitions.map(part => Task.ValuesTask(part))
 
-      case Plan.FilterKeysOp(source, p) =>
-        val inputPartitions = LocalExecutor.compute(source)
-        inputPartitions.map(partition => Task.FilterKeysTask(partition, p))
+      case Plan.MapValuesOp(Plan.Source(partitions), f) =>
+        partitions.map(part => Task.MapValuesTask(part, f))
 
-      case Plan.FilterValuesOp(source, p) =>
-        val inputPartitions = LocalExecutor.compute(source)
-        inputPartitions.map(partition => Task.FilterValuesTask(partition, p))
+      case Plan.FilterKeysOp(Plan.Source(partitions), p) =>
+        partitions.map(part => Task.FilterKeysTask(part, p))
 
-      case Plan.FlatMapValuesOp(source, f) =>
-        val inputPartitions = LocalExecutor.compute(source)
-        inputPartitions.map(partition => Task.FlatMapValuesTask(partition, f))
+      case Plan.FilterValuesOp(Plan.Source(partitions), p) =>
+        partitions.map(part => Task.FilterValuesTask(part, p))
 
-      case Plan.UnionOp(_, _) =>
-        // UnionOp cannot be a task because it is the direct result of two sources, and must be handled by a scheduler.
-        throw new UnsupportedOperationException("Cannot create tasks from a UnionOp directly. This requires a DAG scheduler.")
+      case Plan.FlatMapValuesOp(Plan.Source(partitions), f) =>
+        partitions.map(part => Task.FlatMapValuesTask(part, f))
 
-      // Base case still needs to be handled:
-      case Plan.Source(partitions) =>
-        // A source doesn't have tasks, it's just data. We return a "pre-computed" result.
-        // This suggests we need a slightly different model, which leads to Stages.
-        // For now, let's adjust the collect method to handle this.
-        throw new UnsupportedOperationException("Cannot create tasks from a source directly. The scheduler needs a stage.")
+      case Plan.UnionOp(left, right) =>
+        createTasks(left) ++ createTasks(right)
+
+      case Plan.Source(_) =>
+        throw new UnsupportedOperationException("Cannot create tasks from source directly")
+
+      case _ =>
+        throw new UnsupportedOperationException("Cannot create tasks from this plan")
     }
   }
 
