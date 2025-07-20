@@ -112,33 +112,20 @@ final case class DistCollection[A](plan: Plan[A]):
   def collect(): Iterable[A] = {
     println("--- Collect Action Triggered ---")
 
-    // The logic to break a plan into stages and tasks is complex.
-    // For now, let's simulate it for a simple one-stage plan (e.g., source -> map -> filter).
-    // We will manually create the tasks for the FINAL operation in the plan.
-
-    // A more advanced scheduler would analyze the full DAG.
-    // Let's pretend our plan is just a MapOp for this example.
+    // Use the task-based execution path for all operations
     this.plan match {
-      case Plan.MapOp(source, f) =>
-        println("Found a MapOp plan. Creating MapTasks for the scheduler.")
-        // 1. Get the partitions from the parent plan
-        val inputPartitions = LocalExecutor.compute(source)
-        // 2. Create a task for each input partition
-        val tasks = inputPartitions.map(p => Task.MapTask(p, f))
-        // 3. Submit tasks to the scheduler
-        val resultPartitions = TaskScheduler.submit(tasks)
-        // 4. Flatten results
-        resultPartitions.flatMap(_.data)
-
-      // You would add cases for FilterOp, etc.
-      // Or handle the simple case of no transformations:
       case s: Plan.Source[A] =>
-        LocalExecutor.compute(s).flatMap(_.data)
+        // Sources don't need tasks, just return the data directly
+        s.partitions.flatMap(_.data)
         
-      // TODO: Need to remove this fallback to force it to use tasks.
       case _ =>
-        println("This plan structure is not yet supported by the simple scheduler. Falling back to sequential execution.")
-        LocalExecutor.compute(this.plan).flatMap(_.data)
+        val tasks = LocalExecutor.createTasks(this.plan)
+        // Cast to the expected type for TaskScheduler - this is safe because createTasks
+        // returns tasks that produce the correct output type A
+        val typedTasks = tasks.asInstanceOf[Seq[Task[Any, A]]]
+        @SuppressWarnings(Array("org.wartremover.warts.Any"))
+        val resultPartitions = TaskScheduler.submit(typedTasks)
+        resultPartitions.flatMap(_.data)
     }
   }
   
