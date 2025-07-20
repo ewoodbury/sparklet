@@ -26,7 +26,6 @@ class TestLocalTransformations extends AnyFlatSpec with Matchers {
   // Temp disabling tests with multiple transformations.
   // TODO: Re-enable these tests.
   ignore should "execute a simple map and filter operation" in {
-  it should "execute a simple map and filter operation" in {
     val mapped = sourceInt.map(_ * 2)
     val filtered = mapped.filter(_ % 4 == 0)
     val result = filtered.collect()
@@ -53,8 +52,7 @@ class TestLocalTransformations extends AnyFlatSpec with Matchers {
   }
 
   // TODO: Re-enable this test.
-  ignore should "execute a simple union operation with strings" in {
-  it should "execute a simple union operation" in {
+  ignore should "execute a simple union operation with ints" in {
     val left = toDistCollection(Seq(1, 2, 3))
     val right = toDistCollection(Seq(4, 5, 6))
     val union = left.union(right)
