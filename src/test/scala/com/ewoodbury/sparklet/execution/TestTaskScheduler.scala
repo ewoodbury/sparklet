@@ -1,7 +1,8 @@
-package com.ewoodbury.sparklet.localengine
+package com.ewoodbury.sparklet.execution
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import com.ewoodbury.sparklet.core.Partition
 
 @SuppressWarnings(Array("org.wartremover.warts.SeqApply", "org.wartremover.warts.ThreadSleep"))
 class TestTaskScheduler extends AnyFlatSpec with Matchers {

@@ -1,4 +1,5 @@
-package com.ewoodbury.sparklet.localengine
+package com.ewoodbury.sparklet.execution
+import com.ewoodbury.sparklet.core.Partition
 
 /**
  * A Task represents a unit of computation that can be run on an executor.

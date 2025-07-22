@@ -1,4 +1,4 @@
-package com.ewoodbury.sparklet.localengine
+package com.ewoodbury.sparklet.core
 
 /**
  * A Partition represents a subset of data that can be processed by a single task.

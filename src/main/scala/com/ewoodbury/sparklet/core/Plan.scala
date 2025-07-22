@@ -1,4 +1,4 @@
-package com.ewoodbury.sparklet.localengine
+package com.ewoodbury.sparklet.core
 
 /**
  * Represents the logical plan for computing a DistCollection.

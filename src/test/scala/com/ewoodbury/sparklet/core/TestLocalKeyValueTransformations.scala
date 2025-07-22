@@ -1,10 +1,10 @@
-package com.ewoodbury.sparklet.localengine
+package com.ewoodbury.sparklet.core
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 class TestLocalKeyValueTransformations extends AnyFlatSpec with Matchers {
-  val toDistCollection = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
+  val toDistCollection = [T] => (seq: Seq[T]) => DistCollection(com.ewoodbury.sparklet.core.Plan.Source(Seq(Partition(seq))))
   
   "Executor" should "execute a simple keys operation" in {
     val source = toDistCollection(Seq(1 -> "one", 2 -> "two"))

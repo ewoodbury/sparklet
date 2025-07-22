@@ -1,7 +1,9 @@
-package com.ewoodbury.sparklet.localengine
+package com.ewoodbury.sparklet.execution
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+
+import com.ewoodbury.sparklet.core.Partition
 
 class TestTask extends AnyFlatSpec with Matchers {
   

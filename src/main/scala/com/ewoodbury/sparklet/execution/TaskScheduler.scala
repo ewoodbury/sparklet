@@ -1,8 +1,9 @@
-package com.ewoodbury.sparklet.localengine
+package com.ewoodbury.sparklet.execution
 
 import java.util.concurrent.Executors
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.concurrent.duration.*
+import com.ewoodbury.sparklet.core.Partition
 
 object TaskScheduler:
   // Thread pool with 4 "executors" (cores)
