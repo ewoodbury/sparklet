@@ -109,6 +109,7 @@ final case class DistCollection[A](plan: Plan[A]):
    * Action: Executes the plan and returns the results as a single local Iterable.
    * This triggers the computation using the concurrent TaskScheduler.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Any"))
   def collect(): Iterable[A] = {
     println("--- Collect Action Triggered ---")
 
@@ -123,7 +124,7 @@ final case class DistCollection[A](plan: Plan[A]):
         // Cast to the expected type for TaskScheduler - this is safe because createTasks
         // returns tasks that produce the correct output type A
         val typedTasks = tasks.asInstanceOf[Seq[Task[Any, A]]]
-        @SuppressWarnings(Array("org.wartremover.warts.Any"))
+
         val resultPartitions = TaskScheduler.submit(typedTasks)
         resultPartitions.flatMap(_.data)
     }
