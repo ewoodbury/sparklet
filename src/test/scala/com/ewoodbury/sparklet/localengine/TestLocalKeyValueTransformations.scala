@@ -6,7 +6,7 @@ import org.scalatest.matchers.should.Matchers
 class TestLocalKeyValueTransformations extends AnyFlatSpec with Matchers {
   val toDistCollection = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
   
-  "LocalExecutor" should "execute a simple keys operation" in {
+  "Executor" should "execute a simple keys operation" in {
     val source = toDistCollection(Seq(1 -> "one", 2 -> "two"))
     val keys = source.keys
     val result = keys.collect()

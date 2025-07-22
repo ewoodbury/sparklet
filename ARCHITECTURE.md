@@ -62,7 +62,7 @@ Plan.FilterOp(Plan.MapOp(...), x => x > 4)
 
 Step 2: Task Creation
 ```scala
-// LocalExecutor.createTasks() converts the plan to tasks:
+// Executor.createTasks() converts the plan to tasks:
 // For the FilterOp, it:
 // 1. Recursively computes input partitions: [Partition([2,4]), Partition([6,8])]
 // 2. Creates tasks: [FilterTask(Partition([2,4]), x > 4), FilterTask(Partition([6,8]), x > 4)]

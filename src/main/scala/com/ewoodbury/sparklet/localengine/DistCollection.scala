@@ -120,7 +120,7 @@ final case class DistCollection[A](plan: Plan[A]):
         s.partitions.flatMap(_.data)
         
       case _ =>
-        val tasks = LocalExecutor.createTasks(this.plan)
+        val tasks = Executor.createTasks(this.plan)
         // Cast to the expected type for TaskScheduler - this is safe because createTasks
         // returns tasks that produce the correct output type A
         val typedTasks = tasks.asInstanceOf[Seq[Task[Any, A]]]

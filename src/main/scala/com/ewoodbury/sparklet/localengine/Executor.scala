@@ -1,6 +1,6 @@
 package com.ewoodbury.sparklet.localengine
 
-object LocalExecutor:
+object Executor:
   /**
    * Translates a Plan into a sequence of executable Tasks.
    * This represents building the physical execution plan for a single stage.
@@ -49,4 +49,4 @@ object LocalExecutor:
         throw new UnsupportedOperationException("Cannot create tasks from this plan")
     }
   }
-end LocalExecutor
+end Executor

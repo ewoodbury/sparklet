@@ -4,7 +4,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 /**
-  * Tests for LocalExecutor.createTasks()
+  * Tests for Executor.createTasks()
   *
   * This tests the creation of tasks from a plan.
   * It also tests the execution of tasks.
@@ -15,19 +15,19 @@ import org.scalatest.matchers.should.Matchers
   * It is important to note that the createTasks() method is not a full DAG scheduler.
   * It is a simple scheduler that only handles a single stage of narrow transformations.
   */
-class TestLocalExecutorCreateTasks extends AnyFlatSpec with Matchers {
+class TestExecutorCreateTasks extends AnyFlatSpec with Matchers {
   /**
    * Helper function to create a DistCollection from a sequence for testing
    */
   val toDistCollection = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
 
-  "LocalExecutor.createTasks" should "create MapTask for MapOp plans" in {
+  "Executor.createTasks" should "create MapTask for MapOp plans" in {
     // Given: A simple map operation plan
     val sourcePlan = Plan.Source(Seq(Partition(Seq(1, 2, 3))))
     val mapPlan = Plan.MapOp(sourcePlan, (x: Int) => x * 2)
     
     // When: We create tasks from the plan
-    val tasks = LocalExecutor.createTasks(mapPlan)
+    val tasks = Executor.createTasks(mapPlan)
 
     println(s"tasks: $tasks")
     
@@ -49,7 +49,7 @@ class TestLocalExecutorCreateTasks extends AnyFlatSpec with Matchers {
     val filterPlan = Plan.FilterOp(sourcePlan, (x: Int) => x > 2)
     
     // When: We create tasks from the plan
-    val tasks = LocalExecutor.createTasks(filterPlan)
+    val tasks = Executor.createTasks(filterPlan)
 
     println(s"tasks: $tasks")
     
@@ -73,7 +73,7 @@ class TestLocalExecutorCreateTasks extends AnyFlatSpec with Matchers {
     val filterPlan = Plan.FilterOp(mapPlan, (x: Int) => x > 2)
     
     // When: We create tasks from the plan
-    val tasks = LocalExecutor.createTasks(filterPlan)
+    val tasks = Executor.createTasks(filterPlan)
 
     println(s"tasks: $tasks")
     
@@ -95,7 +95,7 @@ class TestLocalExecutorCreateTasks extends AnyFlatSpec with Matchers {
     val flatMapPlan = Plan.FlatMapOp(sourcePlan, (x: Int) => Seq(x, x * 2))
     
     // When: We create tasks from the plan
-    val tasks = LocalExecutor.createTasks(flatMapPlan)
+    val tasks = Executor.createTasks(flatMapPlan)
 
     println(s"tasks: $tasks")
     

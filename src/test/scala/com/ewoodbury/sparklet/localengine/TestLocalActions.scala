@@ -6,7 +6,7 @@ import org.scalatest.matchers.should.Matchers
 class TestLocalActions extends AnyFlatSpec with Matchers {
   val toDistCollection = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
 
-  "LocalExecutor" should "execute a simple collect operation" in {
+  "Executor" should "execute a simple collect operation" in {
     val source = toDistCollection(Seq(1, 2, 3, 4, 5))
     val result = source.collect()
     val expected = Seq(1, 2, 3, 4, 5)

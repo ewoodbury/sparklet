@@ -7,7 +7,7 @@ class TestLocalTransformations extends AnyFlatSpec with Matchers {
   val toDistCollection = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
   val sourceInt = toDistCollection(Seq(1, 2, 3, 4, 5))
 
-  "LocalExecutor" should "execute a simple map operation" in {
+  "Executor" should "execute a simple map operation" in {
     val mapped = sourceInt.map(_ * 2)
     val result = mapped.collect()
     val expected = Seq(2, 4, 6, 8, 10)

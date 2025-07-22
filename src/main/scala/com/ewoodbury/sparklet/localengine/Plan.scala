@@ -1,7 +1,5 @@
 package com.ewoodbury.sparklet.localengine
 
-final case class Partition[A](data: Iterable[A])
-
 /**
  * Represents the logical plan for computing a DistCollection.
  * This is a Directed Acyclic Graph (DAG) where nodes are operations.
