@@ -3,7 +3,7 @@ package com.ewoodbury.sparklet.execution
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.ewoodbury.sparklet.core.{DistCollection, Partition}
+import com.ewoodbury.sparklet.core.{DistCollection, Plan, Partition}
 
 /**
   * Tests for Executor.createTasks()
@@ -21,12 +21,12 @@ class TestExecutorCreateTasks extends AnyFlatSpec with Matchers {
   /**
    * Helper function to create a DistCollection from a sequence for testing
    */
-  val toDistCollection = [T] => (seq: Seq[T]) => DistCollection(com.ewoodbury.sparklet.core.Plan.Source(Seq(Partition(seq))))
+  val toDistCollection = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
 
   "Executor.createTasks" should "create MapTask for MapOp plans" in {
     // Given: A simple map operation plan
-    val sourcePlan = com.ewoodbury.sparklet.core.Plan.Source(Seq(Partition(Seq(1, 2, 3))))
-    val mapPlan = com.ewoodbury.sparklet.core.Plan.MapOp(sourcePlan, (x: Int) => x * 2)
+    val sourcePlan = Plan.Source(Seq(Partition(Seq(1, 2, 3))))
+    val mapPlan = Plan.MapOp(sourcePlan, (x: Int) => x * 2)
     
     // When: We create tasks from the plan
     val tasks = Executor.createTasks(mapPlan)
@@ -47,8 +47,8 @@ class TestExecutorCreateTasks extends AnyFlatSpec with Matchers {
 
   it should "create FilterTask for FilterOp plans" in {
     // Given: A simple filter operation plan
-    val sourcePlan = com.ewoodbury.sparklet.core.Plan.Source(Seq(Partition(Seq(1, 2, 3))))
-    val filterPlan = com.ewoodbury.sparklet.core.Plan.FilterOp(sourcePlan, (x: Int) => x > 2)
+    val sourcePlan = Plan.Source(Seq(Partition(Seq(1, 2, 3))))
+    val filterPlan = Plan.FilterOp(sourcePlan, (x: Int) => x > 2)
     
     // When: We create tasks from the plan
     val tasks = Executor.createTasks(filterPlan)
@@ -70,9 +70,9 @@ class TestExecutorCreateTasks extends AnyFlatSpec with Matchers {
   // TODO: Reenable once multiple transformations are supported.
   ignore should "create a Plan with Map and Filter operations" in {
     // Given: A simple map and filter operation plan
-    val sourcePlan = com.ewoodbury.sparklet.core.Plan.Source(Seq(Partition(Seq(1, 2, 3))))
-    val mapPlan = com.ewoodbury.sparklet.core.Plan.MapOp(sourcePlan, (x: Int) => x * 2)
-    val filterPlan = com.ewoodbury.sparklet.core.Plan.FilterOp(mapPlan, (x: Int) => x > 2)
+    val sourcePlan = Plan.Source(Seq(Partition(Seq(1, 2, 3))))
+    val mapPlan = Plan.MapOp(sourcePlan, (x: Int) => x * 2)
+    val filterPlan = Plan.FilterOp(mapPlan, (x: Int) => x > 2)
     
     // When: We create tasks from the plan
     val tasks = Executor.createTasks(filterPlan)
@@ -93,8 +93,8 @@ class TestExecutorCreateTasks extends AnyFlatSpec with Matchers {
 
   it should "create FlatMapTask for FlatMapOp plans" in {
     // Given: A simple flatMap operation plan
-    val sourcePlan = com.ewoodbury.sparklet.core.Plan.Source(Seq(Partition(Seq(1, 2, 3))))
-    val flatMapPlan = com.ewoodbury.sparklet.core.Plan.FlatMapOp(sourcePlan, (x: Int) => Seq(x, x * 2))
+    val sourcePlan = Plan.Source(Seq(Partition(Seq(1, 2, 3))))
+    val flatMapPlan = Plan.FlatMapOp(sourcePlan, (x: Int) => Seq(x, x * 2))
     
     // When: We create tasks from the plan
     val tasks = Executor.createTasks(flatMapPlan)

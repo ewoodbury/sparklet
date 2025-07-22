@@ -22,7 +22,7 @@ final case class DistCollection[A](plan: Plan[A]):
    * Does not trigger computation.
    */
   def map[B](f: A => B): DistCollection[B] =
-    DistCollection(com.ewoodbury.sparklet.core.Plan.MapOp(this.plan, f))
+    DistCollection(Plan.MapOp(this.plan, f))
 
   /**
    * Transformation: Applies a filter predicate lazily.
@@ -30,7 +30,7 @@ final case class DistCollection[A](plan: Plan[A]):
    * Does not trigger computation.
    */
   def filter(p: A => Boolean): DistCollection[A] =
-    DistCollection(com.ewoodbury.sparklet.core.Plan.FilterOp(this.plan, p))
+    DistCollection(Plan.FilterOp(this.plan, p))
 
   /**
    * Transformation: Applies a flatMap function lazily.
@@ -38,21 +38,21 @@ final case class DistCollection[A](plan: Plan[A]):
    * Does not trigger computation.
    */
   def flatMap[B](f: A => IterableOnce[B]): DistCollection[B] =
-    DistCollection(com.ewoodbury.sparklet.core.Plan.FlatMapOp(this.plan, f))
+    DistCollection(Plan.FlatMapOp(this.plan, f))
 
   /**
    * Transformation: Returns a new DistCollection with distinct elements.
    * Does not trigger computation.
    */
   def distinct(): DistCollection[A] =
-    DistCollection(com.ewoodbury.sparklet.core.Plan.DistinctOp(this.plan))
+    DistCollection(Plan.DistinctOp(this.plan))
 
   /**
    * Transformation: Returns a new DistCollection with the elements of two collections.
    * Does not trigger computation.
    */
   def union(other: DistCollection[A]): DistCollection[A] =
-    DistCollection(com.ewoodbury.sparklet.core.Plan.UnionOp(this.plan, other.plan))
+    DistCollection(Plan.UnionOp(this.plan, other.plan))
 
   // --- Key-Value Transformations ---
 
@@ -62,7 +62,7 @@ final case class DistCollection[A](plan: Plan[A]):
     * Does not trigger computation.
     */
   def keys[K, V](using ev: A =:= (K, V)): DistCollection[K] =
-    DistCollection(com.ewoodbury.sparklet.core.Plan.KeysOp(this.plan.asInstanceOf[Plan[(K, V)]]))
+    DistCollection(Plan.KeysOp(this.plan.asInstanceOf[Plan[(K, V)]]))
 
   /**
     * Transformation: Extracts the values from the elements in the collection.
@@ -70,7 +70,7 @@ final case class DistCollection[A](plan: Plan[A]):
     * Does not trigger computation.
     */
   def values[K, V](using ev: A =:= (K, V)): DistCollection[V] =
-    DistCollection(com.ewoodbury.sparklet.core.Plan.ValuesOp(this.plan.asInstanceOf[Plan[(K, V)]]))
+    DistCollection(Plan.ValuesOp(this.plan.asInstanceOf[Plan[(K, V)]]))
 
   /**
    * Transformation: Applies a function to the values of the elements in the collection.
@@ -78,7 +78,7 @@ final case class DistCollection[A](plan: Plan[A]):
    * Does not trigger computation.
    */
   def mapValues[K, V, B](f: V => B)(using ev: A =:= (K, V)): DistCollection[(K, B)] =
-    DistCollection(com.ewoodbury.sparklet.core.Plan.MapValuesOp(this.plan.asInstanceOf[Plan[(K, V)]], f))
+    DistCollection(Plan.MapValuesOp(this.plan.asInstanceOf[Plan[(K, V)]], f))
 
   /**
    * Transformation: Filters the elements of the collection by the keys.
@@ -86,7 +86,7 @@ final case class DistCollection[A](plan: Plan[A]):
    * Does not trigger computation.
    */
   def filterKeys[K, V](p: K => Boolean)(using ev: A =:= (K, V)): DistCollection[(K, V)] =
-    DistCollection(com.ewoodbury.sparklet.core.Plan.FilterKeysOp(this.plan.asInstanceOf[Plan[(K, V)]], p))
+    DistCollection(Plan.FilterKeysOp(this.plan.asInstanceOf[Plan[(K, V)]], p))
 
   /**
    * Transformation: Filters the elements of the collection by the values.
@@ -94,7 +94,7 @@ final case class DistCollection[A](plan: Plan[A]):
    * Does not trigger computation.
    */
   def filterValues[K, V](p: V => Boolean)(using ev: A =:= (K, V)): DistCollection[(K, V)] =
-    DistCollection(com.ewoodbury.sparklet.core.Plan.FilterValuesOp(this.plan.asInstanceOf[Plan[(K, V)]], p))
+    DistCollection(Plan.FilterValuesOp(this.plan.asInstanceOf[Plan[(K, V)]], p))
 
   /**
    * Transformation: Applies a function to the values of the elements in the collection.
@@ -102,7 +102,7 @@ final case class DistCollection[A](plan: Plan[A]):
    * Does not trigger computation.
    */
   def flatMapValues[K, V, B](f: V => IterableOnce[B])(using ev: A =:= (K, V)): DistCollection[(K, B)] =
-    DistCollection(com.ewoodbury.sparklet.core.Plan.FlatMapValuesOp(this.plan.asInstanceOf[Plan[(K, V)]], f))
+    DistCollection(Plan.FlatMapValuesOp(this.plan.asInstanceOf[Plan[(K, V)]], f))
 
 
   // --- Actions ---
@@ -192,4 +192,4 @@ object DistCollection:
     val partitions = groupedData.map(chunk => Partition(chunk)).toSeq
     
     // Create the DistCollection, starting its logical plan with a Source node
-    DistCollection(com.ewoodbury.sparklet.core.Plan.Source(partitions))
+    DistCollection(Plan.Source(partitions))

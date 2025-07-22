@@ -1,4 +1,5 @@
 package com.ewoodbury.sparklet.execution
+
 import com.ewoodbury.sparklet.core.Plan
 
 object Executor:
@@ -10,40 +11,40 @@ object Executor:
    */
   def createTasks[A](plan: Plan[A]): Seq[Task[_, A]] = {
     plan match {
-      case com.ewoodbury.sparklet.core.Plan.MapOp(com.ewoodbury.sparklet.core.Plan.Source(partitions), f) =>
+      case Plan.MapOp(Plan.Source(partitions), f) =>
         partitions.map(p => Task.MapTask(p, f))
 
-      case com.ewoodbury.sparklet.core.Plan.FilterOp(com.ewoodbury.sparklet.core.Plan.Source(partitions), p) =>
+      case Plan.FilterOp(Plan.Source(partitions), p) =>
         partitions.map(part => Task.FilterTask(part, p))
 
-      case com.ewoodbury.sparklet.core.Plan.FlatMapOp(com.ewoodbury.sparklet.core.Plan.Source(partitions), f) =>
+      case Plan.FlatMapOp(Plan.Source(partitions), f) =>
         partitions.map(part => Task.FlatMapTask(part, f))
 
-      case com.ewoodbury.sparklet.core.Plan.DistinctOp(com.ewoodbury.sparklet.core.Plan.Source(partitions)) =>
+      case Plan.DistinctOp(Plan.Source(partitions)) =>
         partitions.map(part => Task.DistinctTask(part))
 
-      case com.ewoodbury.sparklet.core.Plan.KeysOp(com.ewoodbury.sparklet.core.Plan.Source(partitions)) =>
+      case Plan.KeysOp(Plan.Source(partitions)) =>
         partitions.map(part => Task.KeysTask(part))
 
-      case com.ewoodbury.sparklet.core.Plan.ValuesOp(com.ewoodbury.sparklet.core.Plan.Source(partitions)) =>
+      case Plan.ValuesOp(Plan.Source(partitions)) =>
         partitions.map(part => Task.ValuesTask(part))
 
-      case com.ewoodbury.sparklet.core.Plan.MapValuesOp(com.ewoodbury.sparklet.core.Plan.Source(partitions), f) =>
+      case Plan.MapValuesOp(Plan.Source(partitions), f) =>
         partitions.map(part => Task.MapValuesTask(part, f))
 
-      case com.ewoodbury.sparklet.core.Plan.FilterKeysOp(com.ewoodbury.sparklet.core.Plan.Source(partitions), p) =>
+      case Plan.FilterKeysOp(Plan.Source(partitions), p) =>
         partitions.map(part => Task.FilterKeysTask(part, p))
 
-      case com.ewoodbury.sparklet.core.Plan.FilterValuesOp(com.ewoodbury.sparklet.core.Plan.Source(partitions), p) =>
+      case Plan.FilterValuesOp(Plan.Source(partitions), p) =>
         partitions.map(part => Task.FilterValuesTask(part, p))
 
-      case com.ewoodbury.sparklet.core.Plan.FlatMapValuesOp(com.ewoodbury.sparklet.core.Plan.Source(partitions), f) =>
+      case Plan.FlatMapValuesOp(Plan.Source(partitions), f) =>
         partitions.map(part => Task.FlatMapValuesTask(part, f))
 
-      case com.ewoodbury.sparklet.core.Plan.UnionOp(left, right) =>
+      case Plan.UnionOp(left, right) =>
         createTasks(left) ++ createTasks(right)
 
-      case com.ewoodbury.sparklet.core.Plan.Source(_) =>
+      case Plan.Source(_) =>
         throw new UnsupportedOperationException("Cannot create tasks from source directly")
 
       case _ =>
