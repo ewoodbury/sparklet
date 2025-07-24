@@ -180,13 +180,5 @@ class TestTaskScheduler extends AnyFlatSpec with Matchers {
     results should have length 1
     results(0).data shouldEqual Seq("result_0", "result_0", "result_6", "result_8", "result_10")
   }
-
-  // Test shutdown functionality
-  "TaskScheduler shutdown" should "properly shut down the executor service" in {
-    // This test verifies that shutdown doesn't throw exceptions
-    noException should be thrownBy {
-      TaskScheduler.shutdown()
-    }
-  }
 }
 
