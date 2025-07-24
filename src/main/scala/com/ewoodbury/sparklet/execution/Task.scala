@@ -107,4 +107,14 @@ object Task:
       Partition(partition.data.flatMap { case (k, v) => f(v).map(b => (k, b)) })
     }
 
+  /** A task that executes a complete stage (chain of narrow transformations) on a partition. */
+  case class StageTask[A, B](
+    partition: Partition[A],
+    stage: Stage[A, B]
+  ) extends Task[A, B]:
+    override def run(): Partition[B] = {
+      println(s"[Thread: ${Thread.currentThread().getName}] Running StageTask on partition...")
+      stage.execute(partition)
+    }
+
 end Task
