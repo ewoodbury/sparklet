@@ -15,10 +15,10 @@ A data processing engine inspired by Spark, in pure functional Scala.
 ## Task Processing Logic
 
 - [x] Lazy Processing with Plans
-- [ ] Tasks and Scheduler
+- [x] Tasks and Scheduler
   - A task is a unit of work (composed of one or more plans) that can run on executor
   - A scheduler assigns tasks to an executor to process
-- [ ] Stages
+- [x] Stages
   - Collections of tasks that can be run in parallel without shuffles (e.g. a chain of narrow transformations)
 - [ ] DAG Scheduler
   - Takes a plan, finds shuffle boundaries, and builds a Stage dependency graph
