@@ -35,6 +35,27 @@ A data processing engine inspired by Spark, in pure functional Scala.
 - [ ] Basic Cluster Mode
 
 
+## DataFrames and DataSets
+
+- [ ] DataFrame API
+  - [ ] Implement untyped DataFrame abstraction (row-based, schema as metadata)
+  - [ ] Basic DataFrame operations: select, filter, withColumn, drop, etc.
+  - [ ] Support for simple column expressions and projections
+
+- [ ] Dataset API
+  - [ ] Implement strongly-typed Dataset abstraction (case class rows, compile-time type safety)
+  - [ ] Typed transformations: map, flatMap, filter, groupBy, etc.
+  - [ ] Encoder/Decoder system for case class <-> row conversion
+
+- [ ] Interoperability
+  - [ ] Conversion between DistCollection, DataFrame, and Dataset
+  - [ ] Schema inference for case classes and collections
+
+- [ ] Optimizations
+  - [ ] Logical and physical plan optimizations for DataFrame/Dataset queries
+  - [ ] Columnar execution support
+
+
 ## Distributed System Features
 
 - [ ] Serialization 
