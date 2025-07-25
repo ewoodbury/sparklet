@@ -106,6 +106,79 @@ task2.run() // Stage on [3,4] -> map -> [6,8] -> filter -> [6,8]
 // Results are combined and returned to `result`
 ```
 
+### Diagram
+```mermaid
+flowchart TD
+    %% User API Layer (Lazy)
+    User["`**User Code**
+    DistCollection(data, 2)
+    .map(_ * 2)
+    .filter(_ > 4)`"]
+    
+    %% Planning Layer (Lazy)
+    subgraph Lazy["🔄 Lazy Evaluation Phase"]
+        DC1["`**DistCollection.map()**
+        Creates Plan.MapOp`"]
+        DC2["`**DistCollection.filter()**
+        Creates Plan.FilterOp`"]
+        PlanTree["`**Plan Tree Built**
+        FilterOp(MapOp(Source(...)))`"]
+    end
+    
+    %% Execution Trigger
+    Trigger["`**🚀 EXECUTION TRIGGER**
+    .collect() called`"]
+    
+    %% Execution Phase
+    subgraph Execution["⚡ Eager Execution Phase"]
+        Executor["`**Executor.createTasks()**`"]
+        StageBuilder["`**StageBuilder.buildStages()**
+        Groups narrow transformations`"]
+        Stages["`**Stages Created**
+        ChainedStage(map, filter)`"]
+        Tasks["`**Tasks Created**
+        One StageTask per partition`"]
+        
+        subgraph Parallel["🔄 Parallel Execution"]
+            Task1["`**Task 1**
+            Partition([1,2])
+            → [2,4] → [4]`"]
+            Task2["`**Task 2** 
+            Partition([3,4])
+            → [6,8] → [6,8]`"]
+        end
+        
+        Results["`**Results Combined**
+        [4, 6, 8]`"]
+    end
+    
+    %% Flow connections
+    User --> DC1
+    DC1 --> DC2
+    DC2 --> PlanTree
+    PlanTree --> Trigger
+    
+    Trigger --> Executor
+    Executor --> StageBuilder
+    StageBuilder --> Stages
+    Stages --> Tasks
+    Tasks --> Task1
+    Tasks --> Task2
+    Task1 --> Results
+    Task2 --> Results
+    
+    %% Styling
+    classDef lazy fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef execution fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef trigger fill:#f3e5f5,stroke:#4a148c,stroke-width:3px
+    classDef parallel fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    
+    class DC1,DC2,PlanTree lazy
+    class Executor,StageBuilder,Stages,Tasks,Results execution
+    class Trigger trigger
+    class Task1,Task2 parallel
+```
+
 ## Stage Boundaries
 
 Stages group **narrow transformations** (operations that don't require shuffling data) together for efficiency. Stage boundaries occur at:
