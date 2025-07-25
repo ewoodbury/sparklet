@@ -91,4 +91,49 @@ object Plan:
    * @tparam B The type of elements in the resulting DistCollection.
    */
   case class FlatMapValuesOp[K, V, B](source: Plan[(K, V)], flatMapFunction: V => IterableOnce[B]) extends Plan[(K, B)]
+
+  // --- Wide Transformations (require shuffles) ---
+  
+  /** Represents a groupByKey transformation that requires shuffling data by key.
+   * @param source The preceding plan node (producing elements of type (K, V)).
+   * @tparam K The key type.
+   * @tparam V The value type.
+   */
+  case class GroupByKeyOp[K, V](source: Plan[(K, V)]) extends Plan[(K, Iterable[V])]
+
+  /** Represents a reduceByKey transformation that requires shuffling data by key.
+   * @param source The preceding plan node (producing elements of type (K, V)).
+   * @param reduceFunc The reduction function to combine values with the same key.
+   * @tparam K The key type.
+   * @tparam V The value type.
+   */
+  case class ReduceByKeyOp[K, V](source: Plan[(K, V)], reduceFunc: (V, V) => V) extends Plan[(K, V)]
+
+  /** Represents a sortBy transformation that requires shuffling data for global ordering.
+   * @param source The preceding plan node (producing elements of type A).
+   * @param keyFunc The function to extract the sort key from each element.
+   * @param ordering The ordering to use for sorting.
+   * @tparam A The element type.
+   * @tparam B The sort key type.
+   */
+  case class SortByOp[A, B](source: Plan[A], keyFunc: A => B, ordering: Ordering[B]) extends Plan[A]
+
+  /** Represents a join transformation that requires shuffling both datasets by key.
+   * @param left The left plan node (producing elements of type (K, V)).
+   * @param right The right plan node (producing elements of type (K, W)).
+   * @tparam K The key type.
+   * @tparam V The left value type.
+   * @tparam W The right value type.
+   */
+  case class JoinOp[K, V, W](left: Plan[(K, V)], right: Plan[(K, W)]) extends Plan[(K, (V, W))]
+
+  /** Represents a cogroup transformation that groups both datasets by key.
+   * @param left The left plan node (producing elements of type (K, V)).
+   * @param right The right plan node (producing elements of type (K, W)).
+   * @tparam K The key type.
+   * @tparam V The left value type.
+   * @tparam W The right value type.
+   */
+  case class CoGroupOp[K, V, W](left: Plan[(K, V)], right: Plan[(K, W)]) extends Plan[(K, (Iterable[V], Iterable[W]))]
+
 end Plan

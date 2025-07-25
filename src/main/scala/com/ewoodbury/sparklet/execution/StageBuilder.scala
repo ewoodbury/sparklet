@@ -1,14 +1,45 @@
 package com.ewoodbury.sparklet.execution
 
-import com.ewoodbury.sparklet.core.Plan
+import com.ewoodbury.sparklet.core.{Plan, Partition}
 
 @SuppressWarnings(Array("org.wartremover.warts.Any", "org.wartremover.warts.AsInstanceOf"))
 
 /**
  * Builds stages from plans by grouping narrow transformations together.
+ * Shuffle boundaries create new stages in the execution graph.
  */
 object StageBuilder:
+
+  /**
+    * Information about a stage in the execution graph.
+    */
+  case class StageInfo[A, B](
+    id: Int,
+    sourcePartitions: Seq[Partition[A]],
+    stage: Stage[A, B],
+    isShuffleStage: Boolean
+  )
+
+  /**
+    * Represents the complete stage execution graph with dependencies.
+    */
+  case class StageGraph[A](
+    stages: Seq[StageInfo[_, _]],
+    dependencies: Map[Int, Set[Int]]
+  )
   
+  // TODO: Turn on when we have a DAG scheduler
+  // /**
+  //  * Determines if a plan operation requires a shuffle (which creates a new stage).
+  //  */
+  // private def requiresShuffle[A](plan: Plan[A]): Boolean = plan match {
+  //   case _: Plan.GroupByKeyOp[_, _] => true
+  //   case _: Plan.ReduceByKeyOp[_, _] => true
+  //   case _: Plan.SortByOp[_, _] => true
+  //   case _: Plan.JoinOp[_, _, _] => true
+  //   case _: Plan.CoGroupOp[_, _, _] => true
+  //   case _ => false
+  // }
   /**
    * Converts a plan into a sequence of stages with their source partitions.
    * Returns (source_partitions, stage) pairs.
@@ -66,6 +97,27 @@ object StageBuilder:
       case Plan.UnionOp(left, right) =>
         // Union creates a new stage boundary
         buildStagesRecursive(left) ++ buildStagesRecursive(right)
+        
+      // --- Wide Transformations (create shuffle boundaries) ---
+      case groupByKey: Plan.GroupByKeyOp[_, _] =>
+        // Shuffle boundary: previous stage ends, new shuffle stage begins
+        throw new UnsupportedOperationException("GroupByKey requires DAG scheduler - shuffle boundaries not yet implemented in StageBuilder")
+        
+      case reduceByKey: Plan.ReduceByKeyOp[_, _] =>
+        // Shuffle boundary: previous stage ends, new shuffle stage begins  
+        throw new UnsupportedOperationException("ReduceByKey requires DAG scheduler - shuffle boundaries not yet implemented in StageBuilder")
+        
+      case sortBy: Plan.SortByOp[_, _] =>
+        // Shuffle boundary: previous stage ends, new shuffle stage begins
+        throw new UnsupportedOperationException("SortBy requires DAG scheduler - shuffle boundaries not yet implemented in StageBuilder")
+        
+      case join: Plan.JoinOp[_, _, _] =>
+        // Shuffle boundary: both inputs need to be shuffled
+        throw new UnsupportedOperationException("Join requires DAG scheduler - shuffle boundaries not yet implemented in StageBuilder")
+        
+      case cogroup: Plan.CoGroupOp[_, _, _] =>
+        // Shuffle boundary: both inputs need to be shuffled
+        throw new UnsupportedOperationException("CoGroup requires DAG scheduler - shuffle boundaries not yet implemented in StageBuilder")
         
       case _ =>
         throw new UnsupportedOperationException(s"Stage building for $plan not implemented yet")

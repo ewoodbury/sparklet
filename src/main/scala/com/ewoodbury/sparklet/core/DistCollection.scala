@@ -104,6 +104,47 @@ final case class DistCollection[A](plan: Plan[A]):
   def flatMapValues[K, V, B](f: V => IterableOnce[B])(using ev: A =:= (K, V)): DistCollection[(K, B)] =
     DistCollection(Plan.FlatMapValuesOp(this.plan.asInstanceOf[Plan[(K, V)]], f))
 
+  // --- Wide Transformations (require shuffles) ---
+
+  /**
+   * Transformation: Groups values by key, requiring a shuffle operation.
+   * Returns a new DistCollection representing the grouped data.
+   * Does not trigger computation.
+   */
+  def groupByKey[K, V](using ev: A =:= (K, V)): DistCollection[(K, Iterable[V])] =
+    DistCollection(Plan.GroupByKeyOp(this.plan.asInstanceOf[Plan[(K, V)]]))
+
+  /**
+   * Transformation: Reduces values by key using the provided function, requiring a shuffle operation.
+   * Returns a new DistCollection representing the reduced data.
+   * Does not trigger computation.
+   */
+  def reduceByKey[K, V](op: (V, V) => V)(using ev: A =:= (K, V)): DistCollection[(K, V)] =
+    DistCollection(Plan.ReduceByKeyOp(this.plan.asInstanceOf[Plan[(K, V)]], op))
+
+  /**
+   * Transformation: Sorts the collection by the specified key function, requiring a shuffle operation.
+   * Returns a new DistCollection representing the sorted data.
+   * Does not trigger computation.
+   */
+  def sortBy[B](keyFunc: A => B)(using ordering: Ordering[B]): DistCollection[A] =
+    DistCollection(Plan.SortByOp(this.plan, keyFunc, ordering))
+
+  /**
+   * Transformation: Joins this collection with another collection by key, requiring a shuffle operation.
+   * Returns a new DistCollection representing the joined data.
+   * Does not trigger computation.
+   */
+  def join[K, V, W](other: DistCollection[(K, W)])(using ev: A =:= (K, V)): DistCollection[(K, (V, W))] =
+    DistCollection(Plan.JoinOp(this.plan.asInstanceOf[Plan[(K, V)]], other.plan))
+
+  /**
+   * Transformation: Co-groups this collection with another collection by key, requiring a shuffle operation.
+   * Returns a new DistCollection representing the co-grouped data.
+   * Does not trigger computation.
+   */
+  def cogroup[K, V, W](other: DistCollection[(K, W)])(using ev: A =:= (K, V)): DistCollection[(K, (Iterable[V], Iterable[W]))] =
+    DistCollection(Plan.CoGroupOp(this.plan.asInstanceOf[Plan[(K, V)]], other.plan))
 
   // --- Actions ---
 
@@ -156,15 +197,25 @@ final case class DistCollection[A](plan: Plan[A]):
   
   def foreach(f: A => Unit): Unit = collect().foreach(f)
 
+  // --- Legacy Actions (these will be removed once DAG scheduler is implemented) ---
   // These actions still collect all data to the driver first. This is correct for
   // a local simulation but is not a distributed implementation.
-  def reduceByKey[K, V](op: (V, V) => V)(using ev: A =:= (K, V)): Map[K, V] =
+  
+  /** 
+   * Legacy action: Reduces by key by collecting all data to driver.
+   * Will be replaced by proper shuffle-based implementation in DAG scheduler.
+   */
+  def reduceByKeyAction[K, V](op: (V, V) => V)(using ev: A =:= (K, V)): Map[K, V] =
     val collected = this.asInstanceOf[DistCollection[(K, V)]].collect()
     collected
       .groupBy(_._1)
       .map { case (k, pairs) => (k, pairs.map(_._2).reduceOption(op).getOrElse(throw new NoSuchElementException("Collection is empty"))) }
 
-  def groupByKey[K, V](using ev: A =:= (K, V)): Map[K, Iterable[V]] =
+  /** 
+   * Legacy action: Groups by key by collecting all data to driver.
+   * Will be replaced by proper shuffle-based implementation in DAG scheduler.
+   */
+  def groupByKeyAction[K, V](using ev: A =:= (K, V)): Map[K, Iterable[V]] =
     val collected = this.asInstanceOf[DistCollection[(K, V)]].collect()
     collected
       .groupBy(_._1)

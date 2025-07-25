@@ -40,7 +40,7 @@ class TestLocalKeyValueActions extends AnyFlatSpec with Matchers {
 
   it should "execute a simple groupByKey with sum" in {
     val source = toDistCollection(Seq(1 -> 1, 1 -> 1, 2 -> 2, 2 -> 2))
-    val result = source.groupByKey[Int, Int].mapValues(values => values.sum).toMap
+    val result = source.groupByKey[Int, Int].mapValues((values: Iterable[Int]) => values.sum).collect().toMap
     val expected = Map(1 -> 2, 2 -> 4)
 
     result shouldEqual expected
