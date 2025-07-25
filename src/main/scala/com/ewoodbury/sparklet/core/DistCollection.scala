@@ -1,6 +1,6 @@
 package com.ewoodbury.sparklet.core
 
-import com.ewoodbury.sparklet.execution.{Executor, Task, TaskScheduler}
+import com.ewoodbury.sparklet.execution.{Executor, Task, TaskScheduler, DAGScheduler}
 
 /**
  * A lazy, immutable representation of a "distributed" collection.
@@ -156,20 +156,26 @@ final case class DistCollection[A](plan: Plan[A]):
   def collect(): Iterable[A] = {
     println("--- Collect Action Triggered ---")
 
-    // Use the task-based execution path for all operations
-    this.plan match {
-      case s: Plan.Source[A] =>
-        // Sources don't need tasks, just return the data directly
-        s.partitions.flatMap(_.data)
-        
-      case _ =>
-        val tasks = Executor.createTasks(this.plan)
-        // Cast to the expected type for TaskScheduler - this is safe because createTasks
-        // returns tasks that produce the correct output type A
-        val typedTasks = tasks.asInstanceOf[Seq[Task[Any, A]]]
+    // Check if plan requires DAG scheduling (contains shuffle operations)
+    if (DAGScheduler.requiresDAGScheduling(this.plan)) {
+      // Use DAGScheduler for plans with shuffle operations
+      DAGScheduler.execute(this.plan)
+    } else {
+      // Use legacy single-stage execution for narrow-only operations
+      this.plan match {
+        case s: Plan.Source[A] =>
+          // Sources don't need tasks, just return the data directly
+          s.partitions.flatMap(_.data)
+          
+        case _ =>
+          val tasks = Executor.createTasks(this.plan)
+          // Cast to the expected type for TaskScheduler - this is safe because createTasks
+          // returns tasks that produce the correct output type A
+          val typedTasks = tasks.asInstanceOf[Seq[Task[Any, A]]]
 
-        val resultPartitions = TaskScheduler.submit(typedTasks)
-        resultPartitions.flatMap(_.data)
+          val resultPartitions = TaskScheduler.submit(typedTasks)
+          resultPartitions.flatMap(_.data)
+      }
     }
   }
   
