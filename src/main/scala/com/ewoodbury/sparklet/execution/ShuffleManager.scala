@@ -1,9 +1,11 @@
 package com.ewoodbury.sparklet.execution
 
 import scala.collection.mutable
+import java.util.concurrent.atomic.AtomicInteger
 
 import com.ewoodbury.sparklet.core.Partition
 
+@SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
 
 /**
  * Manages shuffle data between stages in the execution graph.
@@ -20,7 +22,7 @@ object ShuffleManager:
   
   // In-memory storage for shuffle data (simple local implementation)
   private val shuffleStorage = mutable.Map[Int, ShuffleData[_, _]]()
-  private var nextShuffleId = 0
+  private val nextShuffleId = new AtomicInteger(0)
   
   /**
    * Partitions data by key across the specified number of partitions.
@@ -53,8 +55,7 @@ object ShuffleManager:
    * Stores shuffle data and returns a shuffle ID for later retrieval.
    */
   def writeShuffleData[K, V](shuffleData: ShuffleData[K, V]): Int = {
-    val shuffleId = nextShuffleId
-    nextShuffleId += 1
+    val shuffleId = nextShuffleId.getAndIncrement()
     shuffleStorage(shuffleId) = shuffleData
     shuffleId
   }
@@ -66,7 +67,7 @@ object ShuffleManager:
     shuffleStorage.get(shuffleId) match {
       case Some(shuffleData) =>
         val typedData = shuffleData.asInstanceOf[ShuffleData[K, V]]
-        val partitionData = typedData.partitionedData.getOrElse(partitionId, Seq.empty)
+        val partitionData = typedData.partitionedData.getOrElse(partitionId, Seq.empty[(K, V)])
         Partition(partitionData)
       case None =>
         throw new IllegalArgumentException(s"Shuffle ID $shuffleId not found")
@@ -88,7 +89,7 @@ object ShuffleManager:
    */
   def clear(): Unit = {
     shuffleStorage.clear()
-    nextShuffleId = 0
+    nextShuffleId.set(0)
   }
   
   /**
