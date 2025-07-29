@@ -4,7 +4,7 @@ import com.ewoodbury.sparklet.core.{Plan, Partition}
 import scala.collection.mutable
 import java.util.concurrent.atomic.AtomicInteger
 
-@SuppressWarnings(Array("org.wartremover.warts.Any", "org.wartremover.warts.AsInstanceOf"))
+@SuppressWarnings(Array("org.wartremover.warts.Any", "org.wartremover.warts.AsInstanceOf", "org.wartremover.warts.MutableDataStructures"))
 
 /**
  * Builds stage execution graphs from plans, handling both narrow transformations 
@@ -20,8 +20,8 @@ object StageBuilder:
     stage: Stage[_, _],
     inputSources: Seq[InputSource], // What this stage reads from
     isShuffleStage: Boolean,
-    shuffleId: Option[Int] = None, // For stages that produce shuffle output
-    shuffleOperation: Option[Plan[_]] = None // The original Plan operation for shuffle stages
+    shuffleId: Option[Int], // For stages that produce shuffle output
+    shuffleOperation: Option[Plan[_]] // The original Plan operation for shuffle stages
   )
 
   /**
@@ -62,12 +62,13 @@ object StageBuilder:
     )
   }
 
+  @SuppressWarnings(Array("org.wartremover.warts.RedundantAsInstanceOf"))
   /**
    * Recursively builds stages, handling narrow transformations and shuffle boundaries.
    * Returns the stage ID that produces the final result.
    */
-  private def buildStagesRecursive(
-    plan: Plan[_],
+  private def buildStagesRecursive[A](
+    plan: Plan[A],
     stageMap: mutable.Map[Int, StageInfo],
     dependencies: mutable.Map[Int, mutable.Set[Int]]
   ): Int = {
@@ -80,7 +81,9 @@ object StageBuilder:
           id = stageId,
           stage = stage,
           inputSources = Seq(SourceInput(source.partitions)),
-          isShuffleStage = false
+          isShuffleStage = false,
+          shuffleId = None,
+          shuffleOperation = None
         )
         stageId
 
@@ -139,7 +142,9 @@ object StageBuilder:
           id = unionStageId,
           stage = unionStage,
           inputSources = stageMap(leftStageId).inputSources ++ stageMap(rightStageId).inputSources,
-          isShuffleStage = false
+          isShuffleStage = false,
+          shuffleId = None,
+          shuffleOperation = None
         )
         
         dependencies.getOrElseUpdate(unionStageId, mutable.Set.empty) += leftStageId
@@ -170,8 +175,10 @@ object StageBuilder:
         stageMap(joinStageId) = StageInfo(
           id = joinStageId,
           stage = joinStage,
-          inputSources = Seq(), // Will be filled with shuffle inputs
-          isShuffleStage = true
+          inputSources = Seq.empty[InputSource],
+          isShuffleStage = true,
+          shuffleId = None,
+          shuffleOperation = None
         )
         
         dependencies.getOrElseUpdate(joinStageId, mutable.Set.empty) += leftStageId
@@ -189,16 +196,15 @@ object StageBuilder:
         stageMap(cogroupStageId) = StageInfo(
           id = cogroupStageId,
           stage = cogroupStage,
-          inputSources = Seq(), // Will be filled with shuffle inputs
-          isShuffleStage = true
+          inputSources = Seq.empty[InputSource],
+          isShuffleStage = true,
+          shuffleId = None,
+          shuffleOperation = None
         )
         
         dependencies.getOrElseUpdate(cogroupStageId, mutable.Set.empty) += leftStageId
         dependencies.getOrElseUpdate(cogroupStageId, mutable.Set.empty) += rightStageId
         cogroupStageId
-
-      case _ =>
-        throw new UnsupportedOperationException(s"Stage building for $plan not implemented yet")
     }
   }
 
@@ -230,7 +236,9 @@ object StageBuilder:
         id = newStageId,
         stage = newOperation,
         inputSources = shuffleInputSources,
-        isShuffleStage = false
+        isShuffleStage = false,
+        shuffleId = None,
+        shuffleOperation = None
       )
       
       // Add dependency: new stage depends on source stage  
@@ -251,13 +259,15 @@ object StageBuilder:
   @SuppressWarnings(Array("org.wartremover.warts.DefaultArguments"))
   /**
    * Creates a new shuffle stage that depends on the source stage.
+   * 
+   * TODO: Add actual shuffle logic, which will use the args operationType and operation.
    */
   private def createShuffleStage(
     sourceStageId: Int,
-    operationType: String,
+    @annotation.unused operationType: String,
     stageMap: mutable.Map[Int, StageInfo],
     dependencies: mutable.Map[Int, mutable.Set[Int]],
-    operation: Option[Any] = None,
+    @annotation.unused operation: Option[Any] = None,
     shuffleOperation: Option[Plan[_]] = None
   ): Int = {
     val shuffleStageId = getNextStageId()
