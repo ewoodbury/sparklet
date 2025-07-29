@@ -3,6 +3,8 @@ package com.ewoodbury.sparklet.execution
 import com.ewoodbury.sparklet.core.{Plan, Partition}
 import scala.collection.mutable
 
+@SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
+
 /**
  * The DAG Scheduler orchestrates multi-stage execution of plans with shuffle operations.
  * It builds stage graphs, executes stages in dependency order, and manages shuffle data.
@@ -103,7 +105,7 @@ object DAGScheduler:
       }
     }
     
-    if (result.size != allStages.size) {
+    if (allStages.sizeIs != result.size) {
       throw new IllegalStateException("Cycle detected in stage dependencies")
     }
     
