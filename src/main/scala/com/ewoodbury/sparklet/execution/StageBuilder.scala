@@ -2,6 +2,7 @@ package com.ewoodbury.sparklet.execution
 
 import com.ewoodbury.sparklet.core.{Plan, Partition}
 import scala.collection.mutable
+import java.util.concurrent.atomic.AtomicInteger
 
 @SuppressWarnings(Array("org.wartremover.warts.Any", "org.wartremover.warts.AsInstanceOf"))
 
@@ -39,18 +40,16 @@ object StageBuilder:
     finalStageId: Int
   )
 
-  private var nextStageId = 0
+  private val nextStageId = new AtomicInteger(0)
   private def getNextStageId(): Int = {
-    val id = nextStageId
-    nextStageId += 1
-    id
+    nextStageId.getAndIncrement()
   }
 
   /**
    * Builds a complete stage graph from a plan, handling shuffle boundaries.
    */
   def buildStageGraph[A](plan: Plan[A]): StageGraph = {
-    nextStageId = 0
+    nextStageId.set(0)
     val stageMap = mutable.Map[Int, StageInfo]()
     val dependencies = mutable.Map[Int, mutable.Set[Int]]()
     
