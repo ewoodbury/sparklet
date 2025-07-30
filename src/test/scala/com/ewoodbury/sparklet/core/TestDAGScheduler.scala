@@ -30,6 +30,25 @@ class TestDAGScheduler extends AnyFlatSpec with Matchers {
     result shouldBe Seq(6, 8, 10)
   }
 
+  it should "correctly execute groupByKey operations" in {
+    val source = toDistCollection(Seq("a" -> 1, "b" -> 2, "a" -> 3))
+    val result = source.groupByKey.collect().toMap
+    result("a") should contain theSameElementsAs Seq(1, 3)
+    result("b") should contain theSameElementsAs Seq(2)
+  }
+
+    it should "handle empty collections" in {
+    val source = toDistCollection(Seq.empty[(String, Int)])
+    val result = source.groupByKey.collect()
+    result shouldBe empty
+    }
+
+    it should "handle plans with multiple shuffle operations" in {
+    val source = toDistCollection(Seq("a" -> 1, "b" -> 2, "a" -> 3))
+    val plan = source.reduceByKey[String, Int](_ + _).groupByKey.plan
+    DAGScheduler.requiresDAGScheduling(plan) shouldBe true
+    }
+
   it should "execute shuffle operations using DAG scheduler (basic smoke test)" in {
     val source = toDistCollection(Seq(1 -> "a", 2 -> "b", 1 -> "c"))
     
