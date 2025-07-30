@@ -52,34 +52,36 @@ class TestShuffleOperations extends AnyFlatSpec with Matchers {
     val source = toDistCollection(Seq(1 -> "one", 2 -> "two"))
     val grouped = source.groupByKey
     
-    // Should execute successfully with DAG scheduler
-    noException should be thrownBy {
-      val result = grouped.collect()
-      println(s"GroupByKey result: $result")
-    }
+    val expected = Map(1 -> Seq("one"), 2 -> Seq("two"))
+    
+    val result = grouped.collect()
+
+    val sortedResult = result.toSeq.sortBy(_._1)
+    val sortedExpected = expected.toSeq.sortBy(_._1)
+    sortedResult shouldBe sortedExpected
   }
 
   it should "execute reduceByKey operations using DAG scheduler" in {
     val source = toDistCollection(Seq("one" -> 1, "one" -> 1, "two" -> 2))
     val reduced = source.reduceByKey((a: Int, b: Int) => a + b)
     
-    // Should execute successfully with DAG scheduler
-    noException should be thrownBy {
-      val result = reduced.collect()
-      println(s"ReduceByKey result: $result")
-    }
+    val expected = Map("one" -> 2, "two" -> 2)
+    
+    val result = reduced.collect()
+
+    val sortedResult = result.toSeq.sortBy(_._1)
+    val sortedExpected = expected.toSeq.sortBy(_._1)
+    sortedResult shouldBe sortedExpected
   }
 
-  // TODO: Fix
-  ignore should "execute sortBy operations using DAG scheduler" in {
+  it should "execute sortBy operations using DAG scheduler" in {
     val source = toDistCollection(Seq(3, 1, 4, 1, 5))
     val sorted = source.sortBy(identity)
     
-    // Should execute successfully with DAG scheduler
-    noException should be thrownBy {
-      val result = sorted.collect()
-      println(s"SortBy result: $result")
-    }
+    val expected = Seq(1, 1, 3, 4, 5)
+    
+    val result = sorted.collect()
+    result shouldBe expected
   }
 
   // TODO: Implement this
