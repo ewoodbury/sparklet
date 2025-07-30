@@ -1,8 +1,9 @@
-package com.ewoodbury.sparklet.core
+package com.ewoodbury.sparklet.execution
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import com.ewoodbury.sparklet.execution.DAGScheduler
+
+import com.ewoodbury.sparklet.core.{DistCollection, Plan, Partition}
 
 class TestDAGScheduler extends AnyFlatSpec with Matchers {
   val toDistCollection = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
@@ -83,7 +84,7 @@ class TestDAGScheduler extends AnyFlatSpec with Matchers {
       println(s"ReduceByKey result: $result")
     }
   }
-  
+
   // TODO: Implement this
   ignore should "handle mixed narrow and wide transformations" in {
     val source = toDistCollection(Seq(1 -> "a", 2 -> "b", 1 -> "c"))
