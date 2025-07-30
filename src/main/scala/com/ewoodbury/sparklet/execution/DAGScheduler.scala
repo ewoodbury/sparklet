@@ -36,8 +36,20 @@ object DAGScheduler:
       )
       
       if (needsShuffleOutput) {
-        val actualShuffleId = handleShuffleOutput(stageInfo, results)
-        stageToShuffleId(stageId) = actualShuffleId
+        // Check if the dependent stage is a sortBy operation
+        val dependentSortByStage = dependentStages.find(depStageId => 
+          stageGraph.stages(depStageId).shuffleOperation.exists(_.isInstanceOf[Plan.SortByOp[_, _]])
+        )
+        
+        if (dependentSortByStage.isDefined) {
+          // For sortBy, we don't need to partition the data, just store it
+          val actualShuffleId = handleSortByShuffleOutput(stageInfo, results)
+          stageToShuffleId(stageId) = actualShuffleId
+        } else {
+          // Regular key-value shuffle operations
+          val actualShuffleId = handleShuffleOutput(stageInfo, results)
+          stageToShuffleId(stageId) = actualShuffleId
+        }
       }
     }
     
@@ -119,8 +131,9 @@ object DAGScheduler:
     stageInfo match {
       case info if info.isShuffleStage =>
         // Cast to key-value pairs for shuffle stages.
-        val kvPartitions = inputPartitions.asInstanceOf[Seq[Partition[(Any, Any)]]]
-        executeShuffleStage[Any, Any](info, kvPartitions)
+        // For sortBy, the data is not key-value pairs, but type is still cast to (Any, Any).
+        val partitions = inputPartitions.asInstanceOf[Seq[Partition[(Any, Any)]]]
+        executeShuffleStage[Any, Any](info, partitions)
 
       case info =>
         // Cast to a generic partition for narrow stages.
@@ -155,30 +168,41 @@ object DAGScheduler:
     inputPartitions: Seq[Partition[(K, V)]]
   ): Seq[Partition[Any]] = {
     println(s"Executing shuffle stage ${stageInfo.id} with ${inputPartitions.size} input partitions")
-    val allData: Seq[(K, V)] = inputPartitions.flatMap(_.data)
-
+    
     val resultPartitions: Seq[Partition[Any]] = stageInfo.shuffleOperation match {
-      case Some(Plan.GroupByKeyOp(_)) =>
-        val groupedData = allData.groupBy(_._1).map { 
-            case (key, pairs) => (key, pairs.map(_._2)) 
-        }
-        Seq(Partition[Any](groupedData.toSeq))
-
-      case Some(reduceByKey: Plan.ReduceByKeyOp[_, _]) =>
-        val reduceFunc = reduceByKey.reduceFunc.asInstanceOf[(V, V) => V]
-        val reducedData = allData.groupBy(_._1).map { case (key, pairs) =>
-          val reducedValue = pairs.map(_._2).reduceOption(reduceFunc)
-            .getOrElse(throw new NoSuchElementException(s"No values found for key $key"))
-          (key, reducedValue)
-        }
-        Seq(Partition[Any](reducedData.toSeq))
-
       case Some(sortBy: Plan.SortByOp[_, _]) =>
-        Seq(Partition[Any](allData))
+        // SortBy works on elements of type A, not key-value pairs
+        // Extract the original data from the tuples created during shuffle
+        @SuppressWarnings(Array("org.wartremover.warts.Any"))
+        val inputData = inputPartitions.flatMap[Any](_.data.asInstanceOf[Iterable[(Any, Any)]].map(_._1))
+        val keyFunc = sortBy.keyFunc.asInstanceOf[Any => Any]
+        implicit val ord: Ordering[Any] = sortBy.ordering.asInstanceOf[Ordering[Any]]
+        val sortedData = inputData.sortBy[Any](keyFunc)
+        Seq(Partition[Any](sortedData))
 
       case _ =>
-        val groupedData = allData.groupBy(_._1).map { case (key, pairs) => (key, pairs.map(_._2)) }
-        Seq(Partition[Any](groupedData.toSeq))
+        // All other shuffle operations work on key-value pairs
+        val allData: Seq[(K, V)] = inputPartitions.flatMap(_.data)
+        stageInfo.shuffleOperation match {
+          case Some(Plan.GroupByKeyOp(_)) =>
+            val groupedData = allData.groupBy(_._1).map { 
+                case (key, pairs) => (key, pairs.map(_._2)) 
+            }
+            Seq(Partition[Any](groupedData.toSeq))
+
+          case Some(reduceByKey: Plan.ReduceByKeyOp[_, _]) =>
+            val reduceFunc = reduceByKey.reduceFunc.asInstanceOf[(V, V) => V]
+            val reducedData = allData.groupBy(_._1).map { case (key, pairs) =>
+              val reducedValue = pairs.map(_._2).reduceOption(reduceFunc)
+                .getOrElse(throw new NoSuchElementException(s"No values found for key $key"))
+              (key, reducedValue)
+            }
+            Seq(Partition[Any](reducedData.toSeq))
+
+          case _ =>
+            val groupedData = allData.groupBy(_._1).map { case (key, pairs) => (key, pairs.map(_._2)) }
+            Seq(Partition[Any](groupedData.toSeq))
+        }
     }
     resultPartitions
   }
@@ -196,6 +220,23 @@ object DAGScheduler:
     val actualShuffleId = ShuffleManager.writeShuffleData[Any, Any](shuffleData)
     
     println(s"Stored shuffle data for stage ${stageInfo.id} with shuffle ID $actualShuffleId")
+    actualShuffleId
+  }
+
+  /**
+   * Handles shuffle output for sortBy operations (data is not key-value pairs).
+   */
+  private def handleSortByShuffleOutput(
+    stageInfo: StageBuilder.StageInfo,
+    results: Seq[Partition[_]]
+  ): Int = {
+    // For sortBy, data is not key-value pairs, so create a simple shuffle data structure
+    val shuffleData = ShuffleManager.ShuffleData[Any, Any](
+      Map(0 -> results.flatMap[Any](_.data.asInstanceOf[Iterable[Any]]).map(x => (x, ())))
+    )
+    val actualShuffleId = ShuffleManager.writeShuffleData[Any, Any](shuffleData)
+    
+    println(s"Stored sortBy shuffle data for stage ${stageInfo.id} with shuffle ID $actualShuffleId")
     actualShuffleId
   }
 

@@ -7,6 +7,7 @@ import com.ewoodbury.sparklet.execution.DAGScheduler
 class TestDAGScheduler extends AnyFlatSpec with Matchers {
   val toDistCollection = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
 
+  // Basic detection tests for scheduling
   "DAGScheduler" should "detect plans that require DAG scheduling" in {
     val source = toDistCollection(Seq(1 -> "one", 2 -> "two"))
     val groupedPlan = source.groupByKey.plan
@@ -23,11 +24,24 @@ class TestDAGScheduler extends AnyFlatSpec with Matchers {
     DAGScheduler.requiresDAGScheduling(complexPlan) shouldBe true
   }
 
+  it should "detect join operations require DAG scheduling" in {
+    val source1 = toDistCollection(Seq(1 -> "a", 2 -> "b"))
+    val source2 = toDistCollection(Seq(1 -> "x", 3 -> "y"))
+    val joinPlan = source1.join(source2).plan
+    DAGScheduler.requiresDAGScheduling(joinPlan) shouldBe true
+  }
+
   it should "execute simple narrow transformations without DAG scheduling" in {
     val source = toDistCollection(Seq(1, 2, 3, 4, 5))
     val result = source.map(_ * 2).filter(_ > 5).collect()
     
     result shouldBe Seq(6, 8, 10)
+  }
+
+  it should "handle sortBy operations" in {
+    val source = toDistCollection(Seq(3, 1, 4, 1, 5))
+    val result = source.sortBy(identity).collect()
+    result shouldBe Seq(1, 1, 3, 4, 5)
   }
 
   it should "correctly execute groupByKey operations" in {
@@ -37,13 +51,13 @@ class TestDAGScheduler extends AnyFlatSpec with Matchers {
     result("b") should contain theSameElementsAs Seq(2)
   }
 
-    it should "handle empty collections" in {
+  it should "handle empty collections" in {
     val source = toDistCollection(Seq.empty[(String, Int)])
     val result = source.groupByKey.collect()
     result shouldBe empty
     }
 
-    it should "handle plans with multiple shuffle operations" in {
+  it should "handle plans with multiple shuffle operations" in {
     val source = toDistCollection(Seq("a" -> 1, "b" -> 2, "a" -> 3))
     val plan = source.reduceByKey[String, Int](_ + _).groupByKey.plan
     DAGScheduler.requiresDAGScheduling(plan) shouldBe true
@@ -69,18 +83,7 @@ class TestDAGScheduler extends AnyFlatSpec with Matchers {
       println(s"ReduceByKey result: $result")
     }
   }
-
-  // TODO: Fix
-  ignore should "execute sortBy operations using DAG scheduler (basic smoke test)" in {
-    val source = toDistCollection(Seq(3, 1, 4, 1, 5))
-    
-    // This is a basic smoke test - the current implementation is simplified
-    noException should be thrownBy {
-      val result = source.sortBy(identity).collect()
-      println(s"SortBy result: $result")
-    }
-  }
-
+  
   // TODO: Implement this
   ignore should "handle mixed narrow and wide transformations" in {
     val source = toDistCollection(Seq(1 -> "a", 2 -> "b", 1 -> "c"))
