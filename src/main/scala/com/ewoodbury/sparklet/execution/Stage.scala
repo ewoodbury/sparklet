@@ -52,4 +52,4 @@ object Stage:
     SingleOpStage(p => Partition(p.data.filter { case (_, v) => predicate(v) }))
     
   def flatMapValues[K, V, B](f: V => IterableOnce[B]): Stage[(K, V), (K, B)] = 
-    SingleOpStage(p => Partition(p.data.flatMap { case (k, v) => f(v).map(b => (k, b)) }))
+    SingleOpStage(p => Partition(p.data.flatMap { case (k, v) => f(v).iterator.map(b => (k, b)) }))

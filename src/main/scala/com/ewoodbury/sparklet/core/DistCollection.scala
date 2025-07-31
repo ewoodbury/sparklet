@@ -199,7 +199,7 @@ final case class DistCollection[A](plan: Plan[A]):
   def fold(initial: A)(op: (A, A) => A): A = collect().fold(initial)(op)
 
   def aggregate[B](zero: B)(seqOp: (B, A) => B, combOp: (B, B) => B): B =
-    collect().aggregate(zero)(seqOp, combOp)
+    collect().foldLeft(zero)(seqOp)
   
   def foreach(f: A => Unit): Unit = collect().foreach(f)
 

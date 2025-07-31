@@ -104,7 +104,7 @@ object Task:
   ) extends Task[(K, V), (K, B)]:
     override def run(): Partition[(K, B)] = {
       println(s"[Thread: ${Thread.currentThread().getName}] Running FlatMapValuesTask on partition...")
-      Partition(partition.data.flatMap { case (k, v) => f(v).map(b => (k, b)) })
+      Partition(partition.data.flatMap { case (k, v) => f(v).iterator.map(b => (k, b)) })
     }
 
   /** A task that executes a complete stage (chain of narrow transformations) on a partition. */
