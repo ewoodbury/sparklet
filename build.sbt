@@ -23,6 +23,9 @@ lazy val root = (project in file("."))
       "org.typelevel" %% "cats-effect-testing-scalatest" % "1.5.0" % Test
     ),
     
+    // Test configuration to avoid race conditions in ShuffleManager
+    Test / parallelExecution := false,
+    
     // Wartremover configuration
     wartremoverWarnings ++= Warts.allBut(
       Wart.ImplicitParameter,

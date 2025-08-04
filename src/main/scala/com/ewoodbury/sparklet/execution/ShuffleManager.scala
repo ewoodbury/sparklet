@@ -21,6 +21,7 @@ object ShuffleManager:
   )
   
   // In-memory storage for shuffle data (simple local implementation)
+  // TODO: Look into making more thread-safe, and re-enable parallel test execution
   private val shuffleStorage = mutable.Map[Int, ShuffleData[_, _]]()
   private val nextShuffleId = new AtomicInteger(0)
   
