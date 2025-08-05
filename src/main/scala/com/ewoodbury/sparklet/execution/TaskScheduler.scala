@@ -1,20 +1,25 @@
 package com.ewoodbury.sparklet.execution
 
 import java.util.concurrent.Executors
+
+import scala.concurrent.duration._
 import scala.concurrent.{Await, ExecutionContext, Future}
-import scala.concurrent.duration.*
+
 import com.ewoodbury.sparklet.core.Partition
 
 object TaskScheduler:
   // Thread pool with 4 "executors" (cores)
   private val executorService = Executors.newFixedThreadPool(4)
-  private implicit val executionContext: ExecutionContext = ExecutionContext.fromExecutorService(executorService)
+  private implicit val executionContext: ExecutionContext =
+    ExecutionContext.fromExecutorService(executorService)
 
   /**
    * Submits a set of tasks (representing one stage) for concurrent execution.
    *
-   * @param tasks The sequence of tasks to run.
-   * @return The sequence of computed Partitions, in order.
+   * @param tasks
+   *   The sequence of tasks to run.
+   * @return
+   *   The sequence of computed Partitions, in order.
    */
   def submit[A, B](tasks: Seq[Task[A, B]]): Seq[Partition[B]] = {
     println(s"TaskScheduler: Submitting ${tasks.length} tasks to the thread pool...")

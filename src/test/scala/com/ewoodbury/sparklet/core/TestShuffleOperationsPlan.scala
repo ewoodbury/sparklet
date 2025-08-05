@@ -4,7 +4,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 class TestShuffleOperationsPlan extends AnyFlatSpec with Matchers {
-  val toDistCollection = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
+  val toDistCollection: [T] => (seq: Seq[T]) => DistCollection[T] = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
 
   "Shuffle transformations" should "create groupByKey transformations without triggering computation" in {
     val source = toDistCollection(Seq(1 -> "one", 2 -> "two", 3 -> "three"))

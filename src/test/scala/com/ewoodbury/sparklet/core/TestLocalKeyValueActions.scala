@@ -6,7 +6,7 @@ import org.scalatest.matchers.should.Matchers
 import com.ewoodbury.sparklet.execution.ShuffleManager
 
 class TestLocalKeyValueActions extends AnyFlatSpec with Matchers {
-  val toDistCollection = [T] => (seq: Seq[T]) => DistCollection(com.ewoodbury.sparklet.core.Plan.Source(Seq(Partition(seq))))
+  val toDistCollection: [T] => (seq: Seq[T]) => DistCollection[T] = [T] => (seq: Seq[T]) => DistCollection(com.ewoodbury.sparklet.core.Plan.Source(Seq(Partition(seq))))
 
   "Executor" should "execute a simple reduceByKey operation" in {
     ShuffleManager.clear() // Clean state for test isolation

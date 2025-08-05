@@ -3,7 +3,7 @@ package com.ewoodbury.sparklet.execution
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.ewoodbury.sparklet.core.{DistCollection, Plan, Partition}
+import com.ewoodbury.sparklet.core.{DistCollection, Partition, Plan}
 
 /**
   * Tests for Executor.createTasks()
@@ -21,7 +21,7 @@ class TestExecutorCreateTasks extends AnyFlatSpec with Matchers {
   /**
    * Helper function to create a DistCollection from a sequence for testing
    */
-  val toDistCollection = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
+  val toDistCollection: [T] => (seq: Seq[T]) => DistCollection[T] = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
 
   "Executor.createTasks" should "create StageTask for MapOp plans" in {
     // Given: A simple map operation plan

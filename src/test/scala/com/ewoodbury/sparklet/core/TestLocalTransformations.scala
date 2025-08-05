@@ -4,8 +4,8 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 class TestLocalTransformations extends AnyFlatSpec with Matchers {
-  val toDistCollection = [T] => (seq: Seq[T]) => DistCollection(com.ewoodbury.sparklet.core.Plan.Source(Seq(Partition(seq))))
-  val sourceInt = toDistCollection(Seq(1, 2, 3, 4, 5))
+  val toDistCollection: [T] => (seq: Seq[T]) => DistCollection[T] = [T] => (seq: Seq[T]) => DistCollection(com.ewoodbury.sparklet.core.Plan.Source(Seq(Partition(seq))))
+  val sourceInt: DistCollection[Int] = toDistCollection(Seq(1, 2, 3, 4, 5))
 
   "Executor" should "execute a simple map operation" in {
     val mapped = sourceInt.map(_ * 2)

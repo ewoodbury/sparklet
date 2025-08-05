@@ -2,7 +2,8 @@ package com.ewoodbury.sparklet.execution
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import com.ewoodbury.sparklet.core.{Plan, Partition}
+
+import com.ewoodbury.sparklet.core.{Partition, Plan}
 
 @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
 /**

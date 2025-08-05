@@ -3,10 +3,10 @@ package com.ewoodbury.sparklet.execution
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.ewoodbury.sparklet.core.{DistCollection, Plan, Partition}
+import com.ewoodbury.sparklet.core.{DistCollection, Partition, Plan}
 
 class TestDAGScheduler extends AnyFlatSpec with Matchers {
-  val toDistCollection = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
+  val toDistCollection: [T] => (seq: Seq[T]) => DistCollection[T] = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
 
   // Basic detection tests for scheduling
   "DAGScheduler" should "detect plans that require DAG scheduling" in {
