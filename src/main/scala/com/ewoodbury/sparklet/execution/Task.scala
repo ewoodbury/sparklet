@@ -1,5 +1,6 @@
 package com.ewoodbury.sparklet.execution
-import com.ewoodbury.sparklet.core.Partition
+
+import com.ewoodbury.sparklet.core.{Partition, Plan}
 
 /**
  * A Task represents a unit of computation that can be run on an executor. It operates on a single
@@ -121,6 +122,18 @@ object Task:
     override def run(): Partition[B] = {
       println(s"[Thread: ${Thread.currentThread().getName}] Running StageTask on partition...")
       stage.execute(partition)
+    }
+
+  /** A task that executes a complete DAG through the DAGScheduler. */
+  case class DAGTask[A](plan: Plan[A]) extends Task[A, A]:
+    // DAGTask doesn't operate on a single partition, but the Task trait requires this
+    // We use an empty partition as a placeholder since DAGTask orchestrates entire DAG execution
+    override def partition: Partition[A] = Partition(Seq.empty[A])
+    
+    override def run(): Partition[A] = {
+      println(s"[Thread: ${Thread.currentThread().getName}] Running DAGTask...")
+      val results = DAGScheduler.execute(plan)
+      Partition(results.toSeq)
     }
 
 end Task
