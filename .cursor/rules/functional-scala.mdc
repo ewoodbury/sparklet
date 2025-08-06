@@ -16,3 +16,8 @@ WartRemover Rules
 - Avoid `var`, use `val` instead.
 - When using .toLowerCase or .toUpperCase, pass in the English locale: `s.toUpperCase(java.util.Locale.ENGLISH)`.
 - Avoid using `null`.
+
+Documentation
+- Do not use all-caps or emojis in technical documentation
+- Keep documentation concise and approachable, while still including all necessary details.
+- Assume your audience is a Senior Software Engineer who may is not deeply familiar with this particular topic.

@@ -30,7 +30,7 @@ A data processing engine inspired by Spark, in pure functional Scala.
 
 - [x] Local Mode
 - [x] Partitions Support
-- [ ] Shuffles
+- [ '] Shuffles
 - [ ] Simulated Cluster Mode using threads
 - [ ] Basic Cluster Mode
 

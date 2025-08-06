@@ -2,7 +2,7 @@
 
 ## Processing Core
 
-The core processing engine is composed of four layers: a logical planning layer, a stage layer, a task layer, and a DistCollection layer.
+The core processing engine is composed of four layers: a logical planning layer, a stage layer, a task layer, and a DistCollection layer. The system now supports both **narrow transformations** (single-stage execution) and **wide transformations** (multi-stage execution with shuffle operations).
 
 ### 1. Planning Layer
 
@@ -38,12 +38,19 @@ val result = stage.execute(partition) // Executes both operations in one pass
 ### 3. Task Layer
 
 - Computation is broken down into actual execution units over a single piece of data (partition). One task always runs on exactly one partition.
-- Uses `StageTask` that can execute entire stages (multiple chained operations)
+- **Two types of tasks** for different execution patterns:
+  - **`StageTask`**: Executes single stages with narrow transformations
+  - **`DAGTask`**: Orchestrates multi-stage execution through DAGScheduler for shuffle operations
 - Computation is actually triggered with `task.run()`
 
 ```scala
-val task = Task.StageTask(partition, stage)
-val result = task.run() // Actually executes the entire stage
+// Narrow transformations - single stage
+val stageTask = Task.StageTask(partition, stage)
+val result = stageTask.run()
+
+// Wide transformations - multi-stage DAG execution  
+val dagTask = Task.DAGTask(plan)
+val result = dagTask.run() // Executes entire DAG via DAGScheduler
 ```
 
 ### 4. DistCollection Layer (User API)
@@ -52,12 +59,33 @@ val result = task.run() // Actually executes the entire stage
 
 ```scala
 val dc = DistCollection(data, 2)
-  .map(_ * 2)     // Creates Plan.MapOp
-  .filter(_ > 4)  // Creates Plan.FilterOp
-  .collect()      // Triggers execution via Tasks
+  .map(_ * 2)        // Creates Plan.MapOp (narrow)
+  .filter(_ > 4)     // Creates Plan.FilterOp (narrow) 
+  .groupByKey()      // Creates Plan.GroupByKeyOp (wide - triggers shuffle)
+  .collect()         // Triggers execution via appropriate Tasks
+```
+
+## Dual Execution Paths
+
+The system now intelligently routes operations through two execution paths:
+
+### Path 1: Single-Stage Execution (Narrow Transformations)
+**Used for:** `map`, `filter`, `flatMap`, `distinct`, `union`, key-value operations without shuffling
+
+```
+Plan → Executor.createTasks() → StageTask → TaskScheduler → Results
+```
+
+### Path 2: Multi-Stage Execution (Wide Transformations) 
+**Used for:** `groupByKey`, `reduceByKey`, `sortBy`, `join`, `cogroup`
+
+```
+Plan → Executor.createTasks() → DAGTask → DAGScheduler → Multi-Stage Coordination → Results
 ```
 
 ## Example Walkthrough
+
+### Narrow Transformations Example
 User writes code with DistCollection API
 ```scala
 // User code:
@@ -76,29 +104,21 @@ Plan.MapOp(Plan.Source([Partition([1,2]), Partition([3,4])]), x => x * 2)
 Plan.FilterOp(Plan.MapOp(...), x => x > 4)
 ```
 
-Step 2: Stage Creation
+Step 2: Task Creation & Execution
 ```scala
-// Executor.createTasks() first calls StageBuilder.buildStages(),
-// which groups narrow transformations:
-// The map and filter are combined into a single stage:
+// Executor.createTasks() detects narrow-only plan
+// Creates one StageTask per partition with chained operations:
 val stage = Stage.ChainedStage(
   Stage.map(x => x * 2),
   Stage.filter(x => x > 4)
 )
-// Result: [(Source, stage)] - one stage that does both operations
-```
-
-Step 3: Task Creation
-```scala
-// Executor.createTasks() converts stages to tasks:
-// Creates one StageTask per partition:
-[
+val tasks = [
   StageTask(Partition([1,2]), stage),
   StageTask(Partition([3,4]), stage)
 ]
 ```
 
-Step 4: Task Execution
+Step 3: Task Execution
 ```scala
 // Each task runs the entire stage independently:
 task1.run() // Stage on [1,2] -> map -> [2,4] -> filter -> [4]
@@ -106,51 +126,95 @@ task2.run() // Stage on [3,4] -> map -> [6,8] -> filter -> [6,8]
 // Results are combined and returned to `result`
 ```
 
-### Diagram
+### Wide Transformations Example
+```scala
+// User code with shuffle operation:
+val result = DistCollection(Seq(("a",1), ("b",2), ("a",3)), 2)
+  .groupByKey()
+  .collect()
+```
+
+Step 1: Plan Creation
+```scala
+Plan.GroupByKeyOp(Plan.Source([Partition([("a",1), ("b",2)]), Partition([("a",3)])]))
+```
+
+Step 2: DAG Task Creation
+```scala
+// Executor.createTasks() detects shuffle operation
+// Routes through DAGScheduler:
+val dagTask = Task.DAGTask(plan)
+```
+
+Step 3: Multi-Stage Execution
+```scala
+// DAGTask.run() triggers:
+// 1. StageBuilder.buildStageGraph() - creates stage dependency graph
+// 2. DAGScheduler.execute() - coordinates multi-stage execution
+// 3. ShuffleManager - handles data redistribution
+// Result: [("a", [1,3]), ("b", [2])]
+```
+
+### Updated Execution Flow Diagram
 ```mermaid
 flowchart TD
     %% User API Layer (Lazy)
     User["`**User Code**
     DistCollection(data, 2)
     .map(_ * 2)
-    .filter(_ > 4)`"]
+    .groupByKey()`"]
     
     %% Planning Layer (Lazy)
     subgraph Lazy["🔄 Lazy Evaluation Phase"]
         DC1["`**DistCollection.map()**
         Creates Plan.MapOp`"]
-        DC2["`**DistCollection.filter()**
-        Creates Plan.FilterOp`"]
+        DC2["`**DistCollection.groupByKey()**
+        Creates Plan.GroupByKeyOp`"]
         PlanTree["`**Plan Tree Built**
-        FilterOp(MapOp(Source(...)))`"]
+        GroupByKeyOp(MapOp(Source(...)))`"]
     end
     
     %% Execution Trigger
     Trigger["`**🚀 EXECUTION TRIGGER**
     .collect() called`"]
     
-    %% Execution Phase
-    subgraph Execution["⚡ Eager Execution Phase"]
-        Executor["`**Executor.createTasks()**`"]
-        StageBuilder["`**StageBuilder.buildStages()**
+    %% Execution Decision
+    Decision{"`**Contains Shuffle?**
+    DAGScheduler.requiresDAGScheduling()`"}
+    
+    %% Single-Stage Path
+    subgraph SingleStage["⚡ Single-Stage Execution"]
+        Executor1["`**Executor.createTasks()**`"]
+        StageBuilder1["`**StageBuilder.buildStages()**
         Groups narrow transformations`"]
-        Stages["`**Stages Created**
-        ChainedStage(map, filter)`"]
-        Tasks["`**Tasks Created**
-        One StageTask per partition`"]
+        StageTasks["`**StageTask Creation**
+        One per partition`"]
         
-        subgraph Parallel["🔄 Parallel Execution"]
-            Task1["`**Task 1**
-            Partition([1,2])
-            → [2,4] → [4]`"]
-            Task2["`**Task 2** 
-            Partition([3,4])
-            → [6,8] → [6,8]`"]
+        subgraph ParallelSingle["🔄 Parallel StageTask Execution"]
+            StageTask1["`**StageTask 1**
+            Single-pass execution`"]
+            StageTask2["`**StageTask 2**
+            Single-pass execution`"]
         end
-        
-        Results["`**Results Combined**
-        [4, 6, 8]`"]
     end
+    
+    %% Multi-Stage Path  
+    subgraph MultiStage["⚡ Multi-Stage Execution"]
+        Executor2["`**Executor.createTasks()**`"]
+        DAGTaskCreate["`**DAGTask Creation**
+        Encapsulates entire DAG`"]
+        DAGExecution["`**DAGTask.run()**
+        Triggers DAGScheduler`"]
+        StageBuilder2["`**StageBuilder.buildStageGraph()**
+        Creates stage dependencies`"]
+        DAGScheduler["`**DAGScheduler.execute()**
+        Multi-stage coordination`"]
+        ShuffleManager["`**ShuffleManager**
+        Data redistribution`"]
+    end
+    
+    Results["`**Results Combined**
+    Final output`"]
     
     %% Flow connections
     User --> DC1
@@ -158,36 +222,51 @@ flowchart TD
     DC2 --> PlanTree
     PlanTree --> Trigger
     
-    Trigger --> Executor
-    Executor --> StageBuilder
-    StageBuilder --> Stages
-    Stages --> Tasks
-    Tasks --> Task1
-    Tasks --> Task2
-    Task1 --> Results
-    Task2 --> Results
+    Trigger --> Decision
+    Decision -->|"No (Narrow Only)"| Executor1
+    Decision -->|"Yes (Contains Shuffle)"| Executor2
+    
+    %% Single-stage flow
+    Executor1 --> StageBuilder1
+    StageBuilder1 --> StageTasks
+    StageTasks --> StageTask1
+    StageTasks --> StageTask2
+    StageTask1 --> Results
+    StageTask2 --> Results
+    
+    %% Multi-stage flow
+    Executor2 --> DAGTaskCreate
+    DAGTaskCreate --> DAGExecution
+    DAGExecution --> StageBuilder2
+    StageBuilder2 --> DAGScheduler
+    DAGScheduler --> ShuffleManager
+    ShuffleManager --> Results
     
     %% Styling
     classDef lazy fill:#e1f5fe,stroke:#01579b,stroke-width:2px
     classDef execution fill:#fff3e0,stroke:#e65100,stroke-width:2px
     classDef trigger fill:#f3e5f5,stroke:#4a148c,stroke-width:3px
     classDef parallel fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    classDef decision fill:#ffebee,stroke:#c62828,stroke-width:3px
     
     class DC1,DC2,PlanTree lazy
-    class Executor,StageBuilder,Stages,Tasks,Results execution
+    class Executor1,StageBuilder1,StageTasks,Executor2,DAGTaskCreate,DAGExecution,StageBuilder2,DAGScheduler,ShuffleManager execution
     class Trigger trigger
-    class Task1,Task2 parallel
+    class StageTask1,StageTask2 parallel
+    class Decision decision
 ```
 
 ## Stage Boundaries
 
 Stages group **narrow transformations** (operations that don't require shuffling data) together for efficiency. Stage boundaries occur at:
 
-### Wide Transformations
-Operations that require data shuffling across partitions (not yet implemented as transformations):
-- `groupByKey` / `reduceByKey` - Currently implemented as actions
-- `sortBy` / `orderBy` - Future implementation
-- `join` operations - Future implementation
+### Wide Transformations **FULLY IMPLEMENTED**
+Operations that require data shuffling across partitions:
+- **`groupByKey`** - Groups values by key: `(K, V) → (K, Iterable[V])`
+- **`reduceByKey`** - Reduces values by key: `(K, V) → (K, V)` 
+- **`sortBy`** - Sorts elements by key function: `A → Seq[A]`
+- **`join`** - Inner joins two collections: `(K, V), (K, W) → (K, (V, W))`
+- **`cogroup`** - Co-groups collections: `(K, V), (K, W) → (K, (Iterable[V], Iterable[W]))`
 
 ### Union Operations
 ```scala
@@ -202,11 +281,27 @@ val union = left.union(right)       // Creates separate stages
 2. **Memory**: Intermediate results don't need to be materialized between operations
 3. **Parallelism**: Each stage can run independently across partitions
 4. **Optimization**: Future optimizations can operate at the stage level
+5. **Shuffle Coordination**: Multi-stage execution handles complex data dependencies
 
 ```scala
-// Before stages: 3 separate passes over data
-data.map(f1).map(f2).filter(p)
+// Narrow transformations: 1 pass executing all operations
+data.map(f1).map(f2).filter(p) // → Single StageTask
 
-// With stages: 1 pass executing all operations
-// Stage.ChainedStage(map(f1), ChainedStage(map(f2), filter(p)))
+// Wide transformations: Multi-stage coordination  
+data.map(f1).groupByKey.map(f2) // → DAGTask → Multi-stage execution
 ```
+
+## Supported Operations
+
+### Narrow Transformations (Single-Stage)
+- `map`, `filter`, `flatMap`, `distinct`
+- `keys`, `values`, `mapValues`, `filterKeys`, `filterValues`, `flatMapValues`
+- `union`
+
+### Wide Transformations (Multi-Stage)  
+- `groupByKey`, `reduceByKey`, `sortBy`
+- `join`, `cogroup`
+
+### Actions
+- `collect`, `count`, `take`, `first`  
+- `reduce`, `fold`, `aggregate`, `forEach`
