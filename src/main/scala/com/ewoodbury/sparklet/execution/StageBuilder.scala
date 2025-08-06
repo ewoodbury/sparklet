@@ -271,21 +271,28 @@ object StageBuilder:
         dependencies.getOrElseUpdate(joinStageId, mutable.Set.empty) += rightStageId
         joinStageId
 
-      case Plan.CoGroupOp(leftPlan, rightPlan) =>
-        val leftStageId = buildStagesRecursive(leftPlan, stageMap, dependencies)
-        val rightStageId = buildStagesRecursive(rightPlan, stageMap, dependencies)
+      case cogroupOp: Plan.CoGroupOp[_, _, _] =>
+        val leftStageId = buildStagesRecursive(cogroupOp.left, stageMap, dependencies)
+        val rightStageId = buildStagesRecursive(cogroupOp.right, stageMap, dependencies)
 
-        // CoGroup requires both inputs to be shuffled - simplified implementation
+        // CoGroup requires both inputs to be shuffled - create shuffle stage that reads from both
         val cogroupStageId = getNextStageId()
-        val cogroupStage = Stage.SingleOpStage[Any, Any](identity) // Placeholder
+        val cogroupStage = Stage.SingleOpStage[Any, Any](identity) // Placeholder for actual cogroup logic
+
+        // The cogroup stage reads from shuffle outputs of both left and right stages
+        val numPartitions = 4 // TODO: Get this from configuration
+        val shuffleInputSources = Seq(
+          ShuffleInput(leftStageId, numPartitions),   // Read from left stage shuffle output
+          ShuffleInput(rightStageId, numPartitions)   // Read from right stage shuffle output
+        )
 
         stageMap(cogroupStageId) = StageInfo(
           id = cogroupStageId,
           stage = cogroupStage,
-          inputSources = Seq.empty[InputSource],
+          inputSources = shuffleInputSources,
           isShuffleStage = true,
-          shuffleId = None,
-          shuffleOperation = None,
+          shuffleId = Some(cogroupStageId),  // Use cogroup stage ID as shuffle ID
+          shuffleOperation = Some(cogroupOp), // Store the cogroup operation for execution
         )
 
         dependencies.getOrElseUpdate(cogroupStageId, mutable.Set.empty) += leftStageId

@@ -37,8 +37,6 @@ class TestExecutorCreateTasks extends AnyFlatSpec with Matchers with BeforeAndAf
     
     // When: We create tasks from the plan
     val tasks = Executor.createTasks(mapPlan)
-
-    println(s"tasks: $tasks")
     
     // Then: We should get one StageTask per input partition
     tasks should have length 1
@@ -59,8 +57,6 @@ class TestExecutorCreateTasks extends AnyFlatSpec with Matchers with BeforeAndAf
     
     // When: We create tasks from the plan
     val tasks = Executor.createTasks(filterPlan)
-
-    println(s"tasks: $tasks")
     
     // Then: We should get one StageTask per input partition
     tasks should have length 1
@@ -83,8 +79,6 @@ class TestExecutorCreateTasks extends AnyFlatSpec with Matchers with BeforeAndAf
     // When: We create tasks from the plan
     val tasks = Executor.createTasks(filterPlan)
 
-    println(s"tasks: $tasks")
-    
     // Then: We should get one StageTask per input partition that chains both operations
     tasks should have length 1
     tasks.headOption shouldBe a[Some[Task.StageTask[_, _]]]
@@ -126,8 +120,6 @@ class TestExecutorCreateTasks extends AnyFlatSpec with Matchers with BeforeAndAf
     // When: We create tasks from the plan
     val tasks = Executor.createTasks(groupByKeyPlan)
 
-    println(s"tasks: $tasks")
-
     // Then: We should get one DAGTask for shuffle operations
     tasks should have length 1
     tasks.headOption.get shouldBe a[Task.DAGTask[_]]
@@ -152,8 +144,6 @@ class TestExecutorCreateTasks extends AnyFlatSpec with Matchers with BeforeAndAf
 
     // When: We create tasks from the plan
     val tasks = Executor.createTasks(reduceByKeyPlan)
-
-    println(s"reduceByKey tasks: $tasks")
 
     // Then: We should get one DAGTask for shuffle operations
     tasks should have length 1
@@ -205,8 +195,6 @@ class TestExecutorCreateTasks extends AnyFlatSpec with Matchers with BeforeAndAf
     // When: We create tasks from the plan
     val tasks = Executor.createTasks(joinPlan)
 
-    println(s"join tasks: $tasks")
-
     // Then: We should get one DAGTask for shuffle operations
     tasks should have length 1
     tasks.headOption.get shouldBe a[Task.DAGTask[_]]
@@ -221,5 +209,29 @@ class TestExecutorCreateTasks extends AnyFlatSpec with Matchers with BeforeAndAf
     val resultMap = resultData.toMap
     resultMap("a") shouldBe (1, 3)
     resultMap("b") shouldBe (2, 4)
+  }
+
+  it should "support CogroupOp shuffle operations" in {
+    // Given: A Cogroup operation plan (shuffle operation)
+    val leftPlan = Plan.Source(Seq(Partition(Seq(("a", 1), ("b", 2)))))
+    val rightPlan = Plan.Source(Seq(Partition(Seq(("a", 3), ("b", 4)))))
+    val cogroupPlan = Plan.CoGroupOp(leftPlan, rightPlan)
+
+    // When: We create tasks from the plan
+    val tasks = Executor.createTasks(cogroupPlan)
+
+    // Then: We should get one DAGTask for shuffle operations
+    tasks should have length 1
+    tasks.headOption.get shouldBe a[Task.DAGTask[_]]
+    
+    // Execute the task and verify it produces correct cogroup results
+    val result = tasks.headOption.get.run()
+    
+    // Expected: [("a", (Seq(1), Seq(3))), ("b", (Seq(2), Seq(4)))]
+    val resultData = result.data.asInstanceOf[Seq[(String, (Seq[Int], Seq[Int]))]]
+
+    val resultMap = resultData.toMap
+    resultMap("a") shouldBe (Seq(1), Seq(3))
+    resultMap("b") shouldBe (Seq(2), Seq(4))
   }
 }
