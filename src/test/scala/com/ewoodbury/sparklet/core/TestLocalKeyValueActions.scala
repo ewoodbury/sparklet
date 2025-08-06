@@ -44,8 +44,7 @@ class TestLocalKeyValueActions extends AnyFlatSpec with Matchers {
     result shouldEqual expected
   }
 
-  // TODO: Fix this failure, getting error java.lang.ClassCastException: class java.lang.Integer cannot be cast to class scala.collection.Iterable
-  ignore should "execute a simple groupByKey with sum" in {
+  it should "execute a simple groupByKey with sum" in {
     ShuffleManager.clear() // Clean state for test isolation
     val source = toDistCollection(Seq(1 -> 1, 1 -> 1, 2 -> 2, 2 -> 2))
     val result = source.groupByKey[Int, Int].mapValues((values: Iterable[Int]) => values.sum).collect().toMap

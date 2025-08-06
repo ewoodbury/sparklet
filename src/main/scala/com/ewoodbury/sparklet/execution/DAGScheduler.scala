@@ -30,15 +30,15 @@ object DAGScheduler:
     for (stageId <- executionOrder) {
       println(s"DAGScheduler: Executing stage $stageId")
       val stageInfo = stageGraph.stages(stageId)
-
       val inputPartitions = getInputPartitionsForStage(stageInfo, stageResults, stageToShuffleId)
       val results = executeStage(stageInfo, inputPartitions, stageToShuffleId)
-
+      
       stageResults(stageId) = results
 
       val dependentStages = stageGraph.dependencies.filter(_._2.contains(stageId)).keys
       val needsShuffleOutput =
-        dependentStages.exists(depStageId => stageGraph.stages(depStageId).isShuffleStage)
+        dependentStages.exists(depStageId => stageGraph.stages(depStageId).isShuffleStage) ||
+        (stageInfo.isShuffleStage && dependentStages.nonEmpty)
 
       if (needsShuffleOutput) {
         // Check if the dependent stage is a sortBy operation
@@ -141,7 +141,7 @@ object DAGScheduler:
             // Regular shuffle operations - read from the most recent shuffle
             val sourceStages = stageToShuffleId.keys.filter(_ < stageInfo.id)
             val actualShuffleId =
-              sourceStages.headOption.flatMap(stageToShuffleId.get).getOrElse(plannedShuffleId)
+              sourceStages.maxOption.flatMap(stageToShuffleId.get).getOrElse(plannedShuffleId)
 
             // Shuffle data is always key-value, read as (Any, Any) since types are erased.
             (0 until numPartitions).map { partitionId =>
@@ -231,7 +231,7 @@ object DAGScheduler:
         val groupedData = allData.groupBy(_._1).map { case (key, pairs) =>
           (key, pairs.map(_._2))
         }
-        Seq(Partition(groupedData.toSeq))
+        Seq(Partition(groupedData.toSeq)).asInstanceOf[Seq[Partition[Any]]]
 
       case Some(reduceByKey: Plan.ReduceByKeyOp[_, _]) =>
         val allData = inputPartitions.flatMap(_.data)
