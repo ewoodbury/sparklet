@@ -243,21 +243,28 @@ object StageBuilder:
           Some(sortBy),
         )
 
-      case Plan.JoinOp(leftPlan, rightPlan) =>
-        val leftStageId = buildStagesRecursive(leftPlan, stageMap, dependencies)
-        val rightStageId = buildStagesRecursive(rightPlan, stageMap, dependencies)
+      case joinOp: Plan.JoinOp[_, _, _] =>
+        val leftStageId = buildStagesRecursive(joinOp.left, stageMap, dependencies)
+        val rightStageId = buildStagesRecursive(joinOp.right, stageMap, dependencies)
 
-        // Join requires both inputs to be shuffled - simplified implementation
+        // Join requires both inputs to be shuffled - create shuffle stage that reads from both
         val joinStageId = getNextStageId()
-        val joinStage = Stage.SingleOpStage[Any, Any](identity) // Placeholder
+        val joinStage = Stage.SingleOpStage[Any, Any](identity) // Placeholder for actual join logic
+
+        // The join stage reads from shuffle outputs of both left and right stages
+        val numPartitions = 4 // TODO: Get this from configuration
+        val shuffleInputSources = Seq(
+          ShuffleInput(leftStageId, numPartitions),   // Read from left stage shuffle output
+          ShuffleInput(rightStageId, numPartitions)   // Read from right stage shuffle output
+        )
 
         stageMap(joinStageId) = StageInfo(
           id = joinStageId,
           stage = joinStage,
-          inputSources = Seq.empty[InputSource],
+          inputSources = shuffleInputSources,
           isShuffleStage = true,
-          shuffleId = None,
-          shuffleOperation = None,
+          shuffleId = Some(joinStageId),  // Use join stage ID as shuffle ID
+          shuffleOperation = Some(joinOp), // Store the join operation for execution
         )
 
         dependencies.getOrElseUpdate(joinStageId, mutable.Set.empty) += leftStageId

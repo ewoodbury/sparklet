@@ -195,5 +195,31 @@ class TestExecutorCreateTasks extends AnyFlatSpec with Matchers with BeforeAndAf
     // Verify the elements are in descending order by their integer values
     resultData shouldBe Seq(("d", 4), ("c", 3), ("b", 2), ("a", 1))
   }
-  
+
+  it should "support JoinOp shuffle operations" in {
+    // Given: A Join operation plan (shuffle operation)
+    val leftPlan = Plan.Source(Seq(Partition(Seq(("a", 1), ("b", 2)))))
+    val rightPlan = Plan.Source(Seq(Partition(Seq(("a", 3), ("b", 4)))))
+    val joinPlan = Plan.JoinOp(leftPlan, rightPlan)
+
+    // When: We create tasks from the plan
+    val tasks = Executor.createTasks(joinPlan)
+
+    println(s"join tasks: $tasks")
+
+    // Then: We should get one DAGTask for shuffle operations
+    tasks should have length 1
+    tasks.headOption.get shouldBe a[Task.DAGTask[_]]
+    
+    // Execute the task and verify it produces correct join results
+    val result = tasks.headOption.get.run()
+    
+    // Expected: [("a", (1, 3)), ("b", (2, 4))] - join format is (K, (V, W))
+    val resultData = result.data.asInstanceOf[Seq[(String, (Int, Int))]]
+    resultData should have length 2
+    
+    val resultMap = resultData.toMap
+    resultMap("a") shouldBe (1, 3)
+    resultMap("b") shouldBe (2, 4)
+  }
 }

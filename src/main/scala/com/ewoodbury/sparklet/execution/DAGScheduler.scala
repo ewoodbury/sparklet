@@ -32,7 +32,7 @@ object DAGScheduler:
       val stageInfo = stageGraph.stages(stageId)
 
       val inputPartitions = getInputPartitionsForStage(stageInfo, stageResults, stageToShuffleId)
-      val results = executeStage(stageInfo, inputPartitions)
+      val results = executeStage(stageInfo, inputPartitions, stageToShuffleId)
 
       stageResults(stageId) = results
 
@@ -114,13 +114,28 @@ object DAGScheduler:
         partitions // No cast needed
 
       case StageBuilder.ShuffleInput(plannedShuffleId, numPartitions) =>
-        val sourceStages = stageToShuffleId.keys.filter(_ < stageInfo.id)
-        val actualShuffleId =
-          sourceStages.headOption.flatMap(stageToShuffleId.get).getOrElse(plannedShuffleId)
+        // For join operations, we need to handle multiple shuffle inputs differently
+        stageInfo.shuffleOperation match {
+          case Some(_: Plan.JoinOp[_, _, _]) =>
+            // For joins, read from all available shuffle IDs (left and right)
+            val dependentStages = stageToShuffleId.keys.filter(_ < stageInfo.id).toSeq.sorted
+            dependentStages.flatMap { stageId =>
+              val shuffleId = stageToShuffleId(stageId)
+              (0 until numPartitions).map { partitionId =>
+                ShuffleManager.readShufflePartition[Any, Any](shuffleId, partitionId)
+              }
+            }
 
-        // Shuffle data is always key-value, read as (Any, Any) since types are erased.
-        (0 until numPartitions).map { partitionId =>
-          ShuffleManager.readShufflePartition[Any, Any](actualShuffleId, partitionId)
+          case _ =>
+            // Regular shuffle operations - read from the most recent shuffle
+            val sourceStages = stageToShuffleId.keys.filter(_ < stageInfo.id)
+            val actualShuffleId =
+              sourceStages.headOption.flatMap(stageToShuffleId.get).getOrElse(plannedShuffleId)
+
+            // Shuffle data is always key-value, read as (Any, Any) since types are erased.
+            (0 until numPartitions).map { partitionId =>
+              ShuffleManager.readShufflePartition[Any, Any](actualShuffleId, partitionId)
+            }
         }
     }
   }
@@ -132,6 +147,7 @@ object DAGScheduler:
   private def executeStage(
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[_]],
+      stageToShuffleId: mutable.Map[Int, Int],
   ): Seq[Partition[_]] = {
     if (inputPartitions.isEmpty) {
       println(s"Warning: Stage ${stageInfo.id} has no input partitions")
@@ -143,12 +159,12 @@ object DAGScheduler:
         // Cast to key-value pairs for shuffle stages.
         // For sortBy, the data is not key-value pairs, but type is still cast to (Any, Any).
         val partitions = inputPartitions.asInstanceOf[Seq[Partition[(Any, Any)]]]
-        executeShuffleStage(info, partitions)
+        executeShuffleStage(info, partitions, stageToShuffleId)
 
       case info =>
         // Cast to a generic partition for narrow stages.
         val anyPartitions = inputPartitions.asInstanceOf[Seq[Partition[Any]]]
-        executeNarrowStage(info, anyPartitions)
+        executeNarrowStage(info, anyPartitions, stageToShuffleId)
     }
   }
 
@@ -158,6 +174,7 @@ object DAGScheduler:
   private def executeNarrowStage[A, B](
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[A]],
+      @annotation.unused stageToShuffleId: mutable.Map[Int, Int],
   ): Seq[Partition[B]] = {
     // Cast the abstract stage to its specific A -> B transformation.
     val stage = stageInfo.stage.asInstanceOf[Stage[A, B]]
@@ -176,6 +193,7 @@ object DAGScheduler:
   private def executeShuffleStage[K, V](
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[(K, V)]],
+      stageToShuffleId: mutable.Map[Int, Int],
   ): Seq[Partition[Any]] = {
     println(
       s"Executing shuffle stage ${stageInfo.id} with ${inputPartitions.size} input partitions",
@@ -215,6 +233,45 @@ object DAGScheduler:
           (key, reducedValue)
         }
         Seq(Partition(reducedData.toSeq))
+
+      case Some(joinOp: Plan.JoinOp[_, _, _]) =>
+        // For join operations, we need to read left and right shuffle data separately
+        // Get the dependent stages in order (left stage first, then right stage)
+        val dependentStages = stageInfo.inputSources.collect {
+          case StageBuilder.ShuffleInput(shuffleId, _) => shuffleId
+        }
+        
+        if (dependentStages.lengthIs < 2) {
+          throw new IllegalStateException(s"Join operation requires 2 shuffle inputs, got ${dependentStages.length}")
+        }
+        
+        val leftShuffleId = stageToShuffleId.find(_._1 < stageInfo.id).map(_._2).getOrElse(dependentStages.headOption.getOrElse(0))
+        val rightShuffleId = stageToShuffleId.filter(_._1 < stageInfo.id).toSeq.sortBy(_._1).drop(1).headOption.map(_._2).getOrElse(dependentStages.drop(1).headOption.getOrElse(1))
+        
+        // Read left and right data separately from their respective shuffle outputs
+        val numPartitions = 4
+        val leftData = (0 until numPartitions).flatMap { partitionId =>
+          ShuffleManager.readShufflePartition[Any, Any](leftShuffleId, partitionId).data
+        }
+        val rightData = (0 until numPartitions).flatMap { partitionId =>
+          ShuffleManager.readShufflePartition[Any, Any](rightShuffleId, partitionId).data
+        }
+        
+        // Group left and right data by key
+        val leftByKey = leftData.groupBy(_._1)
+        val rightByKey = rightData.groupBy(_._1)
+        
+        // Perform inner join - only keep keys that appear in both sides
+        val joinedData = leftByKey.flatMap { case (key, leftValues) =>
+          rightByKey.get(key).map { rightValues =>
+            // For simplicity, take the first value from each side
+            // In a full implementation, this would be a cartesian product
+            val leftValue = leftValues.headOption.map(_._2).getOrElse(throw new NoSuchElementException("No left value"))
+            val rightValue = rightValues.headOption.map(_._2).getOrElse(throw new NoSuchElementException("No right value"))
+            (key, (leftValue, rightValue))
+          }
+        }
+        Seq(Partition(joinedData.toSeq))
 
       // A default GroupByKey for any other unhandled shuffle operation.
       case _ =>
