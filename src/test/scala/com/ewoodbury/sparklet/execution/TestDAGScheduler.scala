@@ -95,8 +95,7 @@ class TestDAGScheduler extends AnyFlatSpec with Matchers {
     }
   }
 
-  // TODO: Implement this
-  ignore should "handle mixed narrow and wide transformations" in {
+  it should "handle mixed narrow and wide transformations" in {
     val source = toDistCollection(Seq(1 -> "a", 2 -> "b", 1 -> "c"))
     
     // Chain narrow transformations before and after shuffle
