@@ -36,7 +36,7 @@ class TestStageBuilder extends AnyFlatSpec with Matchers {
     val stageInfo = stageGraph.stages(0)
     stageInfo.id shouldBe 0
     stageInfo.isShuffleStage shouldBe false
-    stageInfo.shuffleId shouldBe None
+    stageInfo.shuffleId shouldBe Option.empty[Int]
     stageInfo.inputSources should have length 1
     stageInfo.inputSources.head shouldBe a[StageBuilder.SourceInput]
   }
@@ -58,7 +58,7 @@ class TestStageBuilder extends AnyFlatSpec with Matchers {
     val sourceStage = stageGraph.stages(0)
     sourceStage.id shouldBe 0
     sourceStage.isShuffleStage shouldBe false
-    sourceStage.shuffleId shouldBe None
+    sourceStage.shuffleId shouldBe Option.empty[Int]
     sourceStage.inputSources should have length 1
     sourceStage.inputSources.head shouldBe a[StageBuilder.SourceInput]
     
