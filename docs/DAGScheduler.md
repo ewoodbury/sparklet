@@ -30,6 +30,31 @@ graph TD
     end
 ```
 
+## Configuration
+
+- The scheduler and stage planner use centralized configuration via `SparkletConf`:
+  - `defaultShufflePartitions`: number of partitions for shuffle outputs
+  - `defaultParallelism`: engine-wide default for deriving parallelism
+  - `threadPoolSize`: size of the local `TaskScheduler` thread pool
+
+Example override at application startup:
+
+```scala
+import com.ewoodbury.sparklet.core.SparkletConf
+
+SparkletConf.set(
+  SparkletConf(
+    defaultShufflePartitions = 4,
+    defaultParallelism = 4,
+    threadPoolSize = 4,
+  )
+)
+```
+
+- `StageBuilder` uses `defaultShufflePartitions` when planning shuffle input/output sizes.
+- `DAGScheduler` reads and writes shuffle data using the configured partition count.
+- `TaskScheduler` sizes its thread pool from `threadPoolSize`.
+
 ## Task Integration Architecture
 
 ```mermaid

@@ -6,10 +6,11 @@ import scala.concurrent.duration._
 import scala.concurrent.{Await, ExecutionContext, Future}
 
 import com.ewoodbury.sparklet.core.Partition
+import com.ewoodbury.sparklet.core.SparkletConf
 
 object TaskScheduler:
-  // Thread pool with 4 "executors" (cores)
-  private val executorService = Executors.newFixedThreadPool(4)
+  // Thread pool sized from configuration
+  private val executorService = Executors.newFixedThreadPool(SparkletConf.get.threadPoolSize)
   private implicit val executionContext: ExecutionContext =
     ExecutionContext.fromExecutorService(executorService)
 

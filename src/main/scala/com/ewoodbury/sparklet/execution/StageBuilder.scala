@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import scala.collection.mutable
 
 import com.ewoodbury.sparklet.core.{Partition, Plan}
+import com.ewoodbury.sparklet.core.SparkletConf
 
 @SuppressWarnings(
   Array(
@@ -252,7 +253,7 @@ object StageBuilder:
         val joinStage = Stage.SingleOpStage[Any, Any](identity) // Placeholder for actual join logic
 
         // The join stage reads from shuffle outputs of both left and right stages
-        val numPartitions = 4 // TODO: Get this from configuration
+        val numPartitions = SparkletConf.get.defaultShufflePartitions
         val shuffleInputSources = Seq(
           ShuffleInput(leftStageId, numPartitions),   // Read from left stage shuffle output
           ShuffleInput(rightStageId, numPartitions)   // Read from right stage shuffle output
@@ -280,7 +281,7 @@ object StageBuilder:
         val cogroupStage = Stage.SingleOpStage[Any, Any](identity) // Placeholder for actual cogroup logic
 
         // The cogroup stage reads from shuffle outputs of both left and right stages
-        val numPartitions = 4 // TODO: Get this from configuration
+        val numPartitions = SparkletConf.get.defaultShufflePartitions
         val shuffleInputSources = Seq(
           ShuffleInput(leftStageId, numPartitions),   // Read from left stage shuffle output
           ShuffleInput(rightStageId, numPartitions)   // Read from right stage shuffle output
@@ -320,7 +321,7 @@ object StageBuilder:
       // Set up input sources to read from the shuffle output of the source stage
       val shuffleInputSources = sourceStage.shuffleId match {
         case Some(shuffleId) =>
-          Seq(ShuffleInput(shuffleId, 4)) // Using 4 partitions for now
+          Seq(ShuffleInput(shuffleId, SparkletConf.get.defaultShufflePartitions))
         case None =>
           throw new IllegalStateException(s"Shuffle stage ${sourceStageId} has no shuffle ID")
       }
@@ -372,7 +373,7 @@ object StageBuilder:
 
     /* Set up shuffle input source - the shuffle stage reads from the shuffle data produced by the
      * source stage */
-    val numPartitions = 4 // TODO: Get this from the source stage
+    val numPartitions = SparkletConf.get.defaultShufflePartitions
     val shuffleInputSources = Seq(ShuffleInput(shuffleId, numPartitions))
 
     stageMap(shuffleStageId) = StageInfo(

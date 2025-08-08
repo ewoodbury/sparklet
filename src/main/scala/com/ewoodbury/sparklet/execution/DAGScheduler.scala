@@ -3,6 +3,7 @@ package com.ewoodbury.sparklet.execution
 import scala.collection.mutable
 
 import com.ewoodbury.sparklet.core.{Partition, Plan}
+import com.ewoodbury.sparklet.core.SparkletConf
 
 @SuppressWarnings(
   Array(
@@ -247,6 +248,11 @@ object DAGScheduler:
 
       case Some(joinOp: Plan.JoinOp[_, _, _]) =>
         // For join operations, we need to read left and right shuffle data separately
+        // Determine partition count from inputs (fallback to config)
+        val numPartitions: Int =
+          stageInfo.inputSources.collectFirst { case StageBuilder.ShuffleInput(_, n) => n }
+            .getOrElse(SparkletConf.get.defaultShufflePartitions)
+
         // Get the dependent stages in order (left stage first, then right stage)
         val dependentStages = stageInfo.inputSources.collect {
           case StageBuilder.ShuffleInput(shuffleId, _) => shuffleId
@@ -260,7 +266,6 @@ object DAGScheduler:
         val rightShuffleId = stageToShuffleId.filter(_._1 < stageInfo.id).toSeq.sortBy(_._1).drop(1).headOption.map(_._2).getOrElse(dependentStages.drop(1).headOption.getOrElse(1))
         
         // Read left and right data separately from their respective shuffle outputs
-        val numPartitions = 4
         val leftData = (0 until numPartitions).flatMap { partitionId =>
           ShuffleManager.readShufflePartition[Any, Any](leftShuffleId, partitionId).data
         }
@@ -286,6 +291,11 @@ object DAGScheduler:
 
       case Some(cogroupOp: Plan.CoGroupOp[_, _, _]) =>
         // For cogroup operations, we need to read left and right shuffle data separately
+        // Determine partition count from inputs (fallback to config)
+        val numPartitions: Int =
+          stageInfo.inputSources.collectFirst { case StageBuilder.ShuffleInput(_, n) => n }
+            .getOrElse(SparkletConf.get.defaultShufflePartitions)
+        
         // Get the dependent stages in order (left stage first, then right stage)
         val dependentStages = stageInfo.inputSources.collect {
           case StageBuilder.ShuffleInput(shuffleId, _) => shuffleId
@@ -299,7 +309,6 @@ object DAGScheduler:
         val rightShuffleId = stageToShuffleId.filter(_._1 < stageInfo.id).toSeq.sortBy(_._1).drop(1).headOption.map(_._2).getOrElse(dependentStages.drop(1).headOption.getOrElse(1))
         
         // Read left and right data separately from their respective shuffle outputs
-        val numPartitions = 4
         val leftData = (0 until numPartitions).flatMap { partitionId =>
           ShuffleManager.readShufflePartition[Any, Any](leftShuffleId, partitionId).data
         }
@@ -341,7 +350,10 @@ object DAGScheduler:
   ): Int = {
     // Shuffle data is always key-value data.
     val keyValueResults = results.asInstanceOf[Seq[Partition[(Any, Any)]]]
-    val shuffleData = ShuffleManager.partitionByKey[Any, Any](keyValueResults, results.size)
+    val shuffleData = ShuffleManager.partitionByKey[Any, Any](
+      data=keyValueResults,
+      numPartitions=SparkletConf.get.defaultShufflePartitions,
+    )
     val actualShuffleId = ShuffleManager.writeShuffleData[Any, Any](shuffleData)
 
     println(s"Stored shuffle data for stage ${stageInfo.id} with shuffle ID $actualShuffleId")
