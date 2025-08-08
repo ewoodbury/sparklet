@@ -9,7 +9,7 @@ A data processing engine inspired by Spark, in pure functional Scala.
 - [x] Category II: Actions (collect, count, take, first, reduce, fold, aggregate, forEach)
 - [x] Category III: Key-value pairs (mapValues, keys, values)
 - [x] Category IV: Wide Transformations (groupBy, reduceByKey, sortBy/orderBy)
-- [ ] Category V: Joins
+- [x] Category V: Joins
 
 
 ## Task Processing Logic
@@ -20,9 +20,9 @@ A data processing engine inspired by Spark, in pure functional Scala.
   - A scheduler assigns tasks to an executor to process
 - [x] Stages
   - Collections of tasks that can be run in parallel without shuffles (e.g. a chain of narrow transformations)
-- [ ] DAG Scheduler
+- [x] DAG Scheduler
   - Takes a plan, finds shuffle boundaries, and builds a Stage dependency graph
-- [ ] Shuffle Management
+- [x] Shuffle Management
   - Scheduler can automatically collect results, shuffle into new partitions, then kick off the next stage 
 
 
@@ -30,7 +30,7 @@ A data processing engine inspired by Spark, in pure functional Scala.
 
 - [x] Local Mode
 - [x] Partitions Support
-- [ '] Shuffles
+- [x] Shuffles
 - [ ] Simulated Cluster Mode using threads
 - [ ] Basic Cluster Mode
 
