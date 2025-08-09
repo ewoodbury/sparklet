@@ -10,9 +10,9 @@
 - [x] Stronger typing for IDs
   - [x] Newtypes: `StageId`, `ShuffleId`, `PartitionId`
   - [x] Refactor maps and method signatures to use them
-- [ ] Thread-safe `ShuffleManager`
-  - [ ] Use concurrent map or cats-effect `Ref/Mutex`
-  - [ ] Re-enable `Test / parallelExecution := true` when safe
+- [x] Thread-safe `ShuffleManager`
+  - [x] Use concurrent map with thread locks
+  - [x] Re-enable `Test / parallelExecution := true` when safe
 - [ ] Union correctness
   - [ ] Implement union as true concatenation of inputs (not “pick left”)
   - [ ] Optionally rebalance partitions per config
