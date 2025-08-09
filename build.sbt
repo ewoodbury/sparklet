@@ -36,7 +36,7 @@ lazy val root = (project in file("."))
     ),
 
     // Test configuration to avoid race conditions in ShuffleManager
-    Test / parallelExecution := false,
+    Test / parallelExecution := true,
 
     // Wartremover configuration
     wartremoverWarnings ++= Warts.allBut(

@@ -1,7 +1,5 @@
 package com.ewoodbury.sparklet.execution
 
-import java.util.concurrent.atomic.AtomicInteger
-
 import scala.collection.mutable
 
 import com.ewoodbury.sparklet.core.{Partition, Plan, ShuffleId, SparkletConf, StageId}
@@ -48,19 +46,23 @@ object StageBuilder:
       finalStageId: StageId,
   )
 
-  private val nextStageId = new AtomicInteger(0)
-  private def getNextStageId(): StageId =
-    StageId(nextStageId.getAndIncrement())
+  // Per-build context to generate monotonically increasing stage IDs without global/shared state
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private final case class BuildContext(var nextId: Int):
+    def freshId(): StageId =
+      val id = StageId(nextId)
+      nextId = nextId + 1
+      id
 
   /**
    * Builds a complete stage graph from a plan, handling shuffle boundaries.
    */
   def buildStageGraph[A](plan: Plan[A]): StageGraph = {
-    nextStageId.set(0)
+    val ctx = BuildContext(0)
     val stageMap = mutable.Map[StageId, StageInfo]()
     val dependencies = mutable.Map[StageId, mutable.Set[StageId]]()
 
-    val finalStageId = buildStagesRecursive(plan, stageMap, dependencies)
+    val finalStageId = buildStagesRecursive(ctx, plan, stageMap, dependencies)
 
     StageGraph(
       stageMap.toMap,
@@ -75,6 +77,7 @@ object StageBuilder:
    * stage ID that produces the final result.
    */
   private def buildStagesRecursive[A](
+      ctx: BuildContext,
       plan: Plan[A],
       stageMap: mutable.Map[StageId, StageInfo],
       dependencies: mutable.Map[StageId, mutable.Set[StageId]],
@@ -82,7 +85,7 @@ object StageBuilder:
     plan match {
       // Base case: data source
       case source: Plan.Source[_] =>
-        val stageId = getNextStageId()
+        val stageId = ctx.freshId()
         val stage = Stage.SingleOpStage[Any, Any](identity)
         stageMap(stageId) = StageInfo(
           id = stageId,
@@ -96,8 +99,9 @@ object StageBuilder:
 
       // Narrow transformations - can be chained together
       case Plan.MapOp(sourcePlan, f) =>
-        val sourceStageId = buildStagesRecursive(sourcePlan, stageMap, dependencies)
+        val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
         extendStageOrCreateNew(
+          ctx,
           sourceStageId,
           Stage.map(f).asInstanceOf[Stage[Any, Any]],
           stageMap,
@@ -105,8 +109,9 @@ object StageBuilder:
         )
 
       case Plan.FilterOp(sourcePlan, p) =>
-        val sourceStageId = buildStagesRecursive(sourcePlan, stageMap, dependencies)
+        val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
         extendStageOrCreateNew(
+          ctx,
           sourceStageId,
           Stage.filter(p).asInstanceOf[Stage[Any, Any]],
           stageMap,
@@ -114,8 +119,9 @@ object StageBuilder:
         )
 
       case Plan.FlatMapOp(sourcePlan, f) =>
-        val sourceStageId = buildStagesRecursive(sourcePlan, stageMap, dependencies)
+        val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
         extendStageOrCreateNew(
+          ctx,
           sourceStageId,
           Stage.flatMap(f).asInstanceOf[Stage[Any, Any]],
           stageMap,
@@ -123,8 +129,9 @@ object StageBuilder:
         )
 
       case Plan.DistinctOp(sourcePlan) =>
-        val sourceStageId = buildStagesRecursive(sourcePlan, stageMap, dependencies)
+        val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
         extendStageOrCreateNew(
+          ctx,
           sourceStageId,
           Stage.distinct.asInstanceOf[Stage[Any, Any]],
           stageMap,
@@ -132,8 +139,9 @@ object StageBuilder:
         )
 
       case Plan.KeysOp(sourcePlan) =>
-        val sourceStageId = buildStagesRecursive(sourcePlan, stageMap, dependencies)
+        val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
         extendStageOrCreateNew(
+          ctx,
           sourceStageId,
           Stage.keys.asInstanceOf[Stage[Any, Any]],
           stageMap,
@@ -141,8 +149,9 @@ object StageBuilder:
         )
 
       case Plan.ValuesOp(sourcePlan) =>
-        val sourceStageId = buildStagesRecursive(sourcePlan, stageMap, dependencies)
+        val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
         extendStageOrCreateNew(
+          ctx,
           sourceStageId,
           Stage.values.asInstanceOf[Stage[Any, Any]],
           stageMap,
@@ -150,8 +159,9 @@ object StageBuilder:
         )
 
       case Plan.MapValuesOp(sourcePlan, f) =>
-        val sourceStageId = buildStagesRecursive(sourcePlan, stageMap, dependencies)
+        val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
         extendStageOrCreateNew(
+          ctx,
           sourceStageId,
           Stage.mapValues(f).asInstanceOf[Stage[Any, Any]],
           stageMap,
@@ -159,8 +169,9 @@ object StageBuilder:
         )
 
       case Plan.FilterKeysOp(sourcePlan, p) =>
-        val sourceStageId = buildStagesRecursive(sourcePlan, stageMap, dependencies)
+        val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
         extendStageOrCreateNew(
+          ctx,
           sourceStageId,
           Stage.filterKeys(p).asInstanceOf[Stage[Any, Any]],
           stageMap,
@@ -168,8 +179,9 @@ object StageBuilder:
         )
 
       case Plan.FilterValuesOp(sourcePlan, p) =>
-        val sourceStageId = buildStagesRecursive(sourcePlan, stageMap, dependencies)
+        val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
         extendStageOrCreateNew(
+          ctx,
           sourceStageId,
           Stage.filterValues(p).asInstanceOf[Stage[Any, Any]],
           stageMap,
@@ -177,8 +189,9 @@ object StageBuilder:
         )
 
       case Plan.FlatMapValuesOp(sourcePlan, f) =>
-        val sourceStageId = buildStagesRecursive(sourcePlan, stageMap, dependencies)
+        val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
         extendStageOrCreateNew(
+          ctx,
           sourceStageId,
           Stage.flatMapValues(f).asInstanceOf[Stage[Any, Any]],
           stageMap,
@@ -186,11 +199,11 @@ object StageBuilder:
         )
 
       case Plan.UnionOp(left, right) =>
-        val leftStageId = buildStagesRecursive(left, stageMap, dependencies)
-        val rightStageId = buildStagesRecursive(right, stageMap, dependencies)
+        val leftStageId = buildStagesRecursive(ctx, left, stageMap, dependencies)
+        val rightStageId = buildStagesRecursive(ctx, right, stageMap, dependencies)
 
         // Union creates a new stage that reads from both input stages
-        val unionStageId = getNextStageId()
+        val unionStageId = ctx.freshId()
         val unionStage = Stage.SingleOpStage[Any, Any](identity)
 
         // This is a simplification - in a real implementation, union would need special handling
@@ -210,8 +223,9 @@ object StageBuilder:
 
       // --- Wide Transformations (create shuffle boundaries) ---
       case groupByKey: Plan.GroupByKeyOp[_, _] =>
-        val sourceStageId = buildStagesRecursive(groupByKey.source, stageMap, dependencies)
+        val sourceStageId = buildStagesRecursive(ctx, groupByKey.source, stageMap, dependencies)
         createShuffleStage(
+          ctx,
           sourceStageId,
           "groupByKey",
           stageMap,
@@ -221,8 +235,9 @@ object StageBuilder:
         )
 
       case reduceByKey: Plan.ReduceByKeyOp[_, _] =>
-        val sourceStageId = buildStagesRecursive(reduceByKey.source, stageMap, dependencies)
+        val sourceStageId = buildStagesRecursive(ctx, reduceByKey.source, stageMap, dependencies)
         createShuffleStage(
+          ctx,
           sourceStageId,
           "reduceByKey",
           stageMap,
@@ -232,8 +247,9 @@ object StageBuilder:
         )
 
       case sortBy: Plan.SortByOp[_, _] =>
-        val sourceStageId = buildStagesRecursive(sortBy.source, stageMap, dependencies)
+        val sourceStageId = buildStagesRecursive(ctx, sortBy.source, stageMap, dependencies)
         createShuffleStage(
+          ctx,
           sourceStageId,
           "sortBy",
           stageMap,
@@ -243,11 +259,11 @@ object StageBuilder:
         )
 
       case joinOp: Plan.JoinOp[_, _, _] =>
-        val leftStageId = buildStagesRecursive(joinOp.left, stageMap, dependencies)
-        val rightStageId = buildStagesRecursive(joinOp.right, stageMap, dependencies)
+        val leftStageId = buildStagesRecursive(ctx, joinOp.left, stageMap, dependencies)
+        val rightStageId = buildStagesRecursive(ctx, joinOp.right, stageMap, dependencies)
 
         // Join requires both inputs to be shuffled - create shuffle stage that reads from both
-        val joinStageId = getNextStageId()
+        val joinStageId = ctx.freshId()
         val joinStage =
           Stage.SingleOpStage[Any, Any](identity) // Placeholder for actual join logic
 
@@ -278,11 +294,11 @@ object StageBuilder:
         joinStageId
 
       case cogroupOp: Plan.CoGroupOp[_, _, _] =>
-        val leftStageId = buildStagesRecursive(cogroupOp.left, stageMap, dependencies)
-        val rightStageId = buildStagesRecursive(cogroupOp.right, stageMap, dependencies)
+        val leftStageId = buildStagesRecursive(ctx, cogroupOp.left, stageMap, dependencies)
+        val rightStageId = buildStagesRecursive(ctx, cogroupOp.right, stageMap, dependencies)
 
         // CoGroup requires both inputs to be shuffled - create shuffle stage that reads from both
-        val cogroupStageId = getNextStageId()
+        val cogroupStageId = ctx.freshId()
         val cogroupStage =
           Stage.SingleOpStage[Any, Any](identity) // Placeholder for actual cogroup logic
 
@@ -320,6 +336,7 @@ object StageBuilder:
    * existing stage is a shuffle stage.
    */
   private def extendStageOrCreateNew(
+      ctx: BuildContext,
       sourceStageId: StageId,
       newOperation: Stage[Any, Any],
       stageMap: mutable.Map[StageId, StageInfo],
@@ -329,7 +346,7 @@ object StageBuilder:
 
     if (sourceStage.isShuffleStage) {
       // Can't extend a shuffle stage, create a new one
-      val newStageId = getNextStageId()
+      val newStageId = ctx.freshId()
 
       // Set up input sources to read from the shuffle output of the source stage
       val shuffleInputSources = sourceStage.shuffleId match {
@@ -372,6 +389,7 @@ object StageBuilder:
    * TODO: Add actual shuffle logic, which will use the args operationType and operation.
    */
   private def createShuffleStage(
+      ctx: BuildContext,
       sourceStageId: StageId,
       @annotation.unused operationType: String,
       stageMap: mutable.Map[StageId, StageInfo],
@@ -379,7 +397,7 @@ object StageBuilder:
       @annotation.unused operation: Option[Any] = None,
       shuffleOperation: Option[Plan[_]] = None,
   ): StageId = {
-    val shuffleStageId = getNextStageId()
+    val shuffleStageId = ctx.freshId()
     val shuffleId =
       ShuffleId.fromStageId(sourceStageId) // Use source stage ID as shuffle ID for consistency
 
