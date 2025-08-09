@@ -3,7 +3,7 @@ package com.ewoodbury.sparklet.execution
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.ewoodbury.sparklet.core.Partition
+import com.ewoodbury.sparklet.core.{Partition, PartitionId}
 
 class TestShuffleManager extends AnyFlatSpec with Matchers {
 
@@ -46,11 +46,11 @@ class TestShuffleManager extends AnyFlatSpec with Matchers {
     val shuffleId = ShuffleManager.writeShuffleData(shuffleData)
     
     // Should return a valid shuffle ID
-    shuffleId should be >= 0
+    shuffleId.toInt should be >= 0
     
     // Should be able to retrieve the data
-    val retrievedPartition0 = ShuffleManager.readShufflePartition[String, Int](shuffleId, 0)
-    val retrievedPartition1 = ShuffleManager.readShufflePartition[String, Int](shuffleId, 1)
+    val retrievedPartition0 = ShuffleManager.readShufflePartition[String, Int](shuffleId, PartitionId(0))
+    val retrievedPartition1 = ShuffleManager.readShufflePartition[String, Int](shuffleId, PartitionId(1))
     
     // Combined data should match original
     val combinedData = retrievedPartition0.data ++ retrievedPartition1.data
@@ -72,8 +72,8 @@ class TestShuffleManager extends AnyFlatSpec with Matchers {
     shuffleId1 should not equal shuffleId2
     
     // Should be able to retrieve both datasets independently
-    val retrieved1 = ShuffleManager.readShufflePartition[String, Int](shuffleId1, 0)
-    val retrieved2 = ShuffleManager.readShufflePartition[String, Int](shuffleId2, 0)
+    val retrieved1 = ShuffleManager.readShufflePartition[String, Int](shuffleId1, PartitionId(0))
+    val retrieved2 = ShuffleManager.readShufflePartition[String, Int](shuffleId2, PartitionId(0))
     
     retrieved1.data should contain theSameElementsAs Seq("a" -> 1)
     retrieved2.data should contain theSameElementsAs Seq("b" -> 2)
@@ -122,14 +122,14 @@ class TestShuffleManager extends AnyFlatSpec with Matchers {
     
     // Verify data exists
     noException should be thrownBy {
-      ShuffleManager.readShufflePartition[String, Int](shuffleId, 0)
+      ShuffleManager.readShufflePartition[String, Int](shuffleId, PartitionId(0))
     }
     
     // Clear and verify data is gone
     ShuffleManager.clear()
     
     an[IllegalArgumentException] should be thrownBy {
-      ShuffleManager.readShufflePartition[String, Int](shuffleId, 0)
+      ShuffleManager.readShufflePartition[String, Int](shuffleId, PartitionId(0))
     }
   }
 }

@@ -4,7 +4,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 import scala.collection.mutable
 
-import com.ewoodbury.sparklet.core.Partition
+import com.ewoodbury.sparklet.core.{Partition, PartitionId, ShuffleId}
 
 @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
 
@@ -18,12 +18,12 @@ object ShuffleManager:
    * Represents shuffle data organized by partition and key.
    */
   case class ShuffleData[K, V](
-      partitionedData: Map[Int, Seq[(K, V)]],
+      partitionedData: Map[PartitionId, Seq[(K, V)]],
   )
 
   // In-memory storage for shuffle data (simple local implementation)
   // TODO: Look into making more thread-safe, and re-enable parallel test execution
-  private val shuffleStorage = mutable.Map[Int, ShuffleData[_, _]]()
+  private val shuffleStorage = mutable.Map[ShuffleId, ShuffleData[_, _]]()
   private val nextShuffleId = new AtomicInteger(0)
 
   /**
@@ -34,11 +34,11 @@ object ShuffleManager:
       data: Seq[Partition[(K, V)]],
       numPartitions: Int,
   ): ShuffleData[K, V] = {
-    val partitionedData = mutable.Map[Int, mutable.Buffer[(K, V)]]()
+    val partitionedData = mutable.Map[PartitionId, mutable.Buffer[(K, V)]]()
 
     // Initialize empty partitions
     for (i <- 0 until numPartitions) {
-      partitionedData(i) = mutable.Buffer.empty[(K, V)]
+      partitionedData(PartitionId(i)) = mutable.Buffer.empty[(K, V)]
     }
 
     // Distribute data across partitions using hash partitioning
@@ -46,7 +46,7 @@ object ShuffleManager:
       partition <- data
       (key, value) <- partition.data
     } {
-      val partitionId = math.abs(key.hashCode) % numPartitions
+      val partitionId = PartitionId(math.abs(key.hashCode) % numPartitions)
       partitionedData(partitionId) += ((key, value))
     }
 
@@ -56,8 +56,8 @@ object ShuffleManager:
   /**
    * Stores shuffle data and returns a shuffle ID for later retrieval.
    */
-  def writeShuffleData[K, V](shuffleData: ShuffleData[K, V]): Int = {
-    val shuffleId = nextShuffleId.getAndIncrement()
+  def writeShuffleData[K, V](shuffleData: ShuffleData[K, V]): ShuffleId = {
+    val shuffleId = ShuffleId(nextShuffleId.getAndIncrement())
     shuffleStorage(shuffleId) = shuffleData
     shuffleId
   }
@@ -65,24 +65,27 @@ object ShuffleManager:
   /**
    * Reads shuffle data for a specific partition from a shuffle operation.
    */
-  def readShufflePartition[K, V](shuffleId: Int, partitionId: Int): Partition[(K, V)] = {
+  def readShufflePartition[K, V](
+      shuffleId: ShuffleId,
+      partitionId: PartitionId,
+  ): Partition[(K, V)] = {
     shuffleStorage.get(shuffleId) match {
       case Some(shuffleData) =>
         val typedData = shuffleData.asInstanceOf[ShuffleData[K, V]]
         val partitionData = typedData.partitionedData.getOrElse(partitionId, Seq.empty[(K, V)])
         Partition(partitionData)
       case None =>
-        throw new IllegalArgumentException(s"Shuffle ID $shuffleId not found")
+        throw new IllegalArgumentException(s"Shuffle ID ${shuffleId.toInt} not found")
     }
   }
 
   /**
    * Gets the number of partitions for a shuffle operation.
    */
-  def getShufflePartitionCount(shuffleId: Int): Int = {
+  def getShufflePartitionCount(shuffleId: ShuffleId): Int = {
     shuffleStorage.get(shuffleId) match {
       case Some(shuffleData) => shuffleData.partitionedData.size
-      case None => throw new IllegalArgumentException(s"Shuffle ID $shuffleId not found")
+      case None => throw new IllegalArgumentException(s"Shuffle ID ${shuffleId.toInt} not found")
     }
   }
 

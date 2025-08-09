@@ -4,7 +4,7 @@ import scala.collection.mutable
 
 import com.typesafe.scalalogging.StrictLogging
 
-import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf}
+import com.ewoodbury.sparklet.core.*
 
 @SuppressWarnings(
   Array(
@@ -24,13 +24,13 @@ object DAGScheduler extends StrictLogging:
     logger.debug(s"DAGScheduler: built stage graph with ${stageGraph.stages.size} stages")
 
     val executionOrder = topologicalSort(stageGraph.dependencies)
-    logger.debug(s"DAGScheduler: execution order: ${executionOrder.mkString(" -> ")}")
+    logger.debug(s"DAGScheduler: execution order: ${executionOrder.map(_.toInt).mkString(" -> ")}")
 
-    val stageResults = mutable.Map[Int, Seq[Partition[_]]]()
-    val stageToShuffleId = mutable.Map[Int, Int]()
+    val stageResults = mutable.Map[StageId, Seq[Partition[_]]]()
+    val stageToShuffleId = mutable.Map[StageId, ShuffleId]()
 
     for (stageId <- executionOrder) {
-      logger.info(s"DAGScheduler: executing stage $stageId")
+      logger.info(s"DAGScheduler: executing stage ${stageId.toInt}")
       val stageInfo = stageGraph.stages(stageId)
       val inputPartitions = getInputPartitionsForStage(stageInfo, stageResults, stageToShuffleId)
       val results = executeStage(stageInfo, inputPartitions, stageToShuffleId)
@@ -70,24 +70,24 @@ object DAGScheduler extends StrictLogging:
     finalData
   }
 
-  private def topologicalSort(dependencies: Map[Int, Set[Int]]): List[Int] = {
-    val inDegree = mutable.Map[Int, Int]()
+  private def topologicalSort(dependencies: Map[StageId, Set[StageId]]): List[StageId] = {
+    val inDegree = mutable.Map[StageId, Int]()
     val allStages = dependencies.keys.toSet ++ dependencies.values.flatten
 
     for (stage <- allStages) {
       inDegree(stage) = 0
     }
 
-    for ((stage, deps) <- dependencies; dep <- deps) {
+    for ((stage, deps) <- dependencies; _ <- deps) {
       inDegree(stage) = inDegree(stage) + 1
     }
 
-    val queue = mutable.Queue[Int]()
+    val queue = mutable.Queue[StageId]()
     for ((stage, degree) <- inDegree if degree == 0) {
       queue.enqueue(stage)
     }
 
-    val result = mutable.ListBuffer[Int]()
+    val result = mutable.ListBuffer[StageId]()
 
     while (queue.nonEmpty) {
       val current = queue.dequeue()
@@ -108,8 +108,8 @@ object DAGScheduler extends StrictLogging:
    */
   private def getInputPartitionsForStage(
       stageInfo: StageBuilder.StageInfo,
-      @annotation.unused stageResults: mutable.Map[Int, Seq[Partition[_]]],
-      stageToShuffleId: mutable.Map[Int, Int],
+      @annotation.unused stageResults: mutable.Map[StageId, Seq[Partition[_]]],
+      stageToShuffleId: mutable.Map[StageId, ShuffleId],
   ): Seq[Partition[_]] = {
     stageInfo.inputSources.flatMap {
       case StageBuilder.SourceInput(partitions) =>
@@ -120,34 +120,43 @@ object DAGScheduler extends StrictLogging:
         stageInfo.shuffleOperation match {
           case Some(_: Plan.JoinOp[_, _, _]) =>
             // For joins, read from all available shuffle IDs (left and right)
-            val dependentStages = stageToShuffleId.keys.filter(_ < stageInfo.id).toSeq.sorted
+            val dependentStages = stageToShuffleId.keys
+              .filter(sid => sid.toInt < stageInfo.id.toInt)
+              .toSeq
+              .sortBy(_.toInt)
             dependentStages.flatMap { stageId =>
               val shuffleId = stageToShuffleId(stageId)
-              (0 until numPartitions).map { partitionId =>
-                ShuffleManager.readShufflePartition[Any, Any](shuffleId, partitionId)
+              (0 until numPartitions).map { partitionIdx =>
+                ShuffleManager.readShufflePartition[Any, Any](shuffleId, PartitionId(partitionIdx))
               }
             }
 
           // For Cogroup, we also need to handle multiple shuffle inputs
           case Some(_: Plan.CoGroupOp[_, _, _]) =>
             // For cogroups, read from all available shuffle IDs (left and right)
-            val dependentStages = stageToShuffleId.keys.filter(_ < stageInfo.id).toSeq.sorted
+            val dependentStages = stageToShuffleId.keys
+              .filter(sid => sid.toInt < stageInfo.id.toInt)
+              .toSeq
+              .sortBy(_.toInt)
             dependentStages.flatMap { stageId =>
               val shuffleId = stageToShuffleId(stageId)
-              (0 until numPartitions).map { partitionId =>
-                ShuffleManager.readShufflePartition[Any, Any](shuffleId, partitionId)
+              (0 until numPartitions).map { partitionIdx =>
+                ShuffleManager.readShufflePartition[Any, Any](shuffleId, PartitionId(partitionIdx))
               }
             }
 
           case _ =>
             // Regular shuffle operations - read from the most recent shuffle
-            val sourceStages = stageToShuffleId.keys.filter(_ < stageInfo.id)
+            val sourceStages = stageToShuffleId.keys.filter(sid => sid.toInt < stageInfo.id.toInt)
             val actualShuffleId =
               sourceStages.maxOption.flatMap(stageToShuffleId.get).getOrElse(plannedShuffleId)
 
             // Shuffle data is always key-value, read as (Any, Any) since types are erased.
-            (0 until numPartitions).map { partitionId =>
-              ShuffleManager.readShufflePartition[Any, Any](actualShuffleId, partitionId)
+            (0 until numPartitions).map { partitionIdx =>
+              ShuffleManager.readShufflePartition[Any, Any](
+                actualShuffleId,
+                PartitionId(partitionIdx),
+              )
             }
         }
     }
@@ -160,10 +169,10 @@ object DAGScheduler extends StrictLogging:
   private def executeStage(
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[_]],
-      stageToShuffleId: mutable.Map[Int, Int],
+      stageToShuffleId: mutable.Map[StageId, ShuffleId],
   ): Seq[Partition[_]] = {
     if (inputPartitions.isEmpty) {
-      logger.warn(s"Stage ${stageInfo.id} has no input partitions")
+      logger.warn(s"Stage ${stageInfo.id.toInt} has no input partitions")
       return Seq.empty
     }
 
@@ -187,7 +196,7 @@ object DAGScheduler extends StrictLogging:
   private def executeNarrowStage[A, B](
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[A]],
-      @annotation.unused stageToShuffleId: mutable.Map[Int, Int],
+      @annotation.unused stageToShuffleId: mutable.Map[StageId, ShuffleId],
   ): Seq[Partition[B]] = {
     // Cast the abstract stage to its specific A -> B transformation.
     val stage = stageInfo.stage.asInstanceOf[Stage[A, B]]
@@ -206,10 +215,10 @@ object DAGScheduler extends StrictLogging:
   private def executeShuffleStage[K, V](
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[(K, V)]],
-      stageToShuffleId: mutable.Map[Int, Int],
+      stageToShuffleId: mutable.Map[StageId, ShuffleId],
   ): Seq[Partition[Any]] = {
     logger.debug(
-      s"Executing shuffle stage ${stageInfo.id} with ${inputPartitions.size} input partitions",
+      s"Executing shuffle stage ${stageInfo.id.toInt} with ${inputPartitions.size} input partitions",
     )
 
     val resultPartitions: Seq[Partition[Any]] = stageInfo.shuffleOperation match {
@@ -266,25 +275,41 @@ object DAGScheduler extends StrictLogging:
           )
         }
 
-        val leftShuffleId = stageToShuffleId
-          .find(_._1 < stageInfo.id)
-          .map(_._2)
-          .getOrElse(dependentStages.headOption.getOrElse(0))
-        val rightShuffleId = stageToShuffleId
-          .filter(_._1 < stageInfo.id)
-          .toSeq
-          .sortBy(_._1)
-          .drop(1)
-          .headOption
-          .map(_._2)
-          .getOrElse(dependentStages.drop(1).headOption.getOrElse(1))
+        val priorShuffles: Seq[ShuffleId] =
+          stageToShuffleId.toSeq
+            .collect { case (sid, id) if sid.toInt < stageInfo.id.toInt => (sid.toInt, id) }
+            .sortBy(_._1)
+            .map(_._2)
+
+        val leftShuffleId =
+          priorShuffles.headOption
+            .orElse(dependentStages.headOption)
+            .getOrElse(
+              throw new IllegalStateException(
+                s"No left shuffle ID found for join at stage ${stageInfo.id.toInt}",
+              ),
+            )
+
+        val rightShuffleId =
+          priorShuffles
+            .lift(1)
+            .orElse(dependentStages.lift(1))
+            .getOrElse(
+              throw new IllegalStateException(
+                s"No right shuffle ID found for join at stage ${stageInfo.id.toInt}",
+              ),
+            )
 
         // Read left and right data separately from their respective shuffle outputs
         val leftData = (0 until numPartitions).flatMap { partitionId =>
-          ShuffleManager.readShufflePartition[Any, Any](leftShuffleId, partitionId).data
+          ShuffleManager
+            .readShufflePartition[Any, Any](leftShuffleId, PartitionId(partitionId))
+            .data
         }
         val rightData = (0 until numPartitions).flatMap { partitionId =>
-          ShuffleManager.readShufflePartition[Any, Any](rightShuffleId, partitionId).data
+          ShuffleManager
+            .readShufflePartition[Any, Any](rightShuffleId, PartitionId(partitionId))
+            .data
         }
 
         // Group left and right data by key
@@ -326,25 +351,41 @@ object DAGScheduler extends StrictLogging:
           )
         }
 
-        val leftShuffleId = stageToShuffleId
-          .find(_._1 < stageInfo.id)
-          .map(_._2)
-          .getOrElse(dependentStages.headOption.getOrElse(0))
-        val rightShuffleId = stageToShuffleId
-          .filter(_._1 < stageInfo.id)
-          .toSeq
-          .sortBy(_._1)
-          .drop(1)
-          .headOption
-          .map(_._2)
-          .getOrElse(dependentStages.drop(1).headOption.getOrElse(1))
+        val priorShuffles: Seq[ShuffleId] =
+          stageToShuffleId.toSeq
+            .collect { case (sid, id) if sid.toInt < stageInfo.id.toInt => (sid.toInt, id) }
+            .sortBy(_._1)
+            .map(_._2)
+
+        val leftShuffleId =
+          priorShuffles.headOption
+            .orElse(dependentStages.headOption)
+            .getOrElse(
+              throw new IllegalStateException(
+                s"No left shuffle ID found for cogroup at stage ${stageInfo.id.toInt}",
+              ),
+            )
+
+        val rightShuffleId =
+          priorShuffles
+            .lift(1)
+            .orElse(dependentStages.lift(1))
+            .getOrElse(
+              throw new IllegalStateException(
+                s"No right shuffle ID found for cogroup at stage ${stageInfo.id.toInt}",
+              ),
+            )
 
         // Read left and right data separately from their respective shuffle outputs
         val leftData = (0 until numPartitions).flatMap { partitionId =>
-          ShuffleManager.readShufflePartition[Any, Any](leftShuffleId, partitionId).data
+          ShuffleManager
+            .readShufflePartition[Any, Any](leftShuffleId, PartitionId(partitionId))
+            .data
         }
         val rightData = (0 until numPartitions).flatMap { partitionId =>
-          ShuffleManager.readShufflePartition[Any, Any](rightShuffleId, partitionId).data
+          ShuffleManager
+            .readShufflePartition[Any, Any](rightShuffleId, PartitionId(partitionId))
+            .data
         }
 
         // Group left and right data by key
@@ -378,7 +419,7 @@ object DAGScheduler extends StrictLogging:
   private def handleShuffleOutput(
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],
-  ): Int = {
+  ): ShuffleId = {
     // Shuffle data is always key-value data.
     val keyValueResults = results.asInstanceOf[Seq[Partition[(Any, Any)]]]
     val shuffleData = ShuffleManager.partitionByKey[Any, Any](
@@ -387,7 +428,9 @@ object DAGScheduler extends StrictLogging:
     )
     val actualShuffleId = ShuffleManager.writeShuffleData[Any, Any](shuffleData)
 
-    logger.debug(s"Stored shuffle data for stage ${stageInfo.id} with shuffle ID $actualShuffleId")
+    logger.debug(
+      s"Stored shuffle data for stage ${stageInfo.id.toInt} with shuffle ID ${actualShuffleId.toInt}",
+    )
     actualShuffleId
   }
 
@@ -398,17 +441,17 @@ object DAGScheduler extends StrictLogging:
   private def handleSortByShuffleOutput(
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],
-  ): Int = {
+  ): ShuffleId = {
     val allData: Seq[Any] = results.flatMap(_.data)
 
     val keyedData: Seq[(Any, Unit)] = allData.map(element => (element, ()))
 
-    val shuffleData = ShuffleManager.ShuffleData(Map(0 -> keyedData))
+    val shuffleData = ShuffleManager.ShuffleData(Map(PartitionId(0) -> keyedData))
 
     val actualShuffleId = ShuffleManager.writeShuffleData(shuffleData)
 
     logger.debug(
-      s"Stored sortBy shuffle data for stage ${stageInfo.id} with shuffle ID $actualShuffleId",
+      s"Stored sortBy shuffle data for stage ${stageInfo.id.toInt} with shuffle ID ${actualShuffleId.toInt}",
     )
     actualShuffleId
   }

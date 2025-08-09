@@ -4,7 +4,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 import scala.collection.mutable
 
-import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf}
+import com.ewoodbury.sparklet.core.{Partition, Plan, ShuffleId, SparkletConf, StageId}
 
 @SuppressWarnings(
   Array(
@@ -24,11 +24,11 @@ object StageBuilder:
    * Information about a stage in the execution graph.
    */
   case class StageInfo(
-      id: Int,
+      id: StageId,
       stage: Stage[_, _],
       inputSources: Seq[InputSource], // What this stage reads from
       isShuffleStage: Boolean,
-      shuffleId: Option[Int], // For stages that produce shuffle output
+      shuffleId: Option[ShuffleId], // For stages that produce shuffle output
       shuffleOperation: Option[Plan[_]], // The original Plan operation for shuffle stages
   )
 
@@ -37,29 +37,28 @@ object StageBuilder:
    */
   sealed trait InputSource
   case class SourceInput(partitions: Seq[Partition[_]]) extends InputSource
-  case class ShuffleInput(shuffleId: Int, numPartitions: Int) extends InputSource
+  case class ShuffleInput(shuffleId: ShuffleId, numPartitions: Int) extends InputSource
 
   /**
    * Complete stage execution graph with dependencies.
    */
   case class StageGraph(
-      stages: Map[Int, StageInfo],
-      dependencies: Map[Int, Set[Int]], // stage ID -> dependent stage IDs
-      finalStageId: Int,
+      stages: Map[StageId, StageInfo],
+      dependencies: Map[StageId, Set[StageId]], // stage ID -> dependent stage IDs
+      finalStageId: StageId,
   )
 
   private val nextStageId = new AtomicInteger(0)
-  private def getNextStageId(): Int = {
-    nextStageId.getAndIncrement()
-  }
+  private def getNextStageId(): StageId =
+    StageId(nextStageId.getAndIncrement())
 
   /**
    * Builds a complete stage graph from a plan, handling shuffle boundaries.
    */
   def buildStageGraph[A](plan: Plan[A]): StageGraph = {
     nextStageId.set(0)
-    val stageMap = mutable.Map[Int, StageInfo]()
-    val dependencies = mutable.Map[Int, mutable.Set[Int]]()
+    val stageMap = mutable.Map[StageId, StageInfo]()
+    val dependencies = mutable.Map[StageId, mutable.Set[StageId]]()
 
     val finalStageId = buildStagesRecursive(plan, stageMap, dependencies)
 
@@ -77,9 +76,9 @@ object StageBuilder:
    */
   private def buildStagesRecursive[A](
       plan: Plan[A],
-      stageMap: mutable.Map[Int, StageInfo],
-      dependencies: mutable.Map[Int, mutable.Set[Int]],
-  ): Int = {
+      stageMap: mutable.Map[StageId, StageInfo],
+      dependencies: mutable.Map[StageId, mutable.Set[StageId]],
+  ): StageId = {
     plan match {
       // Base case: data source
       case source: Plan.Source[_] =>
@@ -255,8 +254,14 @@ object StageBuilder:
         // The join stage reads from shuffle outputs of both left and right stages
         val numPartitions = SparkletConf.get.defaultShufflePartitions
         val shuffleInputSources = Seq(
-          ShuffleInput(leftStageId, numPartitions), // Read from left stage shuffle output
-          ShuffleInput(rightStageId, numPartitions), // Read from right stage shuffle output
+          ShuffleInput(
+            ShuffleId.fromStageId(leftStageId),
+            numPartitions,
+          ), // Read from left stage shuffle output
+          ShuffleInput(
+            ShuffleId.fromStageId(rightStageId),
+            numPartitions,
+          ), // Read from right stage shuffle output
         )
 
         stageMap(joinStageId) = StageInfo(
@@ -264,7 +269,7 @@ object StageBuilder:
           stage = joinStage,
           inputSources = shuffleInputSources,
           isShuffleStage = true,
-          shuffleId = Some(joinStageId), // Use join stage ID as shuffle ID
+          shuffleId = Some(ShuffleId.fromStageId(joinStageId)), // Use join stage ID as shuffle ID
           shuffleOperation = Some(joinOp), // Store the join operation for execution
         )
 
@@ -284,8 +289,14 @@ object StageBuilder:
         // The cogroup stage reads from shuffle outputs of both left and right stages
         val numPartitions = SparkletConf.get.defaultShufflePartitions
         val shuffleInputSources = Seq(
-          ShuffleInput(leftStageId, numPartitions), // Read from left stage shuffle output
-          ShuffleInput(rightStageId, numPartitions), // Read from right stage shuffle output
+          ShuffleInput(
+            ShuffleId.fromStageId(leftStageId),
+            numPartitions,
+          ), // Read from left stage shuffle output
+          ShuffleInput(
+            ShuffleId.fromStageId(rightStageId),
+            numPartitions,
+          ), // Read from right stage shuffle output
         )
 
         stageMap(cogroupStageId) = StageInfo(
@@ -293,7 +304,8 @@ object StageBuilder:
           stage = cogroupStage,
           inputSources = shuffleInputSources,
           isShuffleStage = true,
-          shuffleId = Some(cogroupStageId), // Use cogroup stage ID as shuffle ID
+          shuffleId =
+            Some(ShuffleId.fromStageId(cogroupStageId)), // Use cogroup stage ID as shuffle ID
           shuffleOperation = Some(cogroupOp), // Store the cogroup operation for execution
         )
 
@@ -308,11 +320,11 @@ object StageBuilder:
    * existing stage is a shuffle stage.
    */
   private def extendStageOrCreateNew(
-      sourceStageId: Int,
+      sourceStageId: StageId,
       newOperation: Stage[Any, Any],
-      stageMap: mutable.Map[Int, StageInfo],
-      dependencies: mutable.Map[Int, mutable.Set[Int]],
-  ): Int = {
+      stageMap: mutable.Map[StageId, StageInfo],
+      dependencies: mutable.Map[StageId, mutable.Set[StageId]],
+  ): StageId = {
     val sourceStage = stageMap(sourceStageId)
 
     if (sourceStage.isShuffleStage) {
@@ -324,7 +336,9 @@ object StageBuilder:
         case Some(shuffleId) =>
           Seq(ShuffleInput(shuffleId, SparkletConf.get.defaultShufflePartitions))
         case None =>
-          throw new IllegalStateException(s"Shuffle stage ${sourceStageId} has no shuffle ID")
+          throw new IllegalStateException(
+            s"Shuffle stage ${sourceStageId.toInt} has no shuffle ID",
+          )
       }
 
       stageMap(newStageId) = StageInfo(
@@ -358,15 +372,16 @@ object StageBuilder:
    * TODO: Add actual shuffle logic, which will use the args operationType and operation.
    */
   private def createShuffleStage(
-      sourceStageId: Int,
+      sourceStageId: StageId,
       @annotation.unused operationType: String,
-      stageMap: mutable.Map[Int, StageInfo],
-      dependencies: mutable.Map[Int, mutable.Set[Int]],
+      stageMap: mutable.Map[StageId, StageInfo],
+      dependencies: mutable.Map[StageId, mutable.Set[StageId]],
       @annotation.unused operation: Option[Any] = None,
       shuffleOperation: Option[Plan[_]] = None,
-  ): Int = {
+  ): StageId = {
     val shuffleStageId = getNextStageId()
-    val shuffleId = sourceStageId // Use source stage ID as shuffle ID for consistency
+    val shuffleId =
+      ShuffleId.fromStageId(sourceStageId) // Use source stage ID as shuffle ID for consistency
 
     // Create a placeholder stage for shuffle operations
     val shuffleStage =

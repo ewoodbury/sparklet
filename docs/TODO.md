@@ -7,9 +7,9 @@
 - [x] Replace `println` with pluggable logging
   - [x] Likely `scala-logging` facade with `log4j` for async logging backend 
   - [x] Stage/Task/DAG logs with levels and simple timers
-- [ ] Stronger typing for IDs
-  - [ ] Newtypes: `StageId`, `ShuffleId`, `PartitionId`
-  - [ ] Refactor maps and method signatures to use them
+- [x] Stronger typing for IDs
+  - [x] Newtypes: `StageId`, `ShuffleId`, `PartitionId`
+  - [x] Refactor maps and method signatures to use them
 - [ ] Thread-safe `ShuffleManager`
   - [ ] Use concurrent map or cats-effect `Ref/Mutex`
   - [ ] Re-enable `Test / parallelExecution := true` when safe

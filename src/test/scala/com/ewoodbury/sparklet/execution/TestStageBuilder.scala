@@ -3,7 +3,7 @@ package com.ewoodbury.sparklet.execution
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.ewoodbury.sparklet.core.{Partition, Plan}
+import com.ewoodbury.sparklet.core.{Partition, Plan, ShuffleId, StageId}
 
 @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
 /**
@@ -31,10 +31,10 @@ class TestStageBuilder extends AnyFlatSpec with Matchers {
     // Then: We should get a single stage with no dependencies
     stageGraph.stages should have size 1
     stageGraph.dependencies should have size 0
-    stageGraph.finalStageId shouldBe 0
+    stageGraph.finalStageId shouldBe StageId(0)
     
-    val stageInfo = stageGraph.stages(0)
-    stageInfo.id shouldBe 0
+    val stageInfo = stageGraph.stages(StageId(0))
+    stageInfo.id shouldBe StageId(0)
     stageInfo.isShuffleStage shouldBe false
     stageInfo.shuffleId shouldBe Option.empty[Int]
     stageInfo.inputSources should have length 1
@@ -52,19 +52,19 @@ class TestStageBuilder extends AnyFlatSpec with Matchers {
     // Then: We should get two stages - source stage and shuffle stage
     stageGraph.stages should have size 2
     stageGraph.dependencies should have size 1
-    stageGraph.finalStageId shouldBe 1
+    stageGraph.finalStageId shouldBe StageId(1)
     
     // Check source stage (stage 0)
-    val sourceStage = stageGraph.stages(0)
-    sourceStage.id shouldBe 0
+    val sourceStage = stageGraph.stages(StageId(0))
+    sourceStage.id shouldBe StageId(0)
     sourceStage.isShuffleStage shouldBe false
     sourceStage.shuffleId shouldBe Option.empty[Int]
     sourceStage.inputSources should have length 1
     sourceStage.inputSources.head shouldBe a[StageBuilder.SourceInput]
     
     // Check shuffle stage (stage 1)
-    val shuffleStage = stageGraph.stages(1)
-    shuffleStage.id shouldBe 1
+    val shuffleStage = stageGraph.stages(StageId(1))
+    shuffleStage.id shouldBe StageId(1)
     shuffleStage.isShuffleStage shouldBe true
     shuffleStage.shuffleId shouldBe Some(0) // Uses source stage ID as shuffle ID
     shuffleStage.shuffleOperation shouldBe Some(groupByKeyPlan)
@@ -72,11 +72,11 @@ class TestStageBuilder extends AnyFlatSpec with Matchers {
     shuffleStage.inputSources.head shouldBe a[StageBuilder.ShuffleInput]
     
     val shuffleInput = shuffleStage.inputSources.head.asInstanceOf[StageBuilder.ShuffleInput]
-    shuffleInput.shuffleId shouldBe 0
+    shuffleInput.shuffleId shouldBe ShuffleId(0)
     shuffleInput.numPartitions shouldBe 4
     
     // Check dependencies
-    stageGraph.dependencies(1) should contain(0)
+    stageGraph.dependencies(StageId(1)) should contain(StageId(0))
   }
 
   it should "create shuffle stages for reduceByKey operations" in {
@@ -89,9 +89,9 @@ class TestStageBuilder extends AnyFlatSpec with Matchers {
     
     // Then: We should get two stages with proper shuffle setup
     stageGraph.stages should have size 2
-    stageGraph.finalStageId shouldBe 1
+    stageGraph.finalStageId shouldBe StageId(1)
     
-    val shuffleStage = stageGraph.stages(1)
+    val shuffleStage = stageGraph.stages(StageId(1))
     shuffleStage.isShuffleStage shouldBe true
     shuffleStage.shuffleOperation shouldBe Some(reduceByKeyPlan)
     shuffleStage.inputSources.head shouldBe a[StageBuilder.ShuffleInput]
@@ -107,9 +107,9 @@ class TestStageBuilder extends AnyFlatSpec with Matchers {
     
     // Then: We should get two stages with proper shuffle setup
     stageGraph.stages should have size 2
-    stageGraph.finalStageId shouldBe 1
+    stageGraph.finalStageId shouldBe StageId(1)
     
-    val shuffleStage = stageGraph.stages(1)
+    val shuffleStage = stageGraph.stages(StageId(1))
     shuffleStage.isShuffleStage shouldBe true
     shuffleStage.shuffleOperation shouldBe Some(sortByPlan)
   }
@@ -125,27 +125,27 @@ class TestStageBuilder extends AnyFlatSpec with Matchers {
     
     // Then: We should get three stages
     stageGraph.stages should have size 3
-    stageGraph.finalStageId shouldBe 2
+    stageGraph.finalStageId shouldBe StageId(2)
     
     // Source stage (0)
-    val sourceStage = stageGraph.stages(0)
+    val sourceStage = stageGraph.stages(StageId(0))
     sourceStage.isShuffleStage shouldBe false
     
     // Shuffle stage (1)
-    val shuffleStage = stageGraph.stages(1)
+    val shuffleStage = stageGraph.stages(StageId(1))
     shuffleStage.isShuffleStage shouldBe true
     shuffleStage.shuffleOperation shouldBe Some(groupByKeyPlan)
     
     // Map stage after shuffle (2)
-    val mapStage = stageGraph.stages(2)
+    val mapStage = stageGraph.stages(StageId(2))
     mapStage.isShuffleStage shouldBe false
     mapStage.inputSources should have length 1
     mapStage.inputSources.head shouldBe a[StageBuilder.ShuffleInput]
     
     // Check dependencies: map stage depends on shuffle stage, shuffle stage depends on source stage
     stageGraph.dependencies should have size 2
-    stageGraph.dependencies(1) should contain(0) // shuffle depends on source
-    stageGraph.dependencies(2) should contain(1) // map depends on shuffle
+    stageGraph.dependencies(StageId(1)) should contain(StageId(0)) // shuffle depends on source
+    stageGraph.dependencies(StageId(2)) should contain(StageId(1)) // map depends on shuffle
   }
 
   it should "chain narrow transformations in the same stage" in {
@@ -161,9 +161,9 @@ class TestStageBuilder extends AnyFlatSpec with Matchers {
     // Then: All narrow transformations should be chained in a single stage
     stageGraph.stages should have size 1
     stageGraph.dependencies should have size 0
-    stageGraph.finalStageId shouldBe 0
+    stageGraph.finalStageId shouldBe StageId(0)
     
-    val stage = stageGraph.stages(0)
+    val stage = stageGraph.stages(StageId(0))
     stage.isShuffleStage shouldBe false
     stage.stage shouldBe a[Stage.ChainedStage[_, _, _]]
   }
@@ -179,15 +179,15 @@ class TestStageBuilder extends AnyFlatSpec with Matchers {
     
     // Then: We should get three stages - two source stages and one union stage
     stageGraph.stages should have size 3
-    stageGraph.finalStageId shouldBe 2
+    stageGraph.finalStageId shouldBe StageId(2)
     
-    val unionStage = stageGraph.stages(2)
+    val unionStage = stageGraph.stages(StageId(2))
     unionStage.isShuffleStage shouldBe false
     unionStage.inputSources should have length 2 // Reads from both sources
     
     // Union stage should depend on both source stages
-    stageGraph.dependencies(2) should contain(0)
-    stageGraph.dependencies(2) should contain(1)
+    stageGraph.dependencies(StageId(2)) should contain(StageId(0))
+    stageGraph.dependencies(StageId(2)) should contain(StageId(1))
   }
 
   it should "reset stage IDs between different buildStageGraph calls" in {
@@ -200,10 +200,10 @@ class TestStageBuilder extends AnyFlatSpec with Matchers {
     val stageGraph2 = StageBuilder.buildStageGraph(plan2)
     
     // Then: Both should start with stage ID 0
-    stageGraph1.finalStageId shouldBe 0
-    stageGraph2.finalStageId shouldBe 0
-    stageGraph1.stages.keys.min shouldBe 0
-    stageGraph2.stages.keys.min shouldBe 0
+    stageGraph1.finalStageId shouldBe StageId(0)
+    stageGraph2.finalStageId shouldBe StageId(0)
+    stageGraph1.stages.keys.min shouldBe StageId(0)
+    stageGraph2.stages.keys.min shouldBe StageId(0)
   }
 
   "StageBuilder legacy buildStages" should "reject plans with shuffle operations" in {
