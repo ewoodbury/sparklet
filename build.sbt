@@ -17,15 +17,27 @@ lazy val root = (project in file("."))
       // Cats
       "org.typelevel" %% "cats-core" % "2.10.0",
       "org.typelevel" %% "cats-effect" % "3.5.3",
-      
+
+      // Logging: scala-logging facade + Log4j2 async backend
+      "com.typesafe.scala-logging" %% "scala-logging" % "3.9.5",
+      "org.apache.logging.log4j" % "log4j-api" % "2.23.1",
+      "org.apache.logging.log4j" % "log4j-core" % "2.23.1",
+      "org.apache.logging.log4j" % "log4j-slf4j2-impl" % "2.23.1",
+      "com.lmax" % "disruptor" % "3.4.4", // required for Log4j2 async
+
       // Testing
       "org.scalatest" %% "scalatest" % "3.2.17" % Test,
       "org.typelevel" %% "cats-effect-testing-scalatest" % "1.5.0" % Test
     ),
-    
+
+    // Prefer async loggers
+    ThisBuild / javaOptions ++= Seq(
+      "-DLog4jContextSelector=org.apache.logging.log4j.core.async.AsyncLoggerContextSelector"
+    ),
+
     // Test configuration to avoid race conditions in ShuffleManager
     Test / parallelExecution := false,
-    
+
     // Wartremover configuration
     wartremoverWarnings ++= Warts.allBut(
       Wart.ImplicitParameter,

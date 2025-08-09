@@ -2,8 +2,9 @@ package com.ewoodbury.sparklet.execution
 
 import scala.collection.mutable
 
-import com.ewoodbury.sparklet.core.{Partition, Plan}
-import com.ewoodbury.sparklet.core.SparkletConf
+import com.typesafe.scalalogging.StrictLogging
+
+import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf}
 
 @SuppressWarnings(
   Array(
@@ -11,35 +12,35 @@ import com.ewoodbury.sparklet.core.SparkletConf
     "org.wartremover.warts.Any",
   ),
 )
-object DAGScheduler:
+object DAGScheduler extends StrictLogging:
 
   /**
    * Executes a plan using multi-stage execution, handling shuffle boundaries.
    */
   def execute[A](plan: Plan[A]): Iterable[A] = {
-    println("--- DAGScheduler: Starting multi-stage execution ---")
+    logger.info("DAGScheduler: starting multi-stage execution")
 
     val stageGraph = StageBuilder.buildStageGraph(plan)
-    println(s"DAGScheduler: Built stage graph with ${stageGraph.stages.size} stages")
+    logger.debug(s"DAGScheduler: built stage graph with ${stageGraph.stages.size} stages")
 
     val executionOrder = topologicalSort(stageGraph.dependencies)
-    println(s"DAGScheduler: Execution order: ${executionOrder.mkString(" -> ")}")
+    logger.debug(s"DAGScheduler: execution order: ${executionOrder.mkString(" -> ")}")
 
     val stageResults = mutable.Map[Int, Seq[Partition[_]]]()
     val stageToShuffleId = mutable.Map[Int, Int]()
 
     for (stageId <- executionOrder) {
-      println(s"DAGScheduler: Executing stage $stageId")
+      logger.info(s"DAGScheduler: executing stage $stageId")
       val stageInfo = stageGraph.stages(stageId)
       val inputPartitions = getInputPartitionsForStage(stageInfo, stageResults, stageToShuffleId)
       val results = executeStage(stageInfo, inputPartitions, stageToShuffleId)
-      
+
       stageResults(stageId) = results
 
       val dependentStages = stageGraph.dependencies.filter(_._2.contains(stageId)).keys
       val needsShuffleOutput =
         dependentStages.exists(depStageId => stageGraph.stages(depStageId).isShuffleStage) ||
-        (stageInfo.isShuffleStage && dependentStages.nonEmpty)
+          (stageInfo.isShuffleStage && dependentStages.nonEmpty)
 
       if (needsShuffleOutput) {
         // Check if the dependent stage is a sortBy operation
@@ -65,7 +66,7 @@ object DAGScheduler:
     val finalResults = stageResults(stageGraph.finalStageId)
     val finalData = finalResults.flatMap(_.data.asInstanceOf[Iterable[A]])
 
-    println("DAGScheduler: Multi-stage execution completed")
+    logger.info("DAGScheduler: multi-stage execution completed")
     finalData
   }
 
@@ -162,7 +163,7 @@ object DAGScheduler:
       stageToShuffleId: mutable.Map[Int, Int],
   ): Seq[Partition[_]] = {
     if (inputPartitions.isEmpty) {
-      println(s"Warning: Stage ${stageInfo.id} has no input partitions")
+      logger.warn(s"Stage ${stageInfo.id} has no input partitions")
       return Seq.empty
     }
 
@@ -207,7 +208,7 @@ object DAGScheduler:
       inputPartitions: Seq[Partition[(K, V)]],
       stageToShuffleId: mutable.Map[Int, Int],
   ): Seq[Partition[Any]] = {
-    println(
+    logger.debug(
       s"Executing shuffle stage ${stageInfo.id} with ${inputPartitions.size} input partitions",
     )
 
@@ -250,21 +251,34 @@ object DAGScheduler:
         // For join operations, we need to read left and right shuffle data separately
         // Determine partition count from inputs (fallback to config)
         val numPartitions: Int =
-          stageInfo.inputSources.collectFirst { case StageBuilder.ShuffleInput(_, n) => n }
+          stageInfo.inputSources
+            .collectFirst { case StageBuilder.ShuffleInput(_, n) => n }
             .getOrElse(SparkletConf.get.defaultShufflePartitions)
 
         // Get the dependent stages in order (left stage first, then right stage)
         val dependentStages = stageInfo.inputSources.collect {
           case StageBuilder.ShuffleInput(shuffleId, _) => shuffleId
         }
-        
+
         if (dependentStages.lengthIs < 2) {
-          throw new IllegalStateException(s"Join operation requires 2 shuffle inputs, got ${dependentStages.length}")
+          throw new IllegalStateException(
+            s"Join operation requires 2 shuffle inputs, got ${dependentStages.length}",
+          )
         }
-        
-        val leftShuffleId = stageToShuffleId.find(_._1 < stageInfo.id).map(_._2).getOrElse(dependentStages.headOption.getOrElse(0))
-        val rightShuffleId = stageToShuffleId.filter(_._1 < stageInfo.id).toSeq.sortBy(_._1).drop(1).headOption.map(_._2).getOrElse(dependentStages.drop(1).headOption.getOrElse(1))
-        
+
+        val leftShuffleId = stageToShuffleId
+          .find(_._1 < stageInfo.id)
+          .map(_._2)
+          .getOrElse(dependentStages.headOption.getOrElse(0))
+        val rightShuffleId = stageToShuffleId
+          .filter(_._1 < stageInfo.id)
+          .toSeq
+          .sortBy(_._1)
+          .drop(1)
+          .headOption
+          .map(_._2)
+          .getOrElse(dependentStages.drop(1).headOption.getOrElse(1))
+
         // Read left and right data separately from their respective shuffle outputs
         val leftData = (0 until numPartitions).flatMap { partitionId =>
           ShuffleManager.readShufflePartition[Any, Any](leftShuffleId, partitionId).data
@@ -272,18 +286,22 @@ object DAGScheduler:
         val rightData = (0 until numPartitions).flatMap { partitionId =>
           ShuffleManager.readShufflePartition[Any, Any](rightShuffleId, partitionId).data
         }
-        
+
         // Group left and right data by key
         val leftByKey = leftData.groupBy(_._1)
         val rightByKey = rightData.groupBy(_._1)
-        
+
         // Perform inner join - only keep keys that appear in both sides
         val joinedData = leftByKey.flatMap { case (key, leftValues) =>
           rightByKey.get(key).map { rightValues =>
             // For simplicity, take the first value from each side
             // In a full implementation, this would be a cartesian product
-            val leftValue = leftValues.headOption.map(_._2).getOrElse(throw new NoSuchElementException("No left value"))
-            val rightValue = rightValues.headOption.map(_._2).getOrElse(throw new NoSuchElementException("No right value"))
+            val leftValue = leftValues.headOption
+              .map(_._2)
+              .getOrElse(throw new NoSuchElementException("No left value"))
+            val rightValue = rightValues.headOption
+              .map(_._2)
+              .getOrElse(throw new NoSuchElementException("No right value"))
             (key, (leftValue, rightValue))
           }
         }
@@ -293,21 +311,34 @@ object DAGScheduler:
         // For cogroup operations, we need to read left and right shuffle data separately
         // Determine partition count from inputs (fallback to config)
         val numPartitions: Int =
-          stageInfo.inputSources.collectFirst { case StageBuilder.ShuffleInput(_, n) => n }
+          stageInfo.inputSources
+            .collectFirst { case StageBuilder.ShuffleInput(_, n) => n }
             .getOrElse(SparkletConf.get.defaultShufflePartitions)
-        
+
         // Get the dependent stages in order (left stage first, then right stage)
         val dependentStages = stageInfo.inputSources.collect {
           case StageBuilder.ShuffleInput(shuffleId, _) => shuffleId
         }
-        
+
         if (dependentStages.lengthIs < 2) {
-          throw new IllegalStateException(s"Cogroup operation requires 2 shuffle inputs, got ${dependentStages.length}")
+          throw new IllegalStateException(
+            s"Cogroup operation requires 2 shuffle inputs, got ${dependentStages.length}",
+          )
         }
-        
-        val leftShuffleId = stageToShuffleId.find(_._1 < stageInfo.id).map(_._2).getOrElse(dependentStages.headOption.getOrElse(0))
-        val rightShuffleId = stageToShuffleId.filter(_._1 < stageInfo.id).toSeq.sortBy(_._1).drop(1).headOption.map(_._2).getOrElse(dependentStages.drop(1).headOption.getOrElse(1))
-        
+
+        val leftShuffleId = stageToShuffleId
+          .find(_._1 < stageInfo.id)
+          .map(_._2)
+          .getOrElse(dependentStages.headOption.getOrElse(0))
+        val rightShuffleId = stageToShuffleId
+          .filter(_._1 < stageInfo.id)
+          .toSeq
+          .sortBy(_._1)
+          .drop(1)
+          .headOption
+          .map(_._2)
+          .getOrElse(dependentStages.drop(1).headOption.getOrElse(1))
+
         // Read left and right data separately from their respective shuffle outputs
         val leftData = (0 until numPartitions).flatMap { partitionId =>
           ShuffleManager.readShufflePartition[Any, Any](leftShuffleId, partitionId).data
@@ -315,11 +346,11 @@ object DAGScheduler:
         val rightData = (0 until numPartitions).flatMap { partitionId =>
           ShuffleManager.readShufflePartition[Any, Any](rightShuffleId, partitionId).data
         }
-        
+
         // Group left and right data by key
         val leftByKey = leftData.groupBy(_._1)
         val rightByKey = rightData.groupBy(_._1)
-        
+
         // Perform cogroup - include all keys from both sides
         val allKeys = leftByKey.keySet ++ rightByKey.keySet
         val cogroupedData = allKeys.map { key =>
@@ -351,12 +382,12 @@ object DAGScheduler:
     // Shuffle data is always key-value data.
     val keyValueResults = results.asInstanceOf[Seq[Partition[(Any, Any)]]]
     val shuffleData = ShuffleManager.partitionByKey[Any, Any](
-      data=keyValueResults,
-      numPartitions=SparkletConf.get.defaultShufflePartitions,
+      data = keyValueResults,
+      numPartitions = SparkletConf.get.defaultShufflePartitions,
     )
     val actualShuffleId = ShuffleManager.writeShuffleData[Any, Any](shuffleData)
 
-    println(s"Stored shuffle data for stage ${stageInfo.id} with shuffle ID $actualShuffleId")
+    logger.debug(s"Stored shuffle data for stage ${stageInfo.id} with shuffle ID $actualShuffleId")
     actualShuffleId
   }
 
@@ -376,7 +407,7 @@ object DAGScheduler:
 
     val actualShuffleId = ShuffleManager.writeShuffleData(shuffleData)
 
-    println(
+    logger.debug(
       s"Stored sortBy shuffle data for stage ${stageInfo.id} with shuffle ID $actualShuffleId",
     )
     actualShuffleId

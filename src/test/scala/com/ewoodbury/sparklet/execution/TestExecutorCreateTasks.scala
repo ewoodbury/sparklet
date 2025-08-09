@@ -1,8 +1,8 @@
 package com.ewoodbury.sparklet.execution
 
+import org.scalatest.BeforeAndAfterEach
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import org.scalatest.{BeforeAndAfterEach}
 
 import com.ewoodbury.sparklet.core.{DistCollection, Partition, Plan}
 

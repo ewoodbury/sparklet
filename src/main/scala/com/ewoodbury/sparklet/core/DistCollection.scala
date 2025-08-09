@@ -1,5 +1,7 @@
 package com.ewoodbury.sparklet.core
 
+import com.typesafe.scalalogging.StrictLogging
+
 import com.ewoodbury.sparklet.execution.{DAGScheduler, Executor, Task, TaskScheduler}
 
 /**
@@ -11,7 +13,7 @@ import com.ewoodbury.sparklet.execution.{DAGScheduler, Executor, Task, TaskSched
  * @tparam A
  *   The type of elements in the collection.
  */
-final case class DistCollection[A](plan: Plan[A]):
+final case class DistCollection[A](plan: Plan[A]) extends StrictLogging:
 
   // --- Helper to view the plan ---
   override def toString: String = s"DistCollection(plan = $plan)"
@@ -152,14 +154,16 @@ final case class DistCollection[A](plan: Plan[A]):
    */
   @SuppressWarnings(Array("org.wartremover.warts.Any"))
   def collect(): Iterable[A] = {
-    println("--- Collect Action Triggered ---")
+    logger.info("Action collect() triggered")
 
     // Check if plan requires DAG scheduling (contains shuffle operations)
     if (DAGScheduler.requiresDAGScheduling(this.plan)) {
       // Use DAGScheduler for plans with shuffle operations
+      logger.debug("collect(): using DAGScheduler (plan contains shuffle)")
       DAGScheduler.execute(this.plan)
     } else {
       // Use legacy single-stage execution for narrow-only operations
+      logger.debug("collect(): using single-stage executor (narrow-only plan)")
       this.plan match {
         case s: Plan.Source[A] =>
           // Sources don't need tasks, just return the data directly
@@ -181,11 +185,11 @@ final case class DistCollection[A](plan: Plan[A]):
   // in terms of collect() for simplicity.
 
   def count(): Long =
-    println("--- Count Action Triggered ---")
+    logger.info("Action count() triggered")
     collect().size.toLong
 
   def take(n: Int): List[A] =
-    println("--- Take Action Triggered ---")
+    logger.info(s"Action take($n) triggered")
     // This is inefficient as it collects everything first. A real implementation
     // would have a more optimized executor for `take`.
     collect().take(n).toList
@@ -221,7 +225,7 @@ final case class DistCollection[A](plan: Plan[A]):
           pairs
             .map(_._2)
             .reduceOption(op)
-            .getOrElse(throw new NoSuchElementException("Collection is empty")),
+            .getOrElse(throw new NoSuchElementException(s"No values found for key $k")),
         )
       }
 

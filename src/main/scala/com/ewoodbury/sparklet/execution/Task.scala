@@ -1,5 +1,7 @@
 package com.ewoodbury.sparklet.execution
 
+import com.typesafe.scalalogging.{Logger, StrictLogging}
+
 import com.ewoodbury.sparklet.core.{Partition, Plan}
 
 /**
@@ -10,14 +12,16 @@ sealed trait Task[A, B]:
   def partition: Partition[A]
   def run(): Partition[B] // The execution logic
 
-object Task:
+object Task extends StrictLogging:
+  private val taskLogger: Logger = logger
+
   /** A task that applies a map function to a partition. */
   case class MapTask[A, B](
       partition: Partition[A],
       f: A => B,
   ) extends Task[A, B]:
     override def run(): Partition[B] = {
-      println(s"[Thread: ${Thread.currentThread().getName}] Running MapTask on partition...")
+      taskLogger.debug(s"[${Thread.currentThread().getName}] MapTask on partition")
       Partition(partition.data.map(f))
     }
 
@@ -27,7 +31,7 @@ object Task:
       p: A => Boolean,
   ) extends Task[A, A]:
     override def run(): Partition[A] = {
-      println(s"[Thread: ${Thread.currentThread().getName}] Running FilterTask on partition...")
+      taskLogger.debug(s"[${Thread.currentThread().getName}] FilterTask on partition")
       Partition(partition.data.filter(p))
     }
 
@@ -37,7 +41,7 @@ object Task:
       f: A => IterableOnce[B],
   ) extends Task[A, B]:
     override def run(): Partition[B] = {
-      println(s"[Thread: ${Thread.currentThread().getName}] Running FlatMapTask on partition...")
+      taskLogger.debug(s"[${Thread.currentThread().getName}] FlatMapTask on partition")
       Partition(partition.data.flatMap(f))
     }
 
@@ -46,7 +50,7 @@ object Task:
       partition: Partition[A],
   ) extends Task[A, A]:
     override def run(): Partition[A] = {
-      println(s"[Thread: ${Thread.currentThread().getName}] Running DistinctTask on partition...")
+      taskLogger.debug(s"[${Thread.currentThread().getName}] DistinctTask on partition")
       Partition(partition.data.toSeq.distinct)
     }
 
@@ -55,7 +59,7 @@ object Task:
       partition: Partition[(K, V)],
   ) extends Task[(K, V), K]:
     override def run(): Partition[K] = {
-      println(s"[Thread: ${Thread.currentThread().getName}] Running KeysTask on partition...")
+      taskLogger.debug(s"[${Thread.currentThread().getName}] KeysTask on partition")
       Partition(partition.data.map(_._1))
     }
 
@@ -64,7 +68,7 @@ object Task:
       partition: Partition[(K, V)],
   ) extends Task[(K, V), V]:
     override def run(): Partition[V] = {
-      println(s"[Thread: ${Thread.currentThread().getName}] Running ValuesTask on partition...")
+      taskLogger.debug(s"[${Thread.currentThread().getName}] ValuesTask on partition")
       Partition(partition.data.map(_._2))
     }
 
@@ -74,7 +78,7 @@ object Task:
       f: V => B,
   ) extends Task[(K, V), (K, B)]:
     override def run(): Partition[(K, B)] = {
-      println(s"[Thread: ${Thread.currentThread().getName}] Running MapValuesTask on partition...")
+      taskLogger.debug(s"[${Thread.currentThread().getName}] MapValuesTask on partition")
       Partition(partition.data.map { case (k, v) => (k, f(v)) })
     }
 
@@ -84,9 +88,7 @@ object Task:
       p: K => Boolean,
   ) extends Task[(K, V), (K, V)]:
     override def run(): Partition[(K, V)] = {
-      println(
-        s"[Thread: ${Thread.currentThread().getName}] Running FilterKeysTask on partition...",
-      )
+      taskLogger.debug(s"[${Thread.currentThread().getName}] FilterKeysTask on partition")
       Partition(partition.data.filter { case (k, _) => p(k) })
     }
 
@@ -96,9 +98,7 @@ object Task:
       p: V => Boolean,
   ) extends Task[(K, V), (K, V)]:
     override def run(): Partition[(K, V)] = {
-      println(
-        s"[Thread: ${Thread.currentThread().getName}] Running FilterValuesTask on partition...",
-      )
+      taskLogger.debug(s"[${Thread.currentThread().getName}] FilterValuesTask on partition")
       Partition(partition.data.filter { case (_, v) => p(v) })
     }
 
@@ -108,9 +108,7 @@ object Task:
       f: V => IterableOnce[B],
   ) extends Task[(K, V), (K, B)]:
     override def run(): Partition[(K, B)] = {
-      println(
-        s"[Thread: ${Thread.currentThread().getName}] Running FlatMapValuesTask on partition...",
-      )
+      taskLogger.debug(s"[${Thread.currentThread().getName}] FlatMapValuesTask on partition")
       Partition(partition.data.flatMap { case (k, v) => f(v).iterator.map(b => (k, b)) })
     }
 
@@ -120,7 +118,7 @@ object Task:
       stage: Stage[A, B],
   ) extends Task[A, B]:
     override def run(): Partition[B] = {
-      println(s"[Thread: ${Thread.currentThread().getName}] Running StageTask on partition...")
+      taskLogger.debug(s"[${Thread.currentThread().getName}] StageTask on partition")
       stage.execute(partition)
     }
 
@@ -129,9 +127,9 @@ object Task:
     // DAGTask doesn't operate on a single partition, but the Task trait requires this
     // We use an empty partition as a placeholder since DAGTask orchestrates entire DAG execution
     override def partition: Partition[A] = Partition(Seq.empty[A])
-    
+
     override def run(): Partition[A] = {
-      println(s"[Thread: ${Thread.currentThread().getName}] Running DAGTask...")
+      taskLogger.debug(s"[${Thread.currentThread().getName}] DAGTask executing DAG")
       val results = DAGScheduler.execute(plan)
       Partition(results.toSeq)
     }

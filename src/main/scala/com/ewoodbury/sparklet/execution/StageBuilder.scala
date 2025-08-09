@@ -4,8 +4,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 import scala.collection.mutable
 
-import com.ewoodbury.sparklet.core.{Partition, Plan}
-import com.ewoodbury.sparklet.core.SparkletConf
+import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf}
 
 @SuppressWarnings(
   Array(
@@ -250,13 +249,14 @@ object StageBuilder:
 
         // Join requires both inputs to be shuffled - create shuffle stage that reads from both
         val joinStageId = getNextStageId()
-        val joinStage = Stage.SingleOpStage[Any, Any](identity) // Placeholder for actual join logic
+        val joinStage =
+          Stage.SingleOpStage[Any, Any](identity) // Placeholder for actual join logic
 
         // The join stage reads from shuffle outputs of both left and right stages
         val numPartitions = SparkletConf.get.defaultShufflePartitions
         val shuffleInputSources = Seq(
-          ShuffleInput(leftStageId, numPartitions),   // Read from left stage shuffle output
-          ShuffleInput(rightStageId, numPartitions)   // Read from right stage shuffle output
+          ShuffleInput(leftStageId, numPartitions), // Read from left stage shuffle output
+          ShuffleInput(rightStageId, numPartitions), // Read from right stage shuffle output
         )
 
         stageMap(joinStageId) = StageInfo(
@@ -264,7 +264,7 @@ object StageBuilder:
           stage = joinStage,
           inputSources = shuffleInputSources,
           isShuffleStage = true,
-          shuffleId = Some(joinStageId),  // Use join stage ID as shuffle ID
+          shuffleId = Some(joinStageId), // Use join stage ID as shuffle ID
           shuffleOperation = Some(joinOp), // Store the join operation for execution
         )
 
@@ -278,13 +278,14 @@ object StageBuilder:
 
         // CoGroup requires both inputs to be shuffled - create shuffle stage that reads from both
         val cogroupStageId = getNextStageId()
-        val cogroupStage = Stage.SingleOpStage[Any, Any](identity) // Placeholder for actual cogroup logic
+        val cogroupStage =
+          Stage.SingleOpStage[Any, Any](identity) // Placeholder for actual cogroup logic
 
         // The cogroup stage reads from shuffle outputs of both left and right stages
         val numPartitions = SparkletConf.get.defaultShufflePartitions
         val shuffleInputSources = Seq(
-          ShuffleInput(leftStageId, numPartitions),   // Read from left stage shuffle output
-          ShuffleInput(rightStageId, numPartitions)   // Read from right stage shuffle output
+          ShuffleInput(leftStageId, numPartitions), // Read from left stage shuffle output
+          ShuffleInput(rightStageId, numPartitions), // Read from right stage shuffle output
         )
 
         stageMap(cogroupStageId) = StageInfo(
@@ -292,7 +293,7 @@ object StageBuilder:
           stage = cogroupStage,
           inputSources = shuffleInputSources,
           isShuffleStage = true,
-          shuffleId = Some(cogroupStageId),  // Use cogroup stage ID as shuffle ID
+          shuffleId = Some(cogroupStageId), // Use cogroup stage ID as shuffle ID
           shuffleOperation = Some(cogroupOp), // Store the cogroup operation for execution
         )
 

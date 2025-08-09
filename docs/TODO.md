@@ -1,12 +1,12 @@
 # Sparklet TODOs (Prioritized)
 
 ## P0 — Foundation & Hygiene (now)
-- [ ] Central config (`SparkletConf`)
-  - [ ] Default shuffle partitions, default parallelism, thread pool size
-  - [ ] Inject into `StageBuilder` and `DAGScheduler`; remove magic `4`
-- [ ] Replace `println` with pluggable logging
-  - [ ] Lightweight `Logger` trait + SLF4J binding (optional)
-  - [ ] Stage/Task/DAG logs with levels and simple timers
+- [x] Central config (`SparkletConf`)
+  - [x] Default shuffle partitions, default parallelism, thread pool size
+  - [x] Inject into `StageBuilder` and `DAGScheduler`; remove magic `4`
+- [x] Replace `println` with pluggable logging
+  - [x] Likely `scala-logging` facade with `log4j` for async logging backend 
+  - [x] Stage/Task/DAG logs with levels and simple timers
 - [ ] Stronger typing for IDs
   - [ ] Newtypes: `StageId`, `ShuffleId`, `PartitionId`
   - [ ] Refactor maps and method signatures to use them

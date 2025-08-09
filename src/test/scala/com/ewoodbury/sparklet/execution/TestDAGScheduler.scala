@@ -1,11 +1,12 @@
 package com.ewoodbury.sparklet.execution
 
+import com.typesafe.scalalogging.StrictLogging
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.ewoodbury.sparklet.core.{DistCollection, Partition, Plan}
 
-class TestDAGScheduler extends AnyFlatSpec with Matchers {
+class TestDAGScheduler extends AnyFlatSpec with Matchers with StrictLogging {
   val toDistCollection: [T] => (seq: Seq[T]) => DistCollection[T] = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
 
   // Basic detection tests for scheduling
@@ -80,7 +81,7 @@ class TestDAGScheduler extends AnyFlatSpec with Matchers {
     // and may not produce the exact expected result yet, but it should not crash
     noException should be thrownBy {
       val result = source.groupByKey.collect()
-      println(s"GroupByKey result: $result")
+      logger.debug(s"GroupByKey result: $result")
     }
   }
 
@@ -91,7 +92,7 @@ class TestDAGScheduler extends AnyFlatSpec with Matchers {
     // This is a basic smoke test - the current implementation is simplified
     noException should be thrownBy {
       val result = source.reduceByKey[String, Int](_ + _).collect()
-      println(s"ReduceByKey result: $result")
+      logger.debug(s"ReduceByKey result: $result")
     }
   }
 
@@ -105,7 +106,7 @@ class TestDAGScheduler extends AnyFlatSpec with Matchers {
         .groupByKey                                       // wide (shuffle)
         .map { case (k, vs) => (k, vs.size) }           // narrow after shuffle
         .collect()
-      println(s"Mixed transformations result: $result")
+      logger.debug(s"Mixed transformations result: $result")
     }
   }
 } 

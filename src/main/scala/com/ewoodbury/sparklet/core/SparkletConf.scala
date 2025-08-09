@@ -1,10 +1,8 @@
 package com.ewoodbury.sparklet.core
 
-
-
 /**
-  * Centralized configuration for Sparklet runtime defaults.
-  */
+ * Centralized configuration for Sparklet runtime defaults.
+ */
 @SuppressWarnings(Array("org.wartremover.warts.DefaultArguments"))
 final case class SparkletConf(
     /** Number of partitions to use for shuffle outputs when not otherwise specified. */
@@ -26,4 +24,4 @@ object SparkletConf {
   def set(conf: SparkletConf): Unit = {
     current = conf
   }
-} 
+}

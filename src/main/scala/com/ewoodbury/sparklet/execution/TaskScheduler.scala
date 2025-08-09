@@ -5,10 +5,11 @@ import java.util.concurrent.Executors
 import scala.concurrent.duration._
 import scala.concurrent.{Await, ExecutionContext, Future}
 
-import com.ewoodbury.sparklet.core.Partition
-import com.ewoodbury.sparklet.core.SparkletConf
+import com.typesafe.scalalogging.StrictLogging
 
-object TaskScheduler:
+import com.ewoodbury.sparklet.core.{Partition, SparkletConf}
+
+object TaskScheduler extends StrictLogging:
   // Thread pool sized from configuration
   private val executorService = Executors.newFixedThreadPool(SparkletConf.get.threadPoolSize)
   private implicit val executionContext: ExecutionContext =
@@ -23,7 +24,7 @@ object TaskScheduler:
    *   The sequence of computed Partitions, in order.
    */
   def submit[A, B](tasks: Seq[Task[A, B]]): Seq[Partition[B]] = {
-    println(s"TaskScheduler: Submitting ${tasks.length} tasks to the thread pool...")
+    logger.debug(s"TaskScheduler: submitting ${tasks.length} tasks to the thread pool")
 
     // For each task, create a Future that will run it on our thread pool
     val futures: Seq[Future[Partition[B]]] = tasks.map { task =>
@@ -39,7 +40,7 @@ object TaskScheduler:
     // Block and wait for the final result.
     // In a real system, this would be handled asynchronously.
     val result = Await.result(allResultsFuture, 1.minute) // Wait up to 1 minute
-    println("TaskScheduler: All tasks completed.")
+    logger.debug("TaskScheduler: all tasks completed")
     result
   }
 
