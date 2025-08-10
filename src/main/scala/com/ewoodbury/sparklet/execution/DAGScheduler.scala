@@ -10,6 +10,7 @@ import com.ewoodbury.sparklet.core.*
   Array(
     "org.wartremover.warts.MutableDataStructures",
     "org.wartremover.warts.Any",
+    "org.wartremover.warts.Equals",
   ),
 )
 object DAGScheduler extends StrictLogging:
@@ -123,30 +124,28 @@ object DAGScheduler extends StrictLogging:
         // For join operations, we need to handle multiple shuffle inputs differently
         stageInfo.shuffleOperation match {
           case Some(_: Plan.JoinOp[_, _, _]) =>
-            // For joins, read from all available shuffle IDs (left and right)
-            val dependentStages = stageToShuffleId.keys
-              .filter(sid => sid.toInt < stageInfo.id.toInt)
-              .toSeq
-              .sortBy(_.toInt)
-            dependentStages.flatMap { stageId =>
-              val shuffleId = stageToShuffleId(stageId)
-              (0 until numPartitions).map { partitionIdx =>
-                ShuffleManager.readShufflePartition[Any, Any](shuffleId, PartitionId(partitionIdx))
-              }
+            // This path will be covered by explicit TaggedShuffleFrom inputs; for legacy
+            // ShuffleInput under join, fall back to the most recent shuffle as before.
+            val sourceStages = stageToShuffleId.keys.filter(sid => sid.toInt < stageInfo.id.toInt)
+            val actualShuffleId =
+              sourceStages.maxOption.flatMap(stageToShuffleId.get).getOrElse(plannedShuffleId)
+            (0 until numPartitions).map { partitionIdx =>
+              ShuffleManager.readShufflePartition[Any, Any](
+                actualShuffleId,
+                PartitionId(partitionIdx),
+              )
             }
 
           // For Cogroup, we also need to handle multiple shuffle inputs
           case Some(_: Plan.CoGroupOp[_, _, _]) =>
-            // For cogroups, read from all available shuffle IDs (left and right)
-            val dependentStages = stageToShuffleId.keys
-              .filter(sid => sid.toInt < stageInfo.id.toInt)
-              .toSeq
-              .sortBy(_.toInt)
-            dependentStages.flatMap { stageId =>
-              val shuffleId = stageToShuffleId(stageId)
-              (0 until numPartitions).map { partitionIdx =>
-                ShuffleManager.readShufflePartition[Any, Any](shuffleId, PartitionId(partitionIdx))
-              }
+            val sourceStages = stageToShuffleId.keys.filter(sid => sid.toInt < stageInfo.id.toInt)
+            val actualShuffleId =
+              sourceStages.maxOption.flatMap(stageToShuffleId.get).getOrElse(plannedShuffleId)
+            (0 until numPartitions).map { partitionIdx =>
+              ShuffleManager.readShufflePartition[Any, Any](
+                actualShuffleId,
+                PartitionId(partitionIdx),
+              )
             }
 
           case _ =>
@@ -162,6 +161,22 @@ object DAGScheduler extends StrictLogging:
                 PartitionId(partitionIdx),
               )
             }
+        }
+
+      case StageBuilder.TaggedShuffleFrom(upstreamStageId, _side, numPartitions) =>
+        // Explicitly resolve upstream shuffle ID and read exactly those partitions.
+        // Used for join and cogroup operations.
+        val actualShuffleId = stageToShuffleId.getOrElse(
+          upstreamStageId,
+          throw new IllegalStateException(
+            s"Missing shuffle id for upstream stage ${upstreamStageId.toInt} feeding stage ${stageInfo.id.toInt}",
+          ),
+        )
+        (0 until numPartitions).map { partitionIdx =>
+          ShuffleManager.readShufflePartition[Any, Any](
+            actualShuffleId,
+            PartitionId(partitionIdx),
+          )
         }
     }
   }
@@ -260,51 +275,28 @@ object DAGScheduler extends StrictLogging:
         }
         Seq(Partition(reducedData.toSeq))
 
-      case Some(joinOp: Plan.JoinOp[_, _, _]) =>
-        // For join operations, we need to read left and right shuffle data separately
-        // Determine partition count from inputs (fallback to config)
-        val numPartitions: Int =
-          stageInfo.inputSources
-            .collectFirst { case StageBuilder.ShuffleInput(_, n) => n }
-            .getOrElse(SparkletConf.get.defaultShufflePartitions)
-
-        // Get the dependent stages in order (left stage first, then right stage)
-        val dependentStages = stageInfo.inputSources.collect {
-          case StageBuilder.ShuffleInput(shuffleId, _) => shuffleId
-        }
-
-        if (dependentStages.lengthIs < 2) {
+      case Some(_: Plan.JoinOp[_, _, _]) =>
+        // Resolve explicit left/right tagged inputs and read exactly those shuffles
+        val tagged = stageInfo.inputSources.collect { case t: StageBuilder.TaggedShuffleFrom => t }
+        val leftTagged = tagged.find(_.side == StageBuilder.Side.Left).getOrElse(
+          throw new IllegalStateException(s"Join missing Left input for stage ${stageInfo.id.toInt}")
+        )
+        val rightTagged = tagged.find(_.side == StageBuilder.Side.Right).getOrElse(
+          throw new IllegalStateException(s"Join missing Right input for stage ${stageInfo.id.toInt}")
+        )
+        val leftShuffleId = stageToShuffleId.getOrElse(
+          leftTagged.stageId,
           throw new IllegalStateException(
-            s"Join operation requires 2 shuffle inputs, got ${dependentStages.length}",
-          )
-        }
-
-        val priorShuffles: Seq[ShuffleId] =
-          stageToShuffleId.toSeq
-            .collect { case (sid, id) if sid.toInt < stageInfo.id.toInt => (sid.toInt, id) }
-            .sortBy(_._1)
-            .map(_._2)
-
-        val leftShuffleId =
-          priorShuffles.headOption
-            .orElse(dependentStages.headOption)
-            .getOrElse(
-              throw new IllegalStateException(
-                s"No left shuffle ID found for join at stage ${stageInfo.id.toInt}",
-              ),
-            )
-
-        val rightShuffleId =
-          priorShuffles
-            .lift(1)
-            .orElse(dependentStages.lift(1))
-            .getOrElse(
-              throw new IllegalStateException(
-                s"No right shuffle ID found for join at stage ${stageInfo.id.toInt}",
-              ),
-            )
-
-        // Read left and right data separately from their respective shuffle outputs
+            s"Missing shuffle id for Left upstream stage ${leftTagged.stageId.toInt}",
+          ),
+        )
+        val rightShuffleId = stageToShuffleId.getOrElse(
+          rightTagged.stageId,
+          throw new IllegalStateException(
+            s"Missing shuffle id for Right upstream stage ${rightTagged.stageId.toInt}",
+          ),
+        )
+        val numPartitions = leftTagged.numPartitions // assume both sides same for now
         val leftData = (0 until numPartitions).flatMap { partitionId =>
           ShuffleManager
             .readShufflePartition[Any, Any](leftShuffleId, PartitionId(partitionId))
@@ -336,51 +328,27 @@ object DAGScheduler extends StrictLogging:
         }
         Seq(Partition(joinedData.toSeq))
 
-      case Some(cogroupOp: Plan.CoGroupOp[_, _, _]) =>
-        // For cogroup operations, we need to read left and right shuffle data separately
-        // Determine partition count from inputs (fallback to config)
-        val numPartitions: Int =
-          stageInfo.inputSources
-            .collectFirst { case StageBuilder.ShuffleInput(_, n) => n }
-            .getOrElse(SparkletConf.get.defaultShufflePartitions)
-
-        // Get the dependent stages in order (left stage first, then right stage)
-        val dependentStages = stageInfo.inputSources.collect {
-          case StageBuilder.ShuffleInput(shuffleId, _) => shuffleId
-        }
-
-        if (dependentStages.lengthIs < 2) {
+      case Some(_: Plan.CoGroupOp[_, _, _]) =>
+        val tagged = stageInfo.inputSources.collect { case t: StageBuilder.TaggedShuffleFrom => t }
+        val leftTagged = tagged.find(_.side == StageBuilder.Side.Left).getOrElse(
+          throw new IllegalStateException(s"Cogroup missing Left input for stage ${stageInfo.id.toInt}")
+        )
+        val rightTagged = tagged.find(_.side == StageBuilder.Side.Right).getOrElse(
+          throw new IllegalStateException(s"Cogroup missing Right input for stage ${stageInfo.id.toInt}")
+        )
+        val leftShuffleId = stageToShuffleId.getOrElse(
+          leftTagged.stageId,
           throw new IllegalStateException(
-            s"Cogroup operation requires 2 shuffle inputs, got ${dependentStages.length}",
-          )
-        }
-
-        val priorShuffles: Seq[ShuffleId] =
-          stageToShuffleId.toSeq
-            .collect { case (sid, id) if sid.toInt < stageInfo.id.toInt => (sid.toInt, id) }
-            .sortBy(_._1)
-            .map(_._2)
-
-        val leftShuffleId =
-          priorShuffles.headOption
-            .orElse(dependentStages.headOption)
-            .getOrElse(
-              throw new IllegalStateException(
-                s"No left shuffle ID found for cogroup at stage ${stageInfo.id.toInt}",
-              ),
-            )
-
-        val rightShuffleId =
-          priorShuffles
-            .lift(1)
-            .orElse(dependentStages.lift(1))
-            .getOrElse(
-              throw new IllegalStateException(
-                s"No right shuffle ID found for cogroup at stage ${stageInfo.id.toInt}",
-              ),
-            )
-
-        // Read left and right data separately from their respective shuffle outputs
+            s"Missing shuffle id for Left upstream stage ${leftTagged.stageId.toInt}",
+          ),
+        )
+        val rightShuffleId = stageToShuffleId.getOrElse(
+          rightTagged.stageId,
+          throw new IllegalStateException(
+            s"Missing shuffle id for Right upstream stage ${rightTagged.stageId.toInt}",
+          ),
+        )
+        val numPartitions = leftTagged.numPartitions
         val leftData = (0 until numPartitions).flatMap { partitionId =>
           ShuffleManager
             .readShufflePartition[Any, Any](leftShuffleId, PartitionId(partitionId))
