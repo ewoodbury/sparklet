@@ -83,4 +83,25 @@ class TestLocalTransformations extends AnyFlatSpec with Matchers {
 
     result shouldEqual expected
   }
+
+  it should "union two branches after independent transforms (correct concatenation)" in {
+    val left = toDistCollection(Seq(1, 2, 3)).map(_ * 10) // 10,20,30
+    val right = toDistCollection(Seq(4, 5)).filter(_ % 2 == 1).map(_ + 100) // 5 -> 105
+
+    val union = left.union(right)
+    val result = union.collect()
+
+    result shouldEqual Seq(10, 20, 30, 105)
+  }
+
+  it should "preserve prior narrow ops across multiple unions" in {
+    val a = toDistCollection(Seq(1, 2)).map(_ + 1) // 2,3
+    val b = toDistCollection(Seq(3)).map(_ * 2)   // 6
+    val c = toDistCollection(Seq(7)).filter(_ > 10) // empty
+
+    val u1 = a.union(b) // 2,3,6
+    val u2 = u1.union(c) // 2,3,6
+
+    u2.collect() shouldEqual Seq(2, 3, 6)
+  }
 }

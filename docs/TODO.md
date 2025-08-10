@@ -13,9 +13,8 @@
 - [x] Thread-safe `ShuffleManager`
   - [x] Use concurrent map with thread locks
   - [x] Re-enable `Test / parallelExecution := true` when safe
-- [ ] Union correctness
-  - [ ] Implement union as true concatenation of inputs (not “pick left”)
-  - [ ] Optionally rebalance partitions per config
+- [x] Union correctness
+  - [x] Implement union as true concatenation of inputs (not “pick left”)
 - [ ] Explicit join/cogroup inputs
   - [ ] Carry explicit left/right `ShuffleId`s through `StageInfo.inputSources`
   - [ ] Remove heuristic lookup in `DAGScheduler` for join/cogroup

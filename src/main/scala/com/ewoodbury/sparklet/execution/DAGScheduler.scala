@@ -108,12 +108,16 @@ object DAGScheduler extends StrictLogging:
    */
   private def getInputPartitionsForStage(
       stageInfo: StageBuilder.StageInfo,
-      @annotation.unused stageResults: mutable.Map[StageId, Seq[Partition[_]]],
+      stageResults: mutable.Map[StageId, Seq[Partition[_]]],
       stageToShuffleId: mutable.Map[StageId, ShuffleId],
   ): Seq[Partition[_]] = {
     stageInfo.inputSources.flatMap {
       case StageBuilder.SourceInput(partitions) =>
         partitions // No cast needed
+
+      case StageBuilder.StageOutput(depStageId) =>
+        // Read the already computed output of the dependent stage
+        stageResults.getOrElse(depStageId, Seq.empty[Partition[_]])
 
       case StageBuilder.ShuffleInput(plannedShuffleId, numPartitions) =>
         // For join operations, we need to handle multiple shuffle inputs differently

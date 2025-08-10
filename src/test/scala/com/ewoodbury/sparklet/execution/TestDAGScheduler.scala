@@ -109,4 +109,23 @@ class TestDAGScheduler extends AnyFlatSpec with Matchers with StrictLogging {
       logger.debug(s"Mixed transformations result: $result")
     }
   }
+
+  it should "correctly concatenate results for union of transformed branches" in {
+    ShuffleManager.clear() // Clean state for test isolation
+    val left = toDistCollection(Seq(1, 2, 3)).map(_ * 2) // 2,4,6
+    val right = toDistCollection(Seq(4, 5)).filter(_ % 2 == 1) // 5
+
+    val result = left.union(right).collect()
+    result shouldBe Seq(2, 4, 6, 5)
+  }
+
+  it should "allow union chaining and still use staged outputs" in {
+    ShuffleManager.clear()
+    val a = toDistCollection(Seq(1, 2))
+    val b = toDistCollection(Seq(3)).map(_ + 10) // 13
+    val c = toDistCollection(Seq(4)).filter(_ > 10) // empty
+
+    val res = a.union(b).union(c).collect()
+    res shouldBe Seq(1, 2, 13)
+  }
 } 

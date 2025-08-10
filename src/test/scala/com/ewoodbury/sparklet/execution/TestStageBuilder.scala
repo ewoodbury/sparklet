@@ -184,6 +184,10 @@ class TestStageBuilder extends AnyFlatSpec with Matchers {
     val unionStage = stageGraph.stages(StageId(2))
     unionStage.isShuffleStage shouldBe false
     unionStage.inputSources should have length 2 // Reads from both sources
+
+    // Ensure union reads from upstream stage outputs, not re-reading original sources
+    val inputStages = unionStage.inputSources.collect { case StageBuilder.StageOutput(sid) => sid }
+    inputStages.toSet shouldBe Set(StageId(0), StageId(1))
     
     // Union stage should depend on both source stages
     stageGraph.dependencies(StageId(2)) should contain(StageId(0))

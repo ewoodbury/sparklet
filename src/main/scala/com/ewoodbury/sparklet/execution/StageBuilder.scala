@@ -38,6 +38,12 @@ object StageBuilder:
   case class ShuffleInput(shuffleId: ShuffleId, numPartitions: Int) extends InputSource
 
   /**
+   * References the runtime output of a previously computed stage. Used for operations like union
+   * that need to concatenate upstream results without reshuffling.
+   */
+  case class StageOutput(stageId: StageId) extends InputSource
+
+  /**
    * Complete stage execution graph with dependencies.
    */
   case class StageGraph(
@@ -202,16 +208,16 @@ object StageBuilder:
         val leftStageId = buildStagesRecursive(ctx, left, stageMap, dependencies)
         val rightStageId = buildStagesRecursive(ctx, right, stageMap, dependencies)
 
-        // Union creates a new stage that reads from both input stages
+        // Union creates a new narrow stage that reads outputs from both input stages
         val unionStageId = ctx.freshId()
         val unionStage = Stage.SingleOpStage[Any, Any](identity)
 
-        // This is a simplification - in a real implementation, union would need special handling
-        // For now, we'll just pick the left stage (this needs refinement)
+        // Correct behavior: explicitly read from the outputs of the left and right stages
+        // rather than re-reading their original sources.
         stageMap(unionStageId) = StageInfo(
           id = unionStageId,
           stage = unionStage,
-          inputSources = stageMap(leftStageId).inputSources ++ stageMap(rightStageId).inputSources,
+          inputSources = Seq(StageOutput(leftStageId), StageOutput(rightStageId)),
           isShuffleStage = false,
           shuffleId = None,
           shuffleOperation = None,
