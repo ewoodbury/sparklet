@@ -3,6 +3,7 @@ package com.ewoodbury.sparklet.execution
 import com.typesafe.scalalogging.{Logger, StrictLogging}
 
 import com.ewoodbury.sparklet.core.{Partition, Plan}
+import com.ewoodbury.sparklet.runtime.api.SparkletRuntime
 
 /**
  * A Task represents a unit of computation that can be run on an executor. It operates on a single
@@ -130,7 +131,9 @@ object Task extends StrictLogging:
 
     override def run(): Partition[A] = {
       taskLogger.debug(s"[${Thread.currentThread().getName}] DAGTask executing DAG")
-      val results = DAGScheduler.execute(plan)
+      val rt = SparkletRuntime.get
+      val scheduler = new DAGScheduler(rt.shuffle, rt.scheduler, rt.partitioner)
+      val results = scheduler.execute(plan)
       Partition(results.toSeq)
     }
 

@@ -3,6 +3,7 @@ package com.ewoodbury.sparklet.core
 import com.typesafe.scalalogging.StrictLogging
 
 import com.ewoodbury.sparklet.execution.{DAGScheduler, Executor, Task, TaskScheduler}
+import com.ewoodbury.sparklet.runtime.api.SparkletRuntime
 
 /**
  * A lazy, immutable representation of a "distributed" collection. Operations build up a Plan,
@@ -160,7 +161,9 @@ final case class DistCollection[A](plan: Plan[A]) extends StrictLogging:
     if (DAGScheduler.requiresDAGScheduling(this.plan)) {
       // Use DAGScheduler for plans with shuffle operations
       logger.debug("collect(): using DAGScheduler (plan contains shuffle)")
-      DAGScheduler.execute(this.plan)
+      val rt = SparkletRuntime.get
+      val scheduler = new DAGScheduler(rt.shuffle, rt.scheduler, rt.partitioner)
+      scheduler.execute(this.plan)
     } else {
       // Use legacy single-stage execution for narrow-only operations
       logger.debug("collect(): using single-stage executor (narrow-only plan)")
