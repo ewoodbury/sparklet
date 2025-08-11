@@ -28,7 +28,7 @@
 ## P1 — Extensibility & Module Boundaries (next)
 - [ ] Define runtime and shuffle SPIs
   - [ ] `TaskScheduler[F[_]]`, `ExecutorBackend`, `ShuffleService`, `Partitioner`
-  - [ ] DAG scheduler depends only on SPIp
+  - [ ] DAG scheduler depends only on SPIs
 - [ ] Hide current implementations behind SPIs
   - [ ] `runtime-local`: thread pool scheduler/executor
   - [ ] `shuffle-local`: in-memory shuffle storage
