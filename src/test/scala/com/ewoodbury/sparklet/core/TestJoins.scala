@@ -3,7 +3,7 @@ package com.ewoodbury.sparklet.core
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.ewoodbury.sparklet.execution.ShuffleManager
+import com.ewoodbury.sparklet.runtime.api.SparkletRuntime
 
 class TestJoins extends AnyFlatSpec with Matchers {
 
@@ -15,7 +15,7 @@ class TestJoins extends AnyFlatSpec with Matchers {
     // rather than the explicit left/right inputs.
 
     // Arrange
-    ShuffleManager.clear()
+    SparkletRuntime.get.shuffle.clear()
 
     val left  = toDistCollection(Seq("a" -> 1))
     val right = toDistCollection(Seq("a" -> 2))
@@ -43,7 +43,7 @@ class TestJoins extends AnyFlatSpec with Matchers {
 
   it should "perform inner join as cartesian product for matching keys" in {
     // Arrange
-    ShuffleManager.clear()
+    SparkletRuntime.get.shuffle.clear()
 
     val left  = toDistCollection(Seq("a" -> 1, "a" -> 3, "b" -> 7))
     val right = toDistCollection(Seq("a" -> 2, "a" -> 4, "c" -> 9))
@@ -68,7 +68,7 @@ class TestJoins extends AnyFlatSpec with Matchers {
 
   it should "handle multi-key joins with cartesian product per key" in {
     // Arrange
-    ShuffleManager.clear()
+    SparkletRuntime.get.shuffle.clear()
 
     val left  = toDistCollection(Seq("a" -> 1, "a" -> 3, "b" -> 5))
     val right = toDistCollection(Seq("a" -> 2, "a" -> 4, "b" -> 6, "b" -> 7))
@@ -100,7 +100,7 @@ class TestJoins extends AnyFlatSpec with Matchers {
 
   it should "return empty results when either side is empty" in {
     // Arrange
-    ShuffleManager.clear()
+    SparkletRuntime.get.shuffle.clear()
 
     val nonEmpty = toDistCollection(Seq("x" -> 1, "y" -> 2))
     val emptyDC  = toDistCollection(Seq.empty[(String, Int)])

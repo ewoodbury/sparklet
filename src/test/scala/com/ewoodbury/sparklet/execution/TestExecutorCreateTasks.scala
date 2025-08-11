@@ -5,6 +5,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.ewoodbury.sparklet.core.{DistCollection, Partition, Plan}
+import com.ewoodbury.sparklet.runtime.api.SparkletRuntime
 
 /**
   * Tests for Executor.createTasks()
@@ -22,7 +23,7 @@ class TestExecutorCreateTasks extends AnyFlatSpec with Matchers with BeforeAndAf
 
   override def beforeEach(): Unit = {
     // Clear shuffle data between tests to avoid interference
-    ShuffleManager.clear()
+    SparkletRuntime.get.shuffle.clear()
   }
 
   /**
