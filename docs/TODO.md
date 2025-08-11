@@ -15,9 +15,9 @@
   - [x] Re-enable `Test / parallelExecution := true` when safe
 - [x] Union correctness
   - [x] Implement union as true concatenation of inputs (not “pick left”)
-- [ ] Explicit join/cogroup inputs
-  - [ ] Carry explicit left/right `ShuffleId`s through `StageInfo.inputSources`
-  - [ ] Remove heuristic lookup in `DAGScheduler` for join/cogroup
+- [x] Explicit join/cogroup inputs
+  - [x] Carry explicit left/right `ShuffleId`s through `StageInfo.inputSources`
+  - [x] Remove heuristic lookup in `DAGScheduler` for join/cogroup
 - [ ] Join semantics
   - [ ] Implement correct inner join: cartesian product for matching keys (not head-only)
 - [ ] Remove stage ID as planned shuffle ID coupling
@@ -27,7 +27,7 @@
 ## P1 — Extensibility & Module Boundaries (next)
 - [ ] Define runtime and shuffle SPIs
   - [ ] `TaskScheduler[F[_]]`, `ExecutorBackend`, `ShuffleService`, `Partitioner`
-  - [ ] DAG scheduler depends only on SPIs
+  - [ ] DAG scheduler depends only on SPIp
 - [ ] Hide current implementations behind SPIs
   - [ ] `runtime-local`: thread pool scheduler/executor
   - [ ] `shuffle-local`: in-memory shuffle storage
