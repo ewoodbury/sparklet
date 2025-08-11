@@ -16,6 +16,10 @@ object SparkletRuntime:
       partitioner = new HashPartitioner,
     )
 
+  // Optional per-thread override to isolate tests or specific executions
+  private val threadLocal: ThreadLocal[RuntimeComponents | Null] =
+    new ThreadLocal[RuntimeComponents | Null]()
+
   final case class RuntimeComponents(
       scheduler: TaskScheduler,
       executor: ExecutorBackend,
@@ -23,6 +27,18 @@ object SparkletRuntime:
       partitioner: Partitioner,
   )
 
-  def get: RuntimeComponents = current
+  def get: RuntimeComponents = {
+    val tl = threadLocal.get()
+    if tl != null then tl else current
+  }
+
+  /** Sets the global runtime components (visible to all threads that don't override). */
   def set(components: RuntimeComponents): Unit = current = components
+
+  /** Sets runtime components only for the current thread. */
+  def setForCurrentThread(components: RuntimeComponents): Unit =
+    threadLocal.set(components)
+
+  /** Clears the current-thread override, falling back to the global components. */
+  def clearForCurrentThread(): Unit = threadLocal.remove()
 

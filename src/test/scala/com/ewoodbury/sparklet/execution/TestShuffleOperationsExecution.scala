@@ -4,12 +4,13 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.ewoodbury.sparklet.core.{DistCollection, Partition, Plan}
+import com.ewoodbury.sparklet.runtime.api.SparkletRuntime
 
 class TestShuffleOperationsExecution extends AnyFlatSpec with Matchers {
   val toDistCollection: [T] => (seq: Seq[T]) => DistCollection[T] = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
 
   "Shuffle operations execution" should "execute groupByKey operations correctly" in {
-    ShuffleManager.clear() // Clean state
+    SparkletRuntime.get.shuffle.clear() // Clean state
     val source = toDistCollection(Seq(1 -> "one", 2 -> "two", 1 -> "uno"))
     val result = source.groupByKey.collect()
     
@@ -22,7 +23,7 @@ class TestShuffleOperationsExecution extends AnyFlatSpec with Matchers {
   }
 
   it should "execute reduceByKey operations correctly" in {
-    ShuffleManager.clear()
+    SparkletRuntime.get.shuffle.clear()
     val source = toDistCollection(Seq("one" -> 1, "one" -> 2, "two" -> 3, "one" -> 4))
     val result = source.reduceByKey((a: Int, b: Int) => a + b).collect()
     
@@ -34,7 +35,7 @@ class TestShuffleOperationsExecution extends AnyFlatSpec with Matchers {
   }
 
   it should "execute sortBy operations correctly" in {
-    ShuffleManager.clear()
+    SparkletRuntime.get.shuffle.clear()
     val source = toDistCollection(Seq(3, 1, 4, 1, 5, 9, 2, 6))
     val result = source.sortBy(identity).collect()
     
@@ -42,7 +43,7 @@ class TestShuffleOperationsExecution extends AnyFlatSpec with Matchers {
   }
 
   it should "execute sortBy with custom key function correctly" in {
-    ShuffleManager.clear()
+    SparkletRuntime.get.shuffle.clear()
     val source = toDistCollection(Seq("apple", "pie", "a", "bb"))
     val result = source.sortBy(_.length).collect()
     
@@ -50,7 +51,7 @@ class TestShuffleOperationsExecution extends AnyFlatSpec with Matchers {
   }
 
   it should "handle empty collections in shuffle operations" in {
-    ShuffleManager.clear()
+    SparkletRuntime.get.shuffle.clear()
     val emptySource = toDistCollection(Seq.empty[(String, Int)])
     
     val groupedResult = emptySource.groupByKey.collect()
@@ -65,7 +66,7 @@ class TestShuffleOperationsExecution extends AnyFlatSpec with Matchers {
   }
 
   it should "handle single-element collections correctly" in {
-    ShuffleManager.clear()
+    SparkletRuntime.get.shuffle.clear()
     val singleKV = toDistCollection(Seq("key" -> 42))
     val groupedResult = singleKV.groupByKey.collect().toMap
     val reducedResult = singleKV.reduceByKey((a: Int, b: Int) => a + b).collect().toMap
@@ -79,7 +80,7 @@ class TestShuffleOperationsExecution extends AnyFlatSpec with Matchers {
   }
 
   it should "handle duplicate keys correctly in all shuffle operations" in {
-    ShuffleManager.clear()
+    SparkletRuntime.get.shuffle.clear()
     val source = toDistCollection(Seq("x" -> 10, "y" -> 20, "x" -> 30, "y" -> 40, "x" -> 50))
     
     // Test groupByKey with duplicates
@@ -95,7 +96,7 @@ class TestShuffleOperationsExecution extends AnyFlatSpec with Matchers {
   }
 
   it should "handle large datasets efficiently" in {
-    ShuffleManager.clear()
+    SparkletRuntime.get.shuffle.clear()
     // Create a larger dataset to test performance and correctness
     val largeData = (1 to 100).map(i => (i % 10) -> i)
     val source = toDistCollection(largeData)
@@ -113,7 +114,7 @@ class TestShuffleOperationsExecution extends AnyFlatSpec with Matchers {
   }
 
   it should "execute operations with complex value types correctly" in {
-    ShuffleManager.clear()
+    SparkletRuntime.get.shuffle.clear()
     case class User(name: String, age: Int)
     val users = Seq(
       "dept1" -> User("Alice", 25),
@@ -131,7 +132,7 @@ class TestShuffleOperationsExecution extends AnyFlatSpec with Matchers {
   }
 
   it should "handle error conditions gracefully" in {
-    ShuffleManager.clear()
+    SparkletRuntime.get.shuffle.clear()
     // Test with operations that might fail
     val source = toDistCollection(Seq("positive" -> 5, "zero" -> 0, "negative" -> -3))
     
