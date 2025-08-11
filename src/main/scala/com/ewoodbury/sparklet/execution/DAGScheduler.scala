@@ -312,21 +312,14 @@ object DAGScheduler extends StrictLogging:
         val leftByKey = leftData.groupBy(_._1)
         val rightByKey = rightData.groupBy(_._1)
 
-        // Perform inner join - only keep keys that appear in both sides
-        val joinedData = leftByKey.flatMap { case (key, leftValues) =>
-          rightByKey.get(key).map { rightValues =>
-            // For simplicity, take the first value from each side
-            // In a full implementation, this would be a cartesian product
-            val leftValue = leftValues.headOption
-              .map(_._2)
-              .getOrElse(throw new NoSuchElementException("No left value"))
-            val rightValue = rightValues.headOption
-              .map(_._2)
-              .getOrElse(throw new NoSuchElementException("No right value"))
-            (key, (leftValue, rightValue))
-          }
-        }
-        Seq(Partition(joinedData.toSeq))
+        // Perform inner join with cartesian product for matching keys
+        val joinedData = for {
+          (key, leftValues) <- leftByKey.toSeq
+          rightValues <- rightByKey.get(key).toSeq
+          leftValue <- leftValues.map(_._2)
+          rightValue <- rightValues.map(_._2)
+        } yield (key, (leftValue, rightValue))
+        Seq(Partition(joinedData))
 
       case Some(_: Plan.CoGroupOp[_, _, _]) =>
         val tagged = stageInfo.inputSources.collect { case t: StageBuilder.TaggedShuffleFrom => t }

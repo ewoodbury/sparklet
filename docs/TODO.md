@@ -18,8 +18,8 @@
 - [x] Explicit join/cogroup inputs
   - [x] Carry explicit left/right `ShuffleId`s through `StageInfo.inputSources`
   - [x] Remove heuristic lookup in `DAGScheduler` for join/cogroup
-- [ ] Join semantics
-  - [ ] Implement correct inner join: cartesian product for matching keys (not head-only)
+- [x] Join semantics
+  - [x] Implement correct inner join: cartesian product for matching keys (not head-only)
 - [ ] Remove stage ID as planned shuffle ID coupling
   - [ ] Always use `ShuffleManager.write…` return as the real `ShuffleId`
   - [ ] Maintain `stageId -> shuffleId` mapping explicitly

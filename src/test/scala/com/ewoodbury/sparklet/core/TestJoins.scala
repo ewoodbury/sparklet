@@ -40,6 +40,75 @@ class TestJoins extends AnyFlatSpec with Matchers {
     val joinOnly = allResults.filter(_._1 === "a")
     joinOnly shouldBe Seq("a" -> (1, 2))
   }
+
+  it should "perform inner join as cartesian product for matching keys" in {
+    // Arrange
+    ShuffleManager.clear()
+
+    val left  = toDistCollection(Seq("a" -> 1, "a" -> 3, "b" -> 7))
+    val right = toDistCollection(Seq("a" -> 2, "a" -> 4, "c" -> 9))
+
+    // Act
+    val results = left.join(right).collect().toSeq
+
+    // Assert
+    val expectedForA = Seq(
+      "a" -> (1, 2),
+      "a" -> (1, 4),
+      "a" -> (3, 2),
+      "a" -> (3, 4),
+    )
+
+    val forA = results.filter(_._1 === "a")
+    forA should contain theSameElementsAs expectedForA
+
+    // Only keys present in both sides should appear (inner join semantics)
+    results.map(_._1).toSet shouldBe Set("a")
+  }
+
+  it should "handle multi-key joins with cartesian product per key" in {
+    // Arrange
+    ShuffleManager.clear()
+
+    val left  = toDistCollection(Seq("a" -> 1, "a" -> 3, "b" -> 5))
+    val right = toDistCollection(Seq("a" -> 2, "a" -> 4, "b" -> 6, "b" -> 7))
+
+    // Act
+    val results = left.join(right).collect().toSeq
+
+    // Assert per key
+    val expectedA = Seq(
+      "a" -> (1, 2),
+      "a" -> (1, 4),
+      "a" -> (3, 2),
+      "a" -> (3, 4),
+    )
+    val expectedB = Seq(
+      "b" -> (5, 6),
+      "b" -> (5, 7),
+    )
+
+    val forA = results.filter(_._1 === "a")
+    val forB = results.filter(_._1 === "b")
+
+    forA should contain theSameElementsAs expectedA
+    forB should contain theSameElementsAs expectedB
+
+    // Only keys present in both sides should appear
+    results.map(_._1).toSet shouldBe Set("a", "b")
+  }
+
+  it should "return empty results when either side is empty" in {
+    // Arrange
+    ShuffleManager.clear()
+
+    val nonEmpty = toDistCollection(Seq("x" -> 1, "y" -> 2))
+    val emptyDC  = toDistCollection(Seq.empty[(String, Int)])
+
+    // Act + Assert
+    nonEmpty.join(emptyDC).collect().toSeq shouldBe empty
+    emptyDC.join(nonEmpty).collect().toSeq shouldBe empty
+  }
 }
 
 
