@@ -2,7 +2,7 @@ package com.ewoodbury.sparklet.execution
 
 import scala.collection.mutable
 
-import com.ewoodbury.sparklet.core.{Partition, Plan, ShuffleId, SparkletConf, StageId}
+import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
 
 @SuppressWarnings(
   Array(
@@ -26,7 +26,6 @@ object StageBuilder:
       stage: Stage[_, _],
       inputSources: Seq[InputSource], // What this stage reads from
       isShuffleStage: Boolean,
-      shuffleId: Option[ShuffleId], // For stages that produce shuffle output
       shuffleOperation: Option[Plan[_]], // The original Plan operation for shuffle stages
   )
 
@@ -35,7 +34,7 @@ object StageBuilder:
    */
   sealed trait InputSource
   case class SourceInput(partitions: Seq[Partition[_]]) extends InputSource
-  case class ShuffleInput(shuffleId: ShuffleId, numPartitions: Int) extends InputSource
+  case class ShuffleFrom(stageId: StageId, numPartitions: Int) extends InputSource
 
   /**
    * Side tag to disambiguate multi-input wide operations (e.g., join/cogroup).
@@ -110,7 +109,6 @@ object StageBuilder:
           stage = stage,
           inputSources = Seq(SourceInput(source.partitions)),
           isShuffleStage = false,
-          shuffleId = None,
           shuffleOperation = None,
         )
         stageId
@@ -231,7 +229,6 @@ object StageBuilder:
           stage = unionStage,
           inputSources = Seq(StageOutput(leftStageId), StageOutput(rightStageId)),
           isShuffleStage = false,
-          shuffleId = None,
           shuffleOperation = None,
         )
 
@@ -298,7 +295,6 @@ object StageBuilder:
           stage = joinStage,
           inputSources = shuffleInputSources,
           isShuffleStage = true,
-          shuffleId = Some(ShuffleId.fromStageId(joinStageId)), // Use join stage ID as shuffle ID
           shuffleOperation = Some(joinOp), // Store the join operation for execution
         )
 
@@ -328,8 +324,6 @@ object StageBuilder:
           stage = cogroupStage,
           inputSources = shuffleInputSources,
           isShuffleStage = true,
-          shuffleId =
-            Some(ShuffleId.fromStageId(cogroupStageId)), // Use cogroup stage ID as shuffle ID
           shuffleOperation = Some(cogroupOp), // Store the cogroup operation for execution
         )
 
@@ -356,22 +350,14 @@ object StageBuilder:
       // Can't extend a shuffle stage, create a new one
       val newStageId = ctx.freshId()
 
-      // Set up input sources to read from the shuffle output of the source stage
-      val shuffleInputSources = sourceStage.shuffleId match {
-        case Some(shuffleId) =>
-          Seq(ShuffleInput(shuffleId, SparkletConf.get.defaultShufflePartitions))
-        case None =>
-          throw new IllegalStateException(
-            s"Shuffle stage ${sourceStageId.toInt} has no shuffle ID",
-          )
-      }
+      // Set up input sources to read from the runtime output of the source stage
+      val inputSources = Seq(StageOutput(sourceStageId))
 
       stageMap(newStageId) = StageInfo(
         id = newStageId,
         stage = newOperation,
-        inputSources = shuffleInputSources,
+        inputSources = inputSources,
         isShuffleStage = false,
-        shuffleId = None,
         shuffleOperation = None,
       )
 
@@ -406,8 +392,6 @@ object StageBuilder:
       shuffleOperation: Option[Plan[_]] = None,
   ): StageId = {
     val shuffleStageId = ctx.freshId()
-    val shuffleId =
-      ShuffleId.fromStageId(sourceStageId) // Use source stage ID as shuffle ID for consistency
 
     // Create a placeholder stage for shuffle operations
     val shuffleStage =
@@ -416,14 +400,13 @@ object StageBuilder:
     /* Set up shuffle input source - the shuffle stage reads from the shuffle data produced by the
      * source stage */
     val numPartitions = SparkletConf.get.defaultShufflePartitions
-    val shuffleInputSources = Seq(ShuffleInput(shuffleId, numPartitions))
+    val shuffleInputSources = Seq(ShuffleFrom(sourceStageId, numPartitions))
 
     stageMap(shuffleStageId) = StageInfo(
       id = shuffleStageId,
       stage = shuffleStage,
       inputSources = shuffleInputSources,
       isShuffleStage = true,
-      shuffleId = Some(shuffleId),
       shuffleOperation = shuffleOperation,
     )
 

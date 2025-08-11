@@ -20,9 +20,10 @@
   - [x] Remove heuristic lookup in `DAGScheduler` for join/cogroup
 - [x] Join semantics
   - [x] Implement correct inner join: cartesian product for matching keys (not head-only)
-- [ ] Remove stage ID as planned shuffle ID coupling
-  - [ ] Always use `ShuffleManager.write…` return as the real `ShuffleId`
-  - [ ] Maintain `stageId -> shuffleId` mapping explicitly
+- [x] Remove stage ID as planned shuffle ID coupling
+  - [x] Always use `ShuffleManager.write…` return as the real `ShuffleId`, no more relying on latest shuffle heuristic
+  - [x] Maintain `stageId -> shuffleId` mapping explicitly
+  - [x] Enable Shuffle IDs to only be touched by runtime, fully decoupled from query planning
 
 ## P1 — Extensibility & Module Boundaries (next)
 - [ ] Define runtime and shuffle SPIs

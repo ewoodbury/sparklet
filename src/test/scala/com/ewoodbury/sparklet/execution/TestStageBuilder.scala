@@ -3,7 +3,7 @@ package com.ewoodbury.sparklet.execution
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.ewoodbury.sparklet.core.{Partition, Plan, ShuffleId, StageId}
+import com.ewoodbury.sparklet.core.{Partition, Plan, StageId}
 
 @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
 /**
@@ -36,7 +36,6 @@ class TestStageBuilder extends AnyFlatSpec with Matchers {
     val stageInfo = stageGraph.stages(StageId(0))
     stageInfo.id shouldBe StageId(0)
     stageInfo.isShuffleStage shouldBe false
-    stageInfo.shuffleId shouldBe Option.empty[Int]
     stageInfo.inputSources should have length 1
     stageInfo.inputSources.head shouldBe a[StageBuilder.SourceInput]
   }
@@ -58,7 +57,6 @@ class TestStageBuilder extends AnyFlatSpec with Matchers {
     val sourceStage = stageGraph.stages(StageId(0))
     sourceStage.id shouldBe StageId(0)
     sourceStage.isShuffleStage shouldBe false
-    sourceStage.shuffleId shouldBe Option.empty[Int]
     sourceStage.inputSources should have length 1
     sourceStage.inputSources.head shouldBe a[StageBuilder.SourceInput]
     
@@ -66,13 +64,12 @@ class TestStageBuilder extends AnyFlatSpec with Matchers {
     val shuffleStage = stageGraph.stages(StageId(1))
     shuffleStage.id shouldBe StageId(1)
     shuffleStage.isShuffleStage shouldBe true
-    shuffleStage.shuffleId shouldBe Some(0) // Uses source stage ID as shuffle ID
     shuffleStage.shuffleOperation shouldBe Some(groupByKeyPlan)
     shuffleStage.inputSources should have length 1
-    shuffleStage.inputSources.head shouldBe a[StageBuilder.ShuffleInput]
+    shuffleStage.inputSources.head shouldBe a[StageBuilder.ShuffleFrom]
     
-    val shuffleInput = shuffleStage.inputSources.head.asInstanceOf[StageBuilder.ShuffleInput]
-    shuffleInput.shuffleId shouldBe ShuffleId(0)
+    val shuffleInput = shuffleStage.inputSources.head.asInstanceOf[StageBuilder.ShuffleFrom]
+    shuffleInput.stageId shouldBe StageId(0)
     shuffleInput.numPartitions shouldBe 4
     
     // Check dependencies
@@ -94,7 +91,7 @@ class TestStageBuilder extends AnyFlatSpec with Matchers {
     val shuffleStage = stageGraph.stages(StageId(1))
     shuffleStage.isShuffleStage shouldBe true
     shuffleStage.shuffleOperation shouldBe Some(reduceByKeyPlan)
-    shuffleStage.inputSources.head shouldBe a[StageBuilder.ShuffleInput]
+    shuffleStage.inputSources.head shouldBe a[StageBuilder.ShuffleFrom]
   }
 
   it should "create shuffle stages for sortBy operations" in {
@@ -140,7 +137,7 @@ class TestStageBuilder extends AnyFlatSpec with Matchers {
     val mapStage = stageGraph.stages(StageId(2))
     mapStage.isShuffleStage shouldBe false
     mapStage.inputSources should have length 1
-    mapStage.inputSources.head shouldBe a[StageBuilder.ShuffleInput]
+    mapStage.inputSources.head shouldBe a[StageBuilder.StageOutput]
     
     // Check dependencies: map stage depends on shuffle stage, shuffle stage depends on source stage
     stageGraph.dependencies should have size 2

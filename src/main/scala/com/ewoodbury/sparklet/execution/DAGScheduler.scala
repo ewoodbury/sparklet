@@ -40,8 +40,7 @@ object DAGScheduler extends StrictLogging:
 
       val dependentStages = stageGraph.dependencies.filter(_._2.contains(stageId)).keys
       val needsShuffleOutput =
-        dependentStages.exists(depStageId => stageGraph.stages(depStageId).isShuffleStage) ||
-          (stageInfo.isShuffleStage && dependentStages.nonEmpty)
+        dependentStages.exists(depStageId => stageGraph.stages(depStageId).isShuffleStage)
 
       if (needsShuffleOutput) {
         // Check if the dependent stage is a sortBy operation
@@ -120,47 +119,18 @@ object DAGScheduler extends StrictLogging:
         // Read the already computed output of the dependent stage
         stageResults.getOrElse(depStageId, Seq.empty[Partition[_]])
 
-      case StageBuilder.ShuffleInput(plannedShuffleId, numPartitions) =>
-        // For join operations, we need to handle multiple shuffle inputs differently
-        stageInfo.shuffleOperation match {
-          case Some(_: Plan.JoinOp[_, _, _]) =>
-            // This path will be covered by explicit TaggedShuffleFrom inputs; for legacy
-            // ShuffleInput under join, fall back to the most recent shuffle as before.
-            val sourceStages = stageToShuffleId.keys.filter(sid => sid.toInt < stageInfo.id.toInt)
-            val actualShuffleId =
-              sourceStages.maxOption.flatMap(stageToShuffleId.get).getOrElse(plannedShuffleId)
-            (0 until numPartitions).map { partitionIdx =>
-              ShuffleManager.readShufflePartition[Any, Any](
-                actualShuffleId,
-                PartitionId(partitionIdx),
-              )
-            }
-
-          // For Cogroup, we also need to handle multiple shuffle inputs
-          case Some(_: Plan.CoGroupOp[_, _, _]) =>
-            val sourceStages = stageToShuffleId.keys.filter(sid => sid.toInt < stageInfo.id.toInt)
-            val actualShuffleId =
-              sourceStages.maxOption.flatMap(stageToShuffleId.get).getOrElse(plannedShuffleId)
-            (0 until numPartitions).map { partitionIdx =>
-              ShuffleManager.readShufflePartition[Any, Any](
-                actualShuffleId,
-                PartitionId(partitionIdx),
-              )
-            }
-
-          case _ =>
-            // Regular shuffle operations - read from the most recent shuffle
-            val sourceStages = stageToShuffleId.keys.filter(sid => sid.toInt < stageInfo.id.toInt)
-            val actualShuffleId =
-              sourceStages.maxOption.flatMap(stageToShuffleId.get).getOrElse(plannedShuffleId)
-
-            // Shuffle data is always key-value, read as (Any, Any) since types are erased.
-            (0 until numPartitions).map { partitionIdx =>
-              ShuffleManager.readShufflePartition[Any, Any](
-                actualShuffleId,
-                PartitionId(partitionIdx),
-              )
-            }
+      case StageBuilder.ShuffleFrom(upstreamStageId, numPartitions) =>
+        val actualShuffleId = stageToShuffleId.getOrElse(
+          upstreamStageId,
+          throw new IllegalStateException(
+            s"Missing shuffle id for upstream stage ${upstreamStageId.toInt} feeding stage ${stageInfo.id.toInt}",
+          ),
+        )
+        (0 until numPartitions).map { partitionIdx =>
+          ShuffleManager.readShufflePartition[Any, Any](
+            actualShuffleId,
+            PartitionId(partitionIdx),
+          )
         }
 
       case StageBuilder.TaggedShuffleFrom(upstreamStageId, _side, numPartitions) =>
