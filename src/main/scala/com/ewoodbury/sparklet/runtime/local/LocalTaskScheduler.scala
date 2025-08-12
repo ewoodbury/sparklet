@@ -30,7 +30,6 @@ final class LocalTaskScheduler(parallelism: Int) extends TaskScheduler[IO] with 
             IO.blocking(task.run())
           }
         }
-        .map(_.toSeq)
         .guarantee(IO(logger.debug("LocalTaskScheduler: all tasks completed")))
     }
 

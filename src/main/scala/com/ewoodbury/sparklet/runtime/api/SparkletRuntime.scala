@@ -30,8 +30,7 @@ object SparkletRuntime:
   )
 
   def get: RuntimeComponents = {
-    val tl = threadLocal.get()
-    if tl != null then tl else current
+    Option(threadLocal.get()).getOrElse(current)
   }
 
   /** Sets the global runtime components (visible to all threads that don't override). */
