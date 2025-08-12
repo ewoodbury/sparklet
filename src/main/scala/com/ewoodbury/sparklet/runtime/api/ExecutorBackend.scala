@@ -11,6 +11,3 @@ trait ExecutorBackend:
    * Execute a single task and return its output partition.
    */
   def run[A, B](task: Task[A, B]): Partition[B]
-
-
-

@@ -10,9 +10,11 @@ import scala.collection.mutable
 import com.ewoodbury.sparklet.core.{Partition, PartitionId, ShuffleId}
 import com.ewoodbury.sparklet.runtime.api.{Partitioner, ShuffleService}
 
-@SuppressWarnings(Array(
-  "org.wartremover.warts.MutableDataStructures"
-))
+@SuppressWarnings(
+  Array(
+    "org.wartremover.warts.MutableDataStructures",
+  ),
+)
 final class LocalShuffleService extends ShuffleService:
   import ShuffleService.ShuffleData
 
@@ -76,7 +78,7 @@ final class LocalShuffleService extends ShuffleService:
       val storage = storageForCurrentNamespace()
       Option(storage.get(id)) match
         case Some(sd) => sd.partitionedData.size
-        case None     => throw new IllegalArgumentException(s"Shuffle ID ${id.toInt} not found")
+        case None => throw new IllegalArgumentException(s"Shuffle ID ${id.toInt} not found")
     finally readLock.unlock()
 
   def clear(): Unit =
@@ -86,4 +88,3 @@ final class LocalShuffleService extends ShuffleService:
       Option(namespaceToStorage.get(ns)).foreach(_.clear())
       ()
     finally writeLock.unlock()
-

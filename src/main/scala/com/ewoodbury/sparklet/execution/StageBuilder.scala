@@ -46,7 +46,8 @@ object StageBuilder:
    * Explicitly reference the upstream producing stage and which side it feeds for multi-input
    * shuffle operations. This avoids relying on heuristics to infer left/right shuffles.
    */
-  case class TaggedShuffleFrom(stageId: StageId, side: Side, numPartitions: Int) extends InputSource
+  case class TaggedShuffleFrom(stageId: StageId, side: Side, numPartitions: Int)
+      extends InputSource
 
   /**
    * References the runtime output of a previously computed stage. Used for operations like union
@@ -311,7 +312,8 @@ object StageBuilder:
         val cogroupStage =
           Stage.SingleOpStage[Any, Any](identity) // Placeholder for actual cogroup logic
 
-        // The cogroup stage reads from the shuffle outputs of both left and right producing stages.
+        /* The cogroup stage reads from the shuffle outputs of both left and right producing
+         * stages. */
         // Record explicit upstream stage IDs with side tags to avoid heuristic lookups later.
         val numPartitions = SparkletConf.get.defaultShufflePartitions
         val shuffleInputSources = Seq(

@@ -42,4 +42,3 @@ trait ShuffleService:
    * Clear all stored shuffle state (primarily for tests).
    */
   def clear(): Unit
-

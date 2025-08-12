@@ -1,5 +1,6 @@
 package com.ewoodbury.sparklet.execution
 
+import cats.effect.unsafe.implicits.global
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -19,7 +20,7 @@ class TestTaskScheduler extends AnyFlatSpec with Matchers {
     val mapTask3 = Task.MapTask(partition3, (x: Int) => x * 4)
     
     val tasks = Seq(mapTask1, mapTask2, mapTask3)
-    val results = SparkletRuntime.get.scheduler.submit(tasks)
+    val results = SparkletRuntime.get.scheduler.submit(tasks).unsafeRunSync()
     
     results should have length 3
     results(0).data shouldEqual Seq(2, 4, 6)
@@ -35,7 +36,7 @@ class TestTaskScheduler extends AnyFlatSpec with Matchers {
     val filterTask2 = Task.FilterTask(partition2, (x: Int) => x > 7)
     
     val tasks = Seq(filterTask1, filterTask2)
-    val results = SparkletRuntime.get.scheduler.submit(tasks)
+    val results = SparkletRuntime.get.scheduler.submit(tasks).unsafeRunSync()
     
     results should have length 2
     results(0).data shouldEqual Seq(2, 4)
@@ -50,7 +51,7 @@ class TestTaskScheduler extends AnyFlatSpec with Matchers {
     val flatMapTask2 = Task.FlatMapTask(partition2, (s: String) => Seq(s * 2))
     
     val tasks = Seq(flatMapTask1, flatMapTask2)
-    val results = SparkletRuntime.get.scheduler.submit(tasks)
+    val results = SparkletRuntime.get.scheduler.submit(tasks).unsafeRunSync()
     
     results should have length 2
     results(0).data shouldEqual Seq("a", "A", "b", "B")
@@ -61,7 +62,7 @@ class TestTaskScheduler extends AnyFlatSpec with Matchers {
     val emptyPartition = Partition(Seq.empty[Int])
     val mapTask = Task.MapTask(emptyPartition, (x: Int) => x * 2)
     
-    val results = SparkletRuntime.get.scheduler.submit(Seq(mapTask))
+    val results = SparkletRuntime.get.scheduler.submit(Seq(mapTask)).unsafeRunSync()
     
     results should have length 1
     results(0).data shouldEqual Seq.empty[Int]
@@ -71,7 +72,7 @@ class TestTaskScheduler extends AnyFlatSpec with Matchers {
     val partition = Partition(Seq(1, 2, 3))
     val mapTask = Task.MapTask(partition, (x: Int) => x.toString)
     
-    val results = SparkletRuntime.get.scheduler.submit(Seq(mapTask))
+    val results = SparkletRuntime.get.scheduler.submit(Seq(mapTask)).unsafeRunSync()
     
     results should have length 1
     results(0).data shouldEqual Seq("1", "2", "3")
@@ -87,7 +88,7 @@ class TestTaskScheduler extends AnyFlatSpec with Matchers {
     val task3 = Task.MapTask(partition3, (x: Int) => s"task3_$x")
     
     val tasks = Seq(task1, task2, task3)
-    val results = SparkletRuntime.get.scheduler.submit(tasks)
+    val results = SparkletRuntime.get.scheduler.submit(tasks).unsafeRunSync()
     
     results should have length 3
     results(0).data shouldEqual Seq("task1_1")
@@ -101,17 +102,17 @@ class TestTaskScheduler extends AnyFlatSpec with Matchers {
     
     // Test map tasks
     val mapTask = Task.MapTask(partition1, (x: Int) => x * 2)
-    val mapResults = SparkletRuntime.get.scheduler.submit(Seq(mapTask))
+    val mapResults = SparkletRuntime.get.scheduler.submit(Seq(mapTask)).unsafeRunSync()
     mapResults(0).data shouldEqual Seq(2, 4, 6, 8, 10)
     
     // Test filter tasks
     val filterTask = Task.FilterTask(partition1, (x: Int) => x % 2 == 0)
-    val filterResults = SparkletRuntime.get.scheduler.submit(Seq(filterTask))
+    val filterResults = SparkletRuntime.get.scheduler.submit(Seq(filterTask)).unsafeRunSync()
     filterResults(0).data shouldEqual Seq(2, 4)
     
     // Test flatMap tasks
     val flatMapTask = Task.FlatMapTask(partition2, (s: String) => s.split(""))
-    val flatMapResults = SparkletRuntime.get.scheduler.submit(Seq(flatMapTask))
+    val flatMapResults = SparkletRuntime.get.scheduler.submit(Seq(flatMapTask)).unsafeRunSync()
     flatMapResults(0).data shouldEqual Seq("h", "e", "l", "l", "o", "w", "o", "r", "l", "d", "t", "e", "s", "t")
   }
 
@@ -119,7 +120,7 @@ class TestTaskScheduler extends AnyFlatSpec with Matchers {
     val partitions = (1 to 10).map(i => Partition(Seq(i)))
     val tasks = partitions.map(p => Task.MapTask(p, (x: Int) => x * 10))
     
-    val results = SparkletRuntime.get.scheduler.submit(tasks)
+    val results = SparkletRuntime.get.scheduler.submit(tasks).unsafeRunSync()
     
     results should have length 10
     results.zipWithIndex.foreach { case (result, index) =>
@@ -142,7 +143,7 @@ class TestTaskScheduler extends AnyFlatSpec with Matchers {
     })
     
     val startTime = System.currentTimeMillis()
-    val results = SparkletRuntime.get.scheduler.submit(Seq(fastTask, slowTask1, slowTask2))
+    val results = SparkletRuntime.get.scheduler.submit(Seq(fastTask, slowTask1, slowTask2)).unsafeRunSync()
     val endTime = System.currentTimeMillis()
     
     results should have length 3
@@ -161,7 +162,7 @@ class TestTaskScheduler extends AnyFlatSpec with Matchers {
     val partition = Partition(Seq("hello", "world"))
     val mapTask = Task.MapTask(partition, (s: String) => s.toUpperCase(java.util.Locale.ENGLISH))
     
-    val results = SparkletRuntime.get.scheduler.submit(Seq(mapTask))
+    val results = SparkletRuntime.get.scheduler.submit(Seq(mapTask)).unsafeRunSync()
     
     results should have length 1
     results(0).data shouldEqual Seq("HELLO", "WORLD")
@@ -177,7 +178,7 @@ class TestTaskScheduler extends AnyFlatSpec with Matchers {
       s"result_$filtered"
     })
     
-    val results = SparkletRuntime.get.scheduler.submit(Seq(complexTask))
+    val results = SparkletRuntime.get.scheduler.submit(Seq(complexTask)).unsafeRunSync()
     
     results should have length 1
     results(0).data shouldEqual Seq("result_0", "result_0", "result_6", "result_8", "result_10")

@@ -1,7 +1,14 @@
 package com.ewoodbury.sparklet.runtime.api
 
+import cats.effect.IO
+
 import com.ewoodbury.sparklet.core.SparkletConf
-import com.ewoodbury.sparklet.runtime.local.{HashPartitioner, LocalExecutorBackend, LocalShuffleService, LocalTaskScheduler}
+import com.ewoodbury.sparklet.runtime.local.{
+  HashPartitioner,
+  LocalExecutorBackend,
+  LocalShuffleService,
+  LocalTaskScheduler,
+}
 
 /**
  * Global wiring holder for the active Sparklet runtime (scheduler, shuffle, etc.).
@@ -21,15 +28,14 @@ object SparkletRuntime:
     new ThreadLocal[RuntimeComponents | Null]()
 
   final case class RuntimeComponents(
-      scheduler: TaskScheduler,
+      scheduler: TaskScheduler[IO],
       executor: ExecutorBackend,
       shuffle: ShuffleService,
       partitioner: Partitioner,
   )
 
   def get: RuntimeComponents = {
-    val tl = threadLocal.get()
-    if tl != null then tl else current
+    Option(threadLocal.get()).getOrElse(current)
   }
 
   /** Sets the global runtime components (visible to all threads that don't override). */
@@ -41,4 +47,3 @@ object SparkletRuntime:
 
   /** Clears the current-thread override, falling back to the global components. */
   def clearForCurrentThread(): Unit = threadLocal.remove()
-

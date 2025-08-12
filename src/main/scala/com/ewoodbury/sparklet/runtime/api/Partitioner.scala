@@ -8,4 +8,3 @@ trait Partitioner:
    * Returns a partition index in the range [0, numPartitions).
    */
   def partition(key: Any, numPartitions: Int): Int
-
