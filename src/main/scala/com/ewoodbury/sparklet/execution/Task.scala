@@ -2,7 +2,6 @@ package com.ewoodbury.sparklet.execution
 
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-
 import com.typesafe.scalalogging.{Logger, StrictLogging}
 
 import com.ewoodbury.sparklet.core.{Partition, Plan}

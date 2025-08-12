@@ -1,7 +1,6 @@
 package com.ewoodbury.sparklet.runtime
 
 import cats.effect.IO
-import cats.effect.unsafe.implicits.global
 import org.scalatest.BeforeAndAfterEach
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -9,6 +8,7 @@ import org.scalatest.matchers.should.Matchers
 import com.ewoodbury.sparklet.core.{DistCollection, Partition, PartitionId, Plan}
 import com.ewoodbury.sparklet.execution.Task
 import com.ewoodbury.sparklet.runtime.api.*
+import com.ewoodbury.sparklet.core.ShuffleId
 
 @SuppressWarnings(Array("org.wartremover.warts.Var"))
 class TestPluggability extends AnyFlatSpec with Matchers with BeforeAndAfterEach {
@@ -47,12 +47,12 @@ class TestPluggability extends AnyFlatSpec with Matchers with BeforeAndAfterEach
       underlying.partitionByKey(data, numPartitions, partitioner)
     }
 
-    def write[K, V](shuffleData: ShuffleData[K, V]) = {
+    def write[K, V](shuffleData: ShuffleData[K, V]): ShuffleId = {
       writeCalls += 1
       underlying.write(shuffleData)
     }
 
-    def readPartition[K, V](id: com.ewoodbury.sparklet.core.ShuffleId, partitionId: PartitionId) =
+    def readPartition[K, V](id: com.ewoodbury.sparklet.core.ShuffleId, partitionId: PartitionId): Partition[(K, V)] =
       underlying.readPartition(id, partitionId)
 
     def partitionCount(id: com.ewoodbury.sparklet.core.ShuffleId): Int = underlying.partitionCount(id)

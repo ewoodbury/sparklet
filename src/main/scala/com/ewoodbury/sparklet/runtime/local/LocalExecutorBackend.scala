@@ -6,4 +6,3 @@ import com.ewoodbury.sparklet.runtime.api.ExecutorBackend
 
 final class LocalExecutorBackend extends ExecutorBackend:
   def run[A, B](task: Task[A, B]): Partition[B] = task.run()
-
