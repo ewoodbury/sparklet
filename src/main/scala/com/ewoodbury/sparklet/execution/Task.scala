@@ -1,5 +1,8 @@
 package com.ewoodbury.sparklet.execution
 
+import cats.effect.IO
+import cats.effect.unsafe.implicits.global
+
 import com.typesafe.scalalogging.{Logger, StrictLogging}
 
 import com.ewoodbury.sparklet.core.{Partition, Plan}
@@ -132,8 +135,8 @@ object Task extends StrictLogging:
     override def run(): Partition[A] = {
       taskLogger.debug(s"[${Thread.currentThread().getName}] DAGTask executing DAG")
       val rt = SparkletRuntime.get
-      val scheduler = new DAGScheduler(rt.shuffle, rt.scheduler, rt.partitioner)
-      val results = scheduler.execute(plan)
+      val scheduler = new DAGScheduler[IO](rt.shuffle, rt.scheduler, rt.partitioner)
+      val results = scheduler.execute(plan).unsafeRunSync()
       Partition(results.toSeq)
     }
 

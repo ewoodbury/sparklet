@@ -1,5 +1,7 @@
 package com.ewoodbury.sparklet.runtime
 
+import cats.effect.IO
+import cats.effect.unsafe.implicits.global
 import org.scalatest.BeforeAndAfterEach
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -21,13 +23,13 @@ class TestPluggability extends AnyFlatSpec with Matchers with BeforeAndAfterEach
     original.foreach(SparkletRuntime.set)
   }
 
-  private final class RecordingScheduler extends TaskScheduler {
+  private final class RecordingScheduler extends TaskScheduler[IO] {
     @volatile var lastSubmittedCount: Int = 0
-    def submit[A, B](tasks: Seq[Task[A, B]]): Seq[Partition[B]] = {
+    def submit[A, B](tasks: Seq[Task[A, B]]): IO[Seq[Partition[B]]] = {
       lastSubmittedCount = tasks.size
-      tasks.map(_.run())
+      IO.pure(tasks.map(_.run()))
     }
-    def shutdown(): Unit = ()
+    def shutdown(): IO[Unit] = IO.unit
   }
 
   private final class RecordingShuffle extends ShuffleService {

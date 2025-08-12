@@ -1,5 +1,7 @@
 package com.ewoodbury.sparklet.runtime.api
 
+import cats.effect.IO
+
 import com.ewoodbury.sparklet.core.SparkletConf
 import com.ewoodbury.sparklet.runtime.local.{HashPartitioner, LocalExecutorBackend, LocalShuffleService, LocalTaskScheduler}
 
@@ -21,7 +23,7 @@ object SparkletRuntime:
     new ThreadLocal[RuntimeComponents | Null]()
 
   final case class RuntimeComponents(
-      scheduler: TaskScheduler,
+      scheduler: TaskScheduler[IO],
       executor: ExecutorBackend,
       shuffle: ShuffleService,
       partitioner: Partitioner,

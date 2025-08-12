@@ -1,5 +1,7 @@
 package com.ewoodbury.sparklet.core
 
+import cats.effect.IO
+import cats.effect.unsafe.implicits.global
 import com.typesafe.scalalogging.StrictLogging
 
 import com.ewoodbury.sparklet.execution.{DAGScheduler, Executor, Task}
@@ -162,8 +164,8 @@ final case class DistCollection[A](plan: Plan[A]) extends StrictLogging:
       // Use DAGScheduler for plans with shuffle operations
       logger.debug("collect(): using DAGScheduler (plan contains shuffle)")
       val rt = SparkletRuntime.get
-      val scheduler = new DAGScheduler(rt.shuffle, rt.scheduler, rt.partitioner)
-      scheduler.execute(this.plan)
+      val scheduler = new DAGScheduler[IO](rt.shuffle, rt.scheduler, rt.partitioner)
+      scheduler.execute(this.plan).unsafeRunSync()
     } else {
       // Use legacy single-stage execution for narrow-only operations
       logger.debug("collect(): using single-stage executor (narrow-only plan)")
@@ -178,7 +180,7 @@ final case class DistCollection[A](plan: Plan[A]) extends StrictLogging:
           // returns tasks that produce the correct output type A
           val typedTasks = tasks.asInstanceOf[Seq[Task[Any, A]]]
 
-          val resultPartitions = SparkletRuntime.get.scheduler.submit(typedTasks)
+          val resultPartitions = SparkletRuntime.get.scheduler.submit(typedTasks).unsafeRunSync()
           resultPartitions.flatMap(_.data)
       }
     }

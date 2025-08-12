@@ -1,5 +1,8 @@
 package com.ewoodbury.sparklet.execution
 
+import cats.effect.kernel.Sync
+import cats.syntax.all.*
+
 import scala.collection.mutable
 
 import com.typesafe.scalalogging.StrictLogging
@@ -14,66 +17,67 @@ import com.ewoodbury.sparklet.runtime.api.{Partitioner, ShuffleService, TaskSche
     "org.wartremover.warts.Equals",
   ),
 )
-final class DAGScheduler(
+final class DAGScheduler[F[_]: Sync](
     shuffle: ShuffleService,
-    scheduler: TaskScheduler,
+    scheduler: TaskScheduler[F],
     partitioner: Partitioner,
 ) extends StrictLogging:
 
   /**
    * Executes a plan using multi-stage execution, handling shuffle boundaries.
    */
-  def execute[A](plan: Plan[A]): Iterable[A] = {
-    logger.info("DAGScheduler: starting multi-stage execution")
+  def execute[A](plan: Plan[A]): F[Iterable[A]] =
+    Sync[F].delay(logger.info("DAGScheduler: starting multi-stage execution")) *>
+      Sync[F].delay(StageBuilder.buildStageGraph(plan)).flatMap { stageGraph =>
+        Sync[F].delay(logger.debug(s"DAGScheduler: built stage graph with ${stageGraph.stages.size} stages")) *>
+          Sync[F].delay(DAGScheduler.topologicalSort(stageGraph.dependencies)).flatMap {
+            executionOrder =>
+              Sync[F].delay(logger.debug(s"DAGScheduler: execution order: ${executionOrder.map(_.toInt).mkString(" -> ")}")) *>
+                {
+                  val stageResults = mutable.Map[StageId, Seq[Partition[_]]]()
+                  val stageToShuffleId = mutable.Map[StageId, ShuffleId]()
 
-    val stageGraph = StageBuilder.buildStageGraph(plan)
-    logger.debug(s"DAGScheduler: built stage graph with ${stageGraph.stages.size} stages")
+                  // Fold over stages in F
+                  executionOrder.foldLeftM(()) { (_, stageId) =>
+                    val stageInfo = stageGraph.stages(stageId)
+                    Sync[F].delay(logger.info(s"DAGScheduler: executing stage ${stageId.toInt}")) *>
+                      Sync[F].delay(getInputPartitionsForStage(stageInfo, stageResults, stageToShuffleId)).flatMap {
+                        inputPartitions =>
+                          executeStage(stageInfo, inputPartitions, stageToShuffleId).flatMap { results =>
+                            Sync[F].delay { stageResults(stageId) = results } *>
+                              Sync[F].delay(stageGraph.dependencies.filter(_._2.contains(stageId)).keys).flatMap {
+                                dependentStages =>
+                                  val needsShuffleOutput = dependentStages.exists(depStageId => stageGraph.stages(depStageId).isShuffleStage)
+                                  if (!needsShuffleOutput) Sync[F].unit
+                                  else {
+                                    val dependentSortByStage = dependentStages.find(depStageId =>
+                                      stageGraph
+                                        .stages(depStageId)
+                                        .shuffleOperation
+                                        .exists(_.isInstanceOf[Plan.SortByOp[_, _]]),
+                                    )
+                                    val writeF: F[ShuffleId] =
+                                      if (dependentSortByStage.isDefined)
+                                        handleSortByShuffleOutput(stageInfo, results)
+                                      else
+                                        handleShuffleOutput(stageInfo, results)
 
-    val executionOrder = DAGScheduler.topologicalSort(stageGraph.dependencies)
-    logger.debug(s"DAGScheduler: execution order: ${executionOrder.map(_.toInt).mkString(" -> ")}")
-
-    val stageResults = mutable.Map[StageId, Seq[Partition[_]]]()
-    val stageToShuffleId = mutable.Map[StageId, ShuffleId]()
-
-    for (stageId <- executionOrder) {
-      logger.info(s"DAGScheduler: executing stage ${stageId.toInt}")
-      val stageInfo = stageGraph.stages(stageId)
-      val inputPartitions = getInputPartitionsForStage(stageInfo, stageResults, stageToShuffleId)
-      val results = executeStage(stageInfo, inputPartitions, stageToShuffleId)
-
-      stageResults(stageId) = results
-
-      val dependentStages = stageGraph.dependencies.filter(_._2.contains(stageId)).keys
-      val needsShuffleOutput =
-        dependentStages.exists(depStageId => stageGraph.stages(depStageId).isShuffleStage)
-
-      if (needsShuffleOutput) {
-        // Check if the dependent stage is a sortBy operation
-        val dependentSortByStage = dependentStages.find(depStageId =>
-          stageGraph
-            .stages(depStageId)
-            .shuffleOperation
-            .exists(_.isInstanceOf[Plan.SortByOp[_, _]]),
-        )
-
-        if (dependentSortByStage.isDefined) {
-          // For sortBy, we don't need to partition the data, just store it
-          val actualShuffleId = handleSortByShuffleOutput(stageInfo, results)
-          stageToShuffleId(stageId) = actualShuffleId
-        } else {
-          // Regular key-value shuffle operations
-          val actualShuffleId = handleShuffleOutput(stageInfo, results)
-          stageToShuffleId(stageId) = actualShuffleId
-        }
+                                    writeF.flatMap { actualShuffleId =>
+                                      Sync[F].delay { stageToShuffleId(stageId) = actualShuffleId }
+                                    }
+                                  }
+                              }
+                          }
+                      }
+                  }.flatMap { _ =>
+                    val finalResults = stageResults(stageGraph.finalStageId)
+                    val finalData = finalResults.flatMap(_.data.asInstanceOf[Iterable[A]])
+                    Sync[F].delay(logger.info("DAGScheduler: multi-stage execution completed")) *>
+                      Sync[F].pure(finalData)
+                  }
+                }
+          }
       }
-    }
-
-    val finalResults = stageResults(stageGraph.finalStageId)
-    val finalData = finalResults.flatMap(_.data.asInstanceOf[Iterable[A]])
-
-    logger.info("DAGScheduler: multi-stage execution completed")
-    finalData
-  }
 
   
   /**
@@ -127,24 +131,20 @@ final class DAGScheduler(
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[_]],
       stageToShuffleId: mutable.Map[StageId, ShuffleId],
-  ): Seq[Partition[_]] = {
-    if (inputPartitions.isEmpty) {
-      logger.warn(s"Stage ${stageInfo.id.toInt} has no input partitions")
-      return Seq.empty
-    }
-
-    stageInfo match {
-      case info if info.isShuffleStage =>
-        // Cast to key-value pairs for shuffle stages.
-        // For sortBy, the data is not key-value pairs, but type is still cast to (Any, Any).
-        val partitions = inputPartitions.asInstanceOf[Seq[Partition[(Any, Any)]]]
-        executeShuffleStage(info, partitions, stageToShuffleId)
-
-      case info =>
-        // Cast to a generic partition for narrow stages.
-        val anyPartitions = inputPartitions.asInstanceOf[Seq[Partition[Any]]]
-        executeNarrowStage(info, anyPartitions, stageToShuffleId)
-    }
+  ): F[Seq[Partition[_]]] = {
+    if (inputPartitions.isEmpty) then
+      Sync[F].delay(logger.warn(s"Stage ${stageInfo.id.toInt} has no input partitions")) *> Sync[F].pure(Seq.empty)
+    else
+      {
+        stageInfo match {
+          case info if info.isShuffleStage =>
+            val partitions = inputPartitions.asInstanceOf[Seq[Partition[(Any, Any)]]]
+            executeShuffleStage(info, partitions, stageToShuffleId)
+          case info =>
+            val anyPartitions = inputPartitions.asInstanceOf[Seq[Partition[Any]]]
+            executeNarrowStage(info, anyPartitions, stageToShuffleId)
+        }
+      }
   }
 
   /**
@@ -154,16 +154,12 @@ final class DAGScheduler(
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[A]],
       @annotation.unused stageToShuffleId: mutable.Map[StageId, ShuffleId],
-  ): Seq[Partition[B]] = {
-    // Cast the abstract stage to its specific A -> B transformation.
-    val stage = stageInfo.stage.asInstanceOf[Stage[A, B]]
-
-    val tasks = inputPartitions.map { partition =>
-      Task.StageTask(partition, stage)
+  ): F[Seq[Partition[_]]] =
+    {
+      val stage = stageInfo.stage.asInstanceOf[Stage[A, B]]
+      val tasks = inputPartitions.map { partition => Task.StageTask(partition, stage) }
+      scheduler.submit(tasks).map(_.asInstanceOf[Seq[Partition[_]]])
     }
-
-    scheduler.submit(tasks)
-  }
 
   /**
    * Executes a shuffle stage by applying the appropriate shuffle operation. This version uses
@@ -173,12 +169,12 @@ final class DAGScheduler(
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[(K, V)]],
       stageToShuffleId: mutable.Map[StageId, ShuffleId],
-  ): Seq[Partition[Any]] = {
-    logger.debug(
+  ): F[Seq[Partition[_]]] =
+    Sync[F].delay(logger.debug(
       s"Executing shuffle stage ${stageInfo.id.toInt} with ${inputPartitions.size} input partitions",
-    )
-
-    val resultPartitions: Seq[Partition[Any]] = stageInfo.shuffleOperation match {
+    )) *>
+      Sync[F].delay {
+        val resultPartitions: Seq[Partition[_]] = stageInfo.shuffleOperation match {
 
       // Pattern match to capture the element type `a` and sorting key type `s`.
       case Some(sortBy: Plan.SortByOp[a, s]) =>
@@ -303,10 +299,9 @@ final class DAGScheduler(
           (key, pairs.map(_._2))
         }
         Seq(Partition(groupedData.toSeq))
-    }
-
-    resultPartitions
-  }
+        }
+        resultPartitions
+      }
 
   /**
    * Handles shuffle output. The cast is necessary as the results from `executeStage` are untyped.
@@ -315,21 +310,20 @@ final class DAGScheduler(
   private def handleShuffleOutput(
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],
-  ): ShuffleId = {
-    // Shuffle data is always key-value data.
-    val keyValueResults = results.asInstanceOf[Seq[Partition[(Any, Any)]]]
-    val shuffleData = shuffle.partitionByKey[Any, Any](
-      data = keyValueResults,
-      numPartitions = SparkletConf.get.defaultShufflePartitions,
-      partitioner = partitioner,
-    )
-    val actualShuffleId = shuffle.write[Any, Any](shuffleData)
-
-    logger.debug(
-      s"Stored shuffle data for stage ${stageInfo.id.toInt} with shuffle ID ${actualShuffleId.toInt}",
-    )
-    actualShuffleId
-  }
+  ): F[ShuffleId] =
+    Sync[F].delay {
+      val keyValueResults = results.asInstanceOf[Seq[Partition[(Any, Any)]]]
+      val shuffleData = shuffle.partitionByKey[Any, Any](
+        data = keyValueResults,
+        numPartitions = SparkletConf.get.defaultShufflePartitions,
+        partitioner = partitioner,
+      )
+      val actualShuffleId = shuffle.write[Any, Any](shuffleData)
+      logger.debug(
+        s"Stored shuffle data for stage ${stageInfo.id.toInt} with shuffle ID ${actualShuffleId.toInt}",
+      )
+      actualShuffleId
+    }
 
   /**
    * Handles shuffle output for sortBy operations by mapping each data element of type T to a
@@ -339,20 +333,17 @@ final class DAGScheduler(
   private def handleSortByShuffleOutput(
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],
-  ): ShuffleId = {
-    val allData: Seq[Any] = results.flatMap(_.data)
-
-    val keyedData: Seq[(Any, Unit)] = allData.map(element => (element, ()))
-
-    val shuffleData = ShuffleService.ShuffleData(Map(PartitionId(0) -> keyedData))
-
-    val actualShuffleId = shuffle.write(shuffleData)
-
-    logger.debug(
-      s"Stored sortBy shuffle data for stage ${stageInfo.id.toInt} with shuffle ID ${actualShuffleId.toInt}",
-    )
-    actualShuffleId
-  }
+  ): F[ShuffleId] =
+    Sync[F].delay {
+      val allData: Seq[Any] = results.flatMap(_.data)
+      val keyedData: Seq[(Any, Unit)] = allData.map(element => (element, ()))
+      val shuffleData = ShuffleService.ShuffleData(Map(PartitionId(0) -> keyedData))
+      val actualShuffleId = shuffle.write(shuffleData)
+      logger.debug(
+        s"Stored sortBy shuffle data for stage ${stageInfo.id.toInt} with shuffle ID ${actualShuffleId.toInt}",
+      )
+      actualShuffleId
+    }
 
 object DAGScheduler:
   @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
