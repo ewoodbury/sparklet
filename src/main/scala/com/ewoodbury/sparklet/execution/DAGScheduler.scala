@@ -27,57 +27,25 @@ final class DAGScheduler[F[_]: Sync](
    * Executes a plan using multi-stage execution, handling shuffle boundaries.
    */
   def execute[A](plan: Plan[A]): F[Iterable[A]] =
-    Sync[F].delay(logger.info("DAGScheduler: starting multi-stage execution")) *>
-      Sync[F].delay(StageBuilder.buildStageGraph(plan)).flatMap { stageGraph =>
-        Sync[F].delay(logger.debug(s"DAGScheduler: built stage graph with ${stageGraph.stages.size} stages")) *>
-          Sync[F].delay(DAGScheduler.topologicalSort(stageGraph.dependencies)).flatMap {
-            executionOrder =>
-              Sync[F].delay(logger.debug(s"DAGScheduler: execution order: ${executionOrder.map(_.toInt).mkString(" -> ")}")) *>
-                {
-                  val stageResults = mutable.Map[StageId, Seq[Partition[_]]]()
-                  val stageToShuffleId = mutable.Map[StageId, ShuffleId]()
-
-                  // Fold over stages in F
-                  executionOrder.foldLeftM(()) { (_, stageId) =>
-                    val stageInfo = stageGraph.stages(stageId)
-                    Sync[F].delay(logger.info(s"DAGScheduler: executing stage ${stageId.toInt}")) *>
-                      Sync[F].delay(getInputPartitionsForStage(stageInfo, stageResults, stageToShuffleId)).flatMap {
-                        inputPartitions =>
-                          executeStage(stageInfo, inputPartitions, stageToShuffleId).flatMap { results =>
-                            Sync[F].delay { stageResults(stageId) = results } *>
-                              Sync[F].delay(stageGraph.dependencies.filter(_._2.contains(stageId)).keys).flatMap {
-                                dependentStages =>
-                                  val needsShuffleOutput = dependentStages.exists(depStageId => stageGraph.stages(depStageId).isShuffleStage)
-                                  if (!needsShuffleOutput) Sync[F].unit
-                                  else {
-                                    val dependentSortByStage = dependentStages.find(depStageId =>
-                                      stageGraph
-                                        .stages(depStageId)
-                                        .shuffleOperation
-                                        .exists(_.isInstanceOf[Plan.SortByOp[_, _]]),
-                                    )
-                                    val writeF: F[ShuffleId] =
-                                      if (dependentSortByStage.isDefined)
-                                        handleSortByShuffleOutput(stageInfo, results)
-                                      else
-                                        handleShuffleOutput(stageInfo, results)
-
-                                    writeF.flatMap { actualShuffleId =>
-                                      Sync[F].delay { stageToShuffleId(stageId) = actualShuffleId }
-                                    }
-                                  }
-                              }
-                          }
-                      }
-                  }.flatMap { _ =>
-                    val finalResults = stageResults(stageGraph.finalStageId)
-                    val finalData = finalResults.flatMap(_.data.asInstanceOf[Iterable[A]])
-                    Sync[F].delay(logger.info("DAGScheduler: multi-stage execution completed")) *>
-                      Sync[F].pure(finalData)
-                  }
-                }
-          }
+    for {
+      _ <- Sync[F].delay(logger.info("DAGScheduler: starting multi-stage execution"))
+      stageGraph <- Sync[F].delay(StageBuilder.buildStageGraph(plan))
+      _ <- Sync[F].delay(
+        logger.debug(s"DAGScheduler: built stage graph with ${stageGraph.stages.size} stages"),
+      )
+      executionOrder <- Sync[F].delay(DAGScheduler.topologicalSort(stageGraph.dependencies))
+      _ <- Sync[F].delay(
+        logger.debug(
+          s"DAGScheduler: execution order: ${executionOrder.map(_.toInt).mkString(" -> ")}",
+        ),
+      )
+      stageResults <- runStages(stageGraph, executionOrder)
+      finalData <- Sync[F].delay {
+        val finalResults = stageResults(stageGraph.finalStageId)
+        finalResults.flatMap(_.data.asInstanceOf[Iterable[A]])
       }
+      _ <- Sync[F].delay(logger.info("DAGScheduler: multi-stage execution completed"))
+    } yield finalData
 
   
   /**
@@ -145,6 +113,69 @@ final class DAGScheduler[F[_]: Sync](
             executeNarrowStage(info, anyPartitions, stageToShuffleId)
         }
       }
+  }
+
+  /**
+    * Iterates through the stages in topological order, executing each and materializing shuffle
+    * outputs when needed. Returns a map of stage results.
+    */
+  private def runStages(
+      stageGraph: StageBuilder.StageGraph,
+      executionOrder: List[StageId],
+  ): F[mutable.Map[StageId, Seq[Partition[_]]]] = {
+    val stageResults = mutable.Map[StageId, Seq[Partition[_]]]()
+    val stageToShuffleId = mutable.Map[StageId, ShuffleId]()
+
+    executionOrder
+      .foldLeftM(()) { (_, stageId) =>
+        val stageInfo = stageGraph.stages(stageId)
+        for {
+          _ <- Sync[F].delay(logger.info(s"DAGScheduler: executing stage ${stageId.toInt}"))
+          inputPartitions <- Sync[F].delay(
+            getInputPartitionsForStage(stageInfo, stageResults, stageToShuffleId),
+          )
+          results <- executeStage(stageInfo, inputPartitions, stageToShuffleId)
+          _ <- Sync[F].delay { stageResults(stageId) = results }
+          _ <- writeShuffleIfNeeded(stageInfo, results, stageGraph, stageToShuffleId)
+        } yield ()
+      }
+      .as(stageResults)
+  }
+
+  /**
+    * If any dependent stage is a shuffle stage, persist this stage's output to the shuffle service.
+    * For sortBy dependencies we use a special keying strategy to preserve element order.
+    */
+  private def writeShuffleIfNeeded(
+      stageInfo: StageBuilder.StageInfo,
+      results: Seq[Partition[_]],
+      stageGraph: StageBuilder.StageGraph,
+      stageToShuffleId: mutable.Map[StageId, ShuffleId],
+  ): F[Unit] = {
+    val dependentStages: Iterable[StageId] =
+      stageGraph.dependencies.filter(_._2.contains(stageInfo.id)).keys
+
+    val needsShuffleOutput = dependentStages.exists(depStageId =>
+      stageGraph.stages(depStageId).isShuffleStage,
+    )
+
+    if (!needsShuffleOutput) Sync[F].unit
+    else {
+      val hasSortByDependent = dependentStages.exists(depStageId =>
+        stageGraph
+          .stages(depStageId)
+          .shuffleOperation
+          .exists(_.isInstanceOf[Plan.SortByOp[_, _]]),
+      )
+
+      val writeF: F[ShuffleId] =
+        if (hasSortByDependent) handleSortByShuffleOutput(stageInfo, results)
+        else handleShuffleOutput(stageInfo, results)
+
+      writeF.flatMap { shuffleId =>
+        Sync[F].delay { stageToShuffleId(stageInfo.id) = shuffleId }
+      }
+    }
   }
 
   /**
