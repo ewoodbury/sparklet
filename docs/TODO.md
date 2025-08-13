@@ -26,19 +26,19 @@
   - [x] Enable Shuffle IDs to only be touched by runtime, fully decoupled from query planning
 
 ## P1 — Extensibility & Module Boundaries (next)
-- [ ] Define runtime and shuffle SPIs
-  - [ ] `TaskScheduler[F[_]]`, `ExecutorBackend`, `ShuffleService`, `Partitioner`
-  - [ ] DAG scheduler depends only on SPIs
-- [ ] Hide current implementations behind SPIs
-  - [ ] `runtime-local`: thread pool scheduler/executor
-  - [ ] `shuffle-local`: in-memory shuffle storage
-- [ ] Multi-module sbt reorg
-  - [ ] `sparklet-core` (Plan, DistCollection, model, config)
-  - [ ] `sparklet-planner` (StageBuilder, future optimizer)
-  - [ ] `sparklet-runtime-api`, `sparklet-runtime-local`
-  - [ ] `sparklet-shuffle-api`, `sparklet-shuffle-local`
-  - [ ] `sparklet-dataset` (typed API stub)
-  - [ ] Update `build.sbt` aggregates/dependsOn
+- [x] Define runtime and shuffle SPIs
+  - [x] `TaskScheduler[F[_]]`, `ExecutorBackend`, `ShuffleService`, `Partitioner`
+  - [x] DAG scheduler depends only on SPIs
+- [x] Hide current implementations behind SPIs
+  - [x] `runtime-local`: thread pool scheduler/executor
+  - [x] `shuffle-local`: in-memory shuffle storage
+- [x] Multi-module sbt reorg
+  - [x] `sparklet-core` (Plan, DistCollection, model, config)
+  - [x] `sparklet-planner` (StageBuilder, future optimizer)
+  - [x] `sparklet-runtime-api`, `sparklet-runtime-local`
+  - [x] `sparklet-shuffle-api`, `sparklet-shuffle-local`
+  - [x] `sparklet-dataset` (typed API stub)
+  - [x] Update `build.sbt` aggregates/dependsOn
 
 ## P1 — Execution Correctness & Performance (next)
 - [ ] Iterator-based execution
@@ -84,54 +84,3 @@
 
 
 
-# Current TODOs:
-
-## Define Runtime and Shuffle SPIs:
-
-### Phase 1: Define SPIs and local implementations in-place (single module)
-Add runtime/api traits and SparkletRuntime.
-Create runtime/local implementations by moving logic from TaskScheduler and ShuffleManager.
-Keep old TaskScheduler and ShuffleManager objects as thin forwarding shims to the new implementations to avoid breaking tests in the first PR.
-
-### Phase 2: Refactor DAGScheduler to depend on SPIs
-Turn object DAGScheduler into final class DAGScheduler(...) with injected shuffle, scheduler, partitioner.
-Move requiresDAGScheduling to the companion object.
-Replace concrete calls with SPI calls; pass partitioner into shuffle.partitionByKey.
-
-
-### Phase 3 
-— Wire DistCollection to runtime scheduler (status: done)
-• Action: Construct DAGScheduler from SparkletRuntime in DistCollection.collect and Task.DAGTask.run.
-• Decision: Keep construction local (no DI framework). Use SparkletRuntime.get globally for now.
-• Verification: Ensure all shuffle plans route through injected SPI services. Tests should remain green.
-
-### Phase 4 
-— Remove shims and fully adopt SPIs (status: done)
-• Replace usages: Migrate any remaining direct calls in core/execution from ShuffleManager/TaskScheduler to injected ShuffleService/TaskScheduler. (done)
-• Delete shims: Remove execution/ShuffleManager and execution/TaskScheduler after call-site migration. (done)
-• Tests:
-Update tests that reference ShuffleManager internals to use ShuffleService via runtime. (done)
-Add “pluggability” tests with fake ShuffleService and fake TaskScheduler to assert calls and ordering. (done)
-• Docs: Mark “Define runtime and shuffle SPIs” and “Hide implementations behind SPIs” done in docs/TODO.md. (done)
-• Decision: Keep SPIs synchronous for now to minimize churn; Partitioner remains runtime-only (not in plans). (unchanged)
-
-### Phase 5 
-— Optional: introduce F[] for async runtimes 
-- • API change: Evolve TaskScheduler → TaskScheduler[F[_]] and DAGScheduler.execute → F[Iterable[A]]. 
-- • Boundary: Keep actions blocking at API boundary (e.g., collect() does unsafeRunSync); optionally add async variants later. 
-- • Local impl: Provide LocalTaskScheduler[IO] with cats-effect. 
-- • Decision: Do this only if you want effect typing now; otherwise defer.
-
-### Phase 6 
-— Multi-module sbt reorg 
-- • Modules: 
-  - sparklet-core: Plan, DistCollection, model, SparkletConf. 
-  - sparklet-planner: StageBuilder. 
-  - sparklet-runtime-api: SPIs (TaskScheduler, ExecutorBackend, ShuffleService, Partitioner), SparkletRuntime. 
-  - sparklet-runtime-local: LocalTaskScheduler, LocalExecutorBackend. 
-  - sparklet-shuffle-api: reuse ShuffleService if split preferred, or keep in runtime-api. 
-  - sparklet-shuffle-local: LocalShuffleService, HashPartitioner. 
-- • Build: Wire build.sbt aggregates/dependsOn; move sources; keep package names stable. 
-- • Tests: Keep existing tests in root or split per module as needed. 
-- • Docs: Add docs/runtime-architecture.md explaining SPIs and wiring.
-- Phases 3-6 laid out with concrete actions and decisions.
