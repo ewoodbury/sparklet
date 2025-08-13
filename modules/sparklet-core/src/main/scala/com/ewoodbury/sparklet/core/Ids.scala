@@ -3,8 +3,8 @@ package com.ewoodbury.sparklet.core
 import java.util.UUID
 
 /**
-  * Unique identifier for a stage in an execution graph.
-  */
+ * Unique identifier for a stage in an execution graph.
+ */
 opaque type StageId = Int
 object StageId:
   /** Construct a StageId from an `Int`. */
@@ -16,8 +16,8 @@ object StageId:
     def compare(x: StageId, y: StageId): Int = java.lang.Integer.compare(x, y)
 
 /**
-  * Unique identifier for a shuffle dataset.
-  */
+ * Unique identifier for a shuffle dataset.
+ */
 opaque type ShuffleId = Int
 object ShuffleId:
   /** Construct a ShuffleId from an `Int`. */
@@ -32,8 +32,8 @@ object ShuffleId:
     def compare(x: ShuffleId, y: ShuffleId): Int = java.lang.Integer.compare(x, y)
 
 /**
-  * Partition index within a shuffle dataset.
-  */
+ * Partition index within a shuffle dataset.
+ */
 opaque type PartitionId = Int
 object PartitionId:
   /** Construct a PartitionId from an `Int`. */
@@ -45,11 +45,9 @@ object PartitionId:
     def compare(x: PartitionId, y: PartitionId): Int = java.lang.Integer.compare(x, y)
 
 /**
-  * Job identifier placeholder for future uniqueness scoping. Not yet wired through the system; here
-  * for forward-compatibility.
-  */
+ * Job identifier placeholder for future uniqueness scoping. Not yet wired through the system; here
+ * for forward-compatibility.
+ */
 final case class JobId(value: UUID)
 object JobId:
   def random(): JobId = JobId(UUID.randomUUID())
-
-

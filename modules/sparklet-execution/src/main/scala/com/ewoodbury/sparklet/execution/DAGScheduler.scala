@@ -23,8 +23,8 @@ final class DAGScheduler[F[_]: Sync](
 ) extends StrictLogging:
 
   /**
-    * Executes a plan using multi-stage execution, handling shuffle boundaries.
-    */
+   * Executes a plan using multi-stage execution, handling shuffle boundaries.
+   */
   def execute[A](plan: Plan[A]): F[Iterable[A]] =
     for {
       _ <- Sync[F].delay(logger.info("DAGScheduler: starting multi-stage execution"))
@@ -47,9 +47,9 @@ final class DAGScheduler[F[_]: Sync](
     } yield finalData
 
   /**
-    * Gets input partitions for a stage, returning them with a wildcard type `_`. This avoids
-    * casting at the source, deferring it to the execution function.
-    */
+   * Gets input partitions for a stage, returning them with a wildcard type `_`. This avoids
+   * casting at the source, deferring it to the execution function.
+   */
   private def getInputPartitionsForStage(
       stageInfo: StageBuilder.StageInfo,
       stageResults: mutable.Map[StageId, Seq[Partition[_]]],
@@ -90,9 +90,9 @@ final class DAGScheduler[F[_]: Sync](
   }
 
   /**
-    * Executes a single stage, dispatching to a narrow or shuffle implementation. This function now
-    * handles the necessary casting based on the stage type.
-    */
+   * Executes a single stage, dispatching to a narrow or shuffle implementation. This function now
+   * handles the necessary casting based on the stage type.
+   */
   private def executeStage(
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[_]],
@@ -114,9 +114,9 @@ final class DAGScheduler[F[_]: Sync](
   }
 
   /**
-    * Iterates through the stages in topological order, executing each and materializing shuffle
-    * outputs when needed. Returns a map of stage results.
-    */
+   * Iterates through the stages in topological order, executing each and materializing shuffle
+   * outputs when needed. Returns a map of stage results.
+   */
   private def runStages(
       stageGraph: StageBuilder.StageGraph,
       executionOrder: List[StageId],
@@ -141,9 +141,9 @@ final class DAGScheduler[F[_]: Sync](
   }
 
   /**
-    * If any dependent stage is a shuffle stage, persist this stage's output to the shuffle service.
-    * For sortBy dependencies we use a special keying strategy to preserve element order.
-    */
+   * If any dependent stage is a shuffle stage, persist this stage's output to the shuffle service.
+   * For sortBy dependencies we use a special keying strategy to preserve element order.
+   */
   private def writeShuffleIfNeeded(
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],
@@ -176,8 +176,8 @@ final class DAGScheduler[F[_]: Sync](
   }
 
   /**
-    * Executes a narrow transformation stage. Now generic for input (T) and output (U) types.
-    */
+   * Executes a narrow transformation stage. Now generic for input (T) and output (U) types.
+   */
   private def executeNarrowStage[A, B](
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[A]],
@@ -189,9 +189,9 @@ final class DAGScheduler[F[_]: Sync](
   }
 
   /**
-    * Executes a shuffle stage by applying the appropriate shuffle operation. This version uses
-    * generics to provide type safety for keys (K) and values (V).
-    */
+   * Executes a shuffle stage by applying the appropriate shuffle operation. This version uses
+   * generics to provide type safety for keys (K) and values (V).
+   */
   private def executeShuffleStage[K, V](
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[(K, V)]],
@@ -353,8 +353,8 @@ final class DAGScheduler[F[_]: Sync](
       }
 
   /**
-    * Handles shuffle output. The cast is necessary as the results from `executeStage` are untyped.
-    */
+   * Handles shuffle output. The cast is necessary as the results from `executeStage` are untyped.
+   */
   @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
   private def handleShuffleOutput(
       stageInfo: StageBuilder.StageInfo,
@@ -375,9 +375,9 @@ final class DAGScheduler[F[_]: Sync](
     }
 
   /**
-    * Handles shuffle output for sortBy operations by mapping each data element of type T to a
-    * key-value pair of type (T, Unit).
-    */
+   * Handles shuffle output for sortBy operations by mapping each data element of type T to a
+   * key-value pair of type (T, Unit).
+   */
   @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
   private def handleSortByShuffleOutput(
       stageInfo: StageBuilder.StageInfo,
@@ -448,5 +448,3 @@ object DAGScheduler:
     }
     containsShuffleOps(plan)
   }
-
-

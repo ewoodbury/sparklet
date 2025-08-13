@@ -9,16 +9,16 @@ import com.ewoodbury.sparklet.core.Partition
 import com.ewoodbury.sparklet.runtime.api.{RunnableTask, TaskScheduler}
 
 /**
-  * Local implementation of the task scheduler using cats-effect IO for safe, bounded concurrency.
-  *
-  * Tasks are executed with a parallelism bound; each task body is run on the blocking pool using
-  * IO.blocking to avoid compute pool starvation.
-  */
+ * Local implementation of the task scheduler using cats-effect IO for safe, bounded concurrency.
+ *
+ * Tasks are executed with a parallelism bound; each task body is run on the blocking pool using
+ * IO.blocking to avoid compute pool starvation.
+ */
 final class LocalTaskScheduler(parallelism: Int) extends TaskScheduler[IO] with StrictLogging:
 
   /**
-    * Submits tasks and evaluates them in parallel, respecting the configured parallelism.
-    */
+   * Submits tasks and evaluates them in parallel, respecting the configured parallelism.
+   */
   def submit[A, B](tasks: Seq[RunnableTask[A, B]]): IO[Seq[Partition[B]]] =
     logger.debug(
       s"LocalTaskScheduler: submitting ${tasks.length} tasks with parallelism=$parallelism",
@@ -34,8 +34,6 @@ final class LocalTaskScheduler(parallelism: Int) extends TaskScheduler[IO] with 
     }
 
   /**
-    * No-op for local scheduler; resources are managed by the runtime.
-    */
+   * No-op for local scheduler; resources are managed by the runtime.
+   */
   def shutdown(): IO[Unit] = IO.unit
-
-

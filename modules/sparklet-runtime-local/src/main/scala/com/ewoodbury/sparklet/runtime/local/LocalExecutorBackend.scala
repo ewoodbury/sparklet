@@ -5,5 +5,3 @@ import com.ewoodbury.sparklet.runtime.api.{ExecutorBackend, RunnableTask}
 
 final class LocalExecutorBackend extends ExecutorBackend:
   def run[A, B](task: RunnableTask[A, B]): Partition[B] = task.run()
-
-

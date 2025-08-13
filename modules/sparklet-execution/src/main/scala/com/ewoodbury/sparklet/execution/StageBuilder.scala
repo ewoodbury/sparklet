@@ -13,14 +13,14 @@ import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
 )
 
 /**
-  * Builds stage execution graphs from plans, handling both narrow transformations and shuffle
-  * boundaries for wide transformations.
-  */
+ * Builds stage execution graphs from plans, handling both narrow transformations and shuffle
+ * boundaries for wide transformations.
+ */
 object StageBuilder:
 
   /**
-    * Information about a stage in the execution graph.
-    */
+   * Information about a stage in the execution graph.
+   */
   case class StageInfo(
       id: StageId,
       stage: Stage[_, _],
@@ -30,34 +30,34 @@ object StageBuilder:
   )
 
   /**
-    * Represents where a stage gets its input data from.
-    */
+   * Represents where a stage gets its input data from.
+   */
   sealed trait InputSource
   case class SourceInput(partitions: Seq[Partition[_]]) extends InputSource
   case class ShuffleFrom(stageId: StageId, numPartitions: Int) extends InputSource
 
   /**
-    * Side tag to disambiguate multi-input wide operations (e.g., join/cogroup).
-    */
+   * Side tag to disambiguate multi-input wide operations (e.g., join/cogroup).
+   */
   enum Side:
     case Left, Right
 
   /**
-    * Explicitly reference the upstream producing stage and which side it feeds for multi-input
-    * shuffle operations. This avoids relying on heuristics to infer left/right shuffles.
-    */
+   * Explicitly reference the upstream producing stage and which side it feeds for multi-input
+   * shuffle operations. This avoids relying on heuristics to infer left/right shuffles.
+   */
   case class TaggedShuffleFrom(stageId: StageId, side: Side, numPartitions: Int)
       extends InputSource
 
   /**
-    * References the runtime output of a previously computed stage. Used for operations like union
-    * that need to concatenate upstream results without reshuffling.
-    */
+   * References the runtime output of a previously computed stage. Used for operations like union
+   * that need to concatenate upstream results without reshuffling.
+   */
   case class StageOutput(stageId: StageId) extends InputSource
 
   /**
-    * Complete stage execution graph with dependencies.
-    */
+   * Complete stage execution graph with dependencies.
+   */
   case class StageGraph(
       stages: Map[StageId, StageInfo],
       dependencies: Map[StageId, Set[StageId]], // stage ID -> dependent stage IDs
@@ -73,8 +73,8 @@ object StageBuilder:
       id
 
   /**
-    * Builds a complete stage graph from a plan, handling shuffle boundaries.
-    */
+   * Builds a complete stage graph from a plan, handling shuffle boundaries.
+   */
   def buildStageGraph[A](plan: Plan[A]): StageGraph = {
     val ctx = BuildContext(0)
     val stageMap = mutable.Map[StageId, StageInfo]()
@@ -91,9 +91,9 @@ object StageBuilder:
 
   @SuppressWarnings(Array("org.wartremover.warts.RedundantAsInstanceOf"))
   /**
-    * Recursively builds stages, handling narrow transformations and shuffle boundaries. Returns the
-    * stage ID that produces the final result.
-    */
+   * Recursively builds stages, handling narrow transformations and shuffle boundaries. Returns the
+   * stage ID that produces the final result.
+   */
   private def buildStagesRecursive[A](
       ctx: BuildContext,
       plan: Plan[A],
@@ -336,9 +336,9 @@ object StageBuilder:
   }
 
   /**
-    * Extends an existing stage with a new narrow transformation, or creates a new stage if the
-    * existing stage is a shuffle stage.
-    */
+   * Extends an existing stage with a new narrow transformation, or creates a new stage if the
+   * existing stage is a shuffle stage.
+   */
   private def extendStageOrCreateNew(
       ctx: BuildContext,
       sourceStageId: StageId,
@@ -380,10 +380,10 @@ object StageBuilder:
 
   @SuppressWarnings(Array("org.wartremover.warts.DefaultArguments"))
   /**
-    * Creates a new shuffle stage that depends on the source stage.
-    *
-    * TODO: Add actual shuffle logic, which will use the args operationType and operation.
-    */
+   * Creates a new shuffle stage that depends on the source stage.
+   *
+   * TODO: Add actual shuffle logic, which will use the args operationType and operation.
+   */
   private def createShuffleStage(
       ctx: BuildContext,
       sourceStageId: StageId,
@@ -417,9 +417,9 @@ object StageBuilder:
   }
 
   /**
-    * Legacy method for backward compatibility with current Executor. Will be removed once
-    * DAGScheduler is fully integrated.
-    */
+   * Legacy method for backward compatibility with current Executor. Will be removed once
+   * DAGScheduler is fully integrated.
+   */
   def buildStages[A](plan: Plan[A]): Seq[(Plan.Source[_], Stage[_, A])] = {
     // Check if plan contains shuffle operations
     if (containsShuffleOperations(plan)) {
@@ -532,5 +532,3 @@ object StageBuilder:
         .asInstanceOf[Stage[Any, C]],
     )
   }
-
-

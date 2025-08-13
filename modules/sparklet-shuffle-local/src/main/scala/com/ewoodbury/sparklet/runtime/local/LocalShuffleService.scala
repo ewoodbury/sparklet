@@ -57,4 +57,3 @@ final class LocalShuffleService extends ShuffleService:
       case None => throw new IllegalArgumentException(s"Shuffle ID ${id.toInt} not found")
 
   def clear(): Unit = storage.clear()
-

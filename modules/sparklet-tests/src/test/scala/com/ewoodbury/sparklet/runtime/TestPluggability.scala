@@ -5,9 +5,10 @@ import cats.effect.unsafe.implicits.global
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.ewoodbury.sparklet.core.{Partition, SparkletConf}
+import com.ewoodbury.sparklet.core.Partition
 import com.ewoodbury.sparklet.execution.Task
-import com.ewoodbury.sparklet.runtime.api.{ExecutorBackend, Partitioner, RunnableTask, ShuffleService, SparkletRuntime, TaskScheduler}
+import com.ewoodbury.sparklet.runtime.api.*
+import com.ewoodbury.sparklet.core.ShuffleId
 
 class TestPluggability extends AnyFlatSpec with Matchers {
 
@@ -31,7 +32,7 @@ class TestPluggability extends AnyFlatSpec with Matchers {
       import ShuffleService.*
       def partitionByKey[K, V](data: Seq[Partition[(K, V)]], numPartitions: Int, partitioner: Partitioner): ShuffleData[K, V] =
         ShuffleData(Map.empty)
-      def write[K, V](sd: ShuffleData[K, V]) = com.ewoodbury.sparklet.core.ShuffleId(0)
+      def write[K, V](sd: ShuffleData[K, V]): ShuffleId = com.ewoodbury.sparklet.core.ShuffleId(0)
       def readPartition[K, V](id: com.ewoodbury.sparklet.core.ShuffleId, pid: com.ewoodbury.sparklet.core.PartitionId): Partition[(K, V)] =
         Partition(Seq.empty)
       def partitionCount(id: com.ewoodbury.sparklet.core.ShuffleId): Int = 0

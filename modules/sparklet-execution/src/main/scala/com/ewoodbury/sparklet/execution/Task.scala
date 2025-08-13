@@ -8,9 +8,9 @@ import com.ewoodbury.sparklet.core.{Partition, Plan}
 import com.ewoodbury.sparklet.runtime.api.{RunnableTask, SparkletRuntime}
 
 /**
-  * A Task represents a unit of computation that can be run on an executor. It operates on a single
-  * input partition to produce a single output partition.
-  */
+ * A Task represents a unit of computation that can be run on an executor. It operates on a single
+ * input partition to produce a single output partition.
+ */
 sealed trait Task[A, B] extends RunnableTask[A, B]:
   def partition: Partition[A]
   def run(): Partition[B] // The execution logic
@@ -140,5 +140,3 @@ object Task extends StrictLogging:
     }
 
 end Task
-
-

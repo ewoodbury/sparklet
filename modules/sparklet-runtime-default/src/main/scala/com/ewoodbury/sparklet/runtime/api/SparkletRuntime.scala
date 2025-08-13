@@ -11,8 +11,8 @@ import com.ewoodbury.sparklet.runtime.local.{
 }
 
 /**
-  * Global wiring holder for the active Sparklet runtime (scheduler, shuffle, etc.).
-  */
+ * Global wiring holder for the active Sparklet runtime (scheduler, shuffle, etc.).
+ */
 object SparkletRuntime:
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   @volatile private var current: RuntimeComponents =
@@ -47,5 +47,3 @@ object SparkletRuntime:
 
   /** Clears the current-thread override, falling back to the global components. */
   def clearForCurrentThread(): Unit = threadLocal.remove()
-
-

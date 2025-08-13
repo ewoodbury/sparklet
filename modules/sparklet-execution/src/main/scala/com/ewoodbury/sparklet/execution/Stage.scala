@@ -3,9 +3,9 @@ package com.ewoodbury.sparklet.execution
 import com.ewoodbury.sparklet.core.Partition
 
 /**
-  * Represents a stage: a sequence of narrow transformations that can be executed together. Each
-  * stage operates on partitions independently without requiring shuffles.
-  */
+ * Represents a stage: a sequence of narrow transformations that can be executed together. Each
+ * stage operates on partitions independently without requiring shuffles.
+ */
 sealed trait Stage[A, B]:
   def execute(partition: Partition[A]): Partition[B]
 
@@ -53,5 +53,3 @@ object Stage:
 
   def flatMapValues[K, V, B](f: V => IterableOnce[B]): Stage[(K, V), (K, B)] =
     SingleOpStage(p => Partition(p.data.flatMap { case (k, v) => f(v).iterator.map(b => (k, b)) }))
-
-
