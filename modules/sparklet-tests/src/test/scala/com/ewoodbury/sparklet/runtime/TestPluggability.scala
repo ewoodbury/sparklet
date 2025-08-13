@@ -53,7 +53,7 @@ class TestPluggability extends AnyFlatSpec with Matchers {
       val p = Partition(Seq(1, 2, 3))
       val task = Task.MapTask(p, (x: Int) => x + 1)
       val result = SparkletRuntime.get.scheduler.submit(Seq(task)).unsafeRunSync()
-      result.head.data.toSeq shouldEqual Seq(2, 3, 4)
+      result.headOption.map(_.data.toSeq) shouldEqual Some(Seq(2, 3, 4))
     } finally {
       SparkletRuntime.set(orig)
     }

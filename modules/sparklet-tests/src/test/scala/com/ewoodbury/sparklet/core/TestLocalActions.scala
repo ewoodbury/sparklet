@@ -3,6 +3,8 @@ package com.ewoodbury.sparklet.core
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.ewoodbury.sparklet.api.DistCollection
+
 class TestLocalActions extends AnyFlatSpec with Matchers {
   val toDistCollection: [T] => (seq: Seq[T]) => DistCollection[T] = [T] => (seq: Seq[T]) => DistCollection(com.ewoodbury.sparklet.core.Plan.Source(Seq(Partition(seq))))
 
