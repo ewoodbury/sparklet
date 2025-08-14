@@ -44,12 +44,12 @@
 - [x] Iterator-based execution
   - [x] Replace eager `.toSeq`/materialization in operators with streaming `Iterator`
   - Notes: narrow ops stream via LazyList-backed Iterables; shuffle boundaries still materialize. `LocalTaskScheduler` eagerly realizes task outputs to keep timing semantics in tests.
-- [ ] Partitioner metadata propagation
-  - [ ] Carry `Partitioner` through plans to avoid unnecessary reshuffles
-  - [ ] Add `repartition`, `coalesce`, `mapPartitions`
-- [ ] Global sort pipeline
-  - [ ] Sampling + range partitioner
-  - [ ] Repartition by ranges, local sort per partition, streaming merge on read
+- [x] Partitioner metadata propagation
+  - [x] Carry `Partitioner` through plans to avoid unnecessary reshuffles
+  - [x] Add `repartition`, `coalesce`, `mapPartitions`, `partitionBy`
+- [x] Global sort pipeline
+  - [x] Sampling + range partitioner
+  - [x] Repartition by ranges, local sort per partition, streaming merge on read
 - [ ] Join strategies
   - [ ] Broadcast-hash join when one side is small (config threshold)
   - [ ] Hash/merge join selection hooks (basic heuristics)

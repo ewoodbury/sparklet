@@ -11,6 +11,10 @@ final case class SparkletConf(
     defaultParallelism: Int = 4,
     /** Size of the thread pool backing the local TaskScheduler. */
     threadPoolSize: Int = 4,
+    /** Approximate samples per logical partition to estimate sort key distribution. */
+    sortSamplePerPartition: Int = 20,
+    /** Cap on total number of samples to bound driver memory. */
+    sortMaxSample: Int = 20000,
 )
 
 @SuppressWarnings(Array("org.wartremover.warts.DefaultArguments", "org.wartremover.warts.Var"))

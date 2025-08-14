@@ -325,6 +325,7 @@ object StageBuilder:
 
       case sortBy: Plan.SortByOp[_, _] =>
         val sourceStageId = buildStagesRecursive(ctx, sortBy.source, stageMap, dependencies)
+        val n = SparkletConf.get.defaultShufflePartitions
         createShuffleStage(
           ctx,
           sourceStageId,
@@ -333,7 +334,7 @@ object StageBuilder:
           dependencies,
           Some(sortBy.keyFunc),
           Some(sortBy),
-          numPartitions = 1,
+          numPartitions = n,
           resultPartitioning = None,
         )
 

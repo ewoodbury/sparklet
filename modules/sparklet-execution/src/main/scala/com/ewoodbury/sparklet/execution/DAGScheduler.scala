@@ -176,8 +176,17 @@ final class DAGScheduler[F[_]: Sync](
         .collectFirst { case op: Plan.PartitionByOp[_, _] => op }
 
       val writeF: F[ShuffleId] =
-        if (hasSortByDependent) handleSortByShuffleOutput(stageInfo, results)
-        else
+        if (hasSortByDependent) {
+          // Find the dependent sortBy stage and use its configuration to range-partition output
+          val sortByDependentId = dependentStages.find(depStageId =>
+            stageGraph
+              .stages(depStageId)
+              .shuffleOperation
+              .exists(_.isInstanceOf[Plan.SortByOp[_, _]]),
+          ).get
+
+          handleSortByRangePartitionedOutput(stageInfo, results, stageGraph, sortByDependentId)
+        } else
           repartitionDep
             .map(op => handleRepartitionOrCoalesceOutput(stageInfo, results, op.numPartitions))
             .orElse(
@@ -228,16 +237,31 @@ final class DAGScheduler[F[_]: Sync](
 
           // Pattern match to capture the element type `a` and sorting key type `s`.
           case Some(sortBy: Plan.SortByOp[a, s]) =>
-            // Assert that the input for this operation has the shape (a, Unit),
-            // where 'a' is the data element that was packed into a tuple for the shuffle.
-            val typedPartitions = inputPartitions.asInstanceOf[Seq[Partition[(a, Unit)]]]
-            val inputData: Seq[a] = typedPartitions.flatMap(_.data.map(_._1))
-
-            // The `keyFunc` and `ordering` are now correctly typed, inherited from the Plan.
+            // Input for sort is now key-value pairs of (sortKey, element)
+            val typedPartitions = inputPartitions.asInstanceOf[Seq[Partition[(s, a)]]]
             implicit val ord: Ordering[s] = sortBy.ordering
-            val sortedData = inputData.sortBy(sortBy.keyFunc)
 
-            Seq(Partition(sortedData))
+            // Sort within each partition by key
+            val sortedIters: Seq[Iterator[(s, a)]] =
+              typedPartitions.map(p => p.data.toSeq.sortBy(_._1)(ord).iterator)
+
+            // K-way merge across partitions to ensure global order
+            import scala.collection.mutable
+            case class Head(idx: Int, pair: (s, a))
+            implicit val heapOrd: Ordering[Head] = Ordering.by(_.pair._1)
+            val heap = mutable.PriorityQueue.empty[Head](heapOrd.reverse)
+            sortedIters.zipWithIndex.foreach { case (it, i) => if (it.hasNext) heap.enqueue(Head(i, it.next())) }
+            val buffers = sortedIters.toArray
+
+            val merged = mutable.ArrayBuffer[a]()
+            while (heap.nonEmpty) {
+              val h = heap.dequeue()
+              merged += h.pair._2
+              val i = h.idx
+              if (buffers(i).hasNext) heap.enqueue(Head(i, buffers(i).next()))
+            }
+
+            Seq(Partition(merged.toSeq))
 
           // The remaining shuffle operations work on standard (K, V) pairs.
           case Some(Plan.GroupByKeyOp(_)) =>
@@ -406,20 +430,116 @@ final class DAGScheduler[F[_]: Sync](
    * key-value pair of type (T, Unit).
    */
   @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
-  private def handleSortByShuffleOutput(
+  private def handleSortByRangePartitionedOutput(
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],
+      stageGraph: StageBuilder.StageGraph,
+      dependentSortByStageId: StageId,
   ): F[ShuffleId] =
     Sync[F].delay {
-      val allData: Seq[Any] = results.flatMap(_.data)
-      val keyedData: Seq[(Any, Unit)] = allData.map(element => (element, ()))
-      val shuffleData = ShuffleService.ShuffleData(Map(PartitionId(0) -> keyedData))
-      val actualShuffleId = shuffle.write(shuffleData)
-      logger.debug(
-        s"Stored sortBy shuffle data for stage ${stageInfo.id.toInt} with shuffle ID ${actualShuffleId.toInt}",
-      )
-      actualShuffleId
+      stageGraph.stages(dependentSortByStageId).shuffleOperation match {
+        case Some(sortBy: Plan.SortByOp[a, s]) =>
+          given Ordering[s] = sortBy.ordering
+          handleSortByRangePartitionedOutputTyped[a, s](
+            stageInfo,
+            results,
+            stageGraph,
+            dependentSortByStageId,
+            sortBy,
+          )
+        case _ =>
+          throw new IllegalStateException("Expected SortByOp for dependent stage but found none")
+      }
     }
+
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def handleSortByRangePartitionedOutputTyped[A, S](
+      stageInfo: StageBuilder.StageInfo,
+      results: Seq[Partition[_]],
+      stageGraph: StageBuilder.StageGraph,
+      dependentSortByStageId: StageId,
+      sortBy: Plan.SortByOp[A, S],
+  )(using ordering: Ordering[S]): ShuffleId = {
+    // Determine partition count for the dependent sort stage
+    val expectedN = stageGraph.stages(dependentSortByStageId).inputSources.collectFirst {
+      case StageBuilder.ShuffleFrom(_, n) => n
+      case StageBuilder.TaggedShuffleFrom(_, _, n) => n
+    }.getOrElse(SparkletConf.get.defaultShufflePartitions)
+
+    val elements: Seq[A] = results.flatMap(_.data.asInstanceOf[Iterable[A]])
+    val keys: Seq[S] = elements.map(sortBy.keyFunc)
+
+    val sample = takeKeySample(keys)
+    val cutPoints = computeCutPoints(sample, expectedN)
+
+    // Range partitioner using binary search over cut points
+    val rangePartitioner = new Partitioner {
+      def partition(key: Any, numPartitions: Int): Int = {
+        if (numPartitions <= 1 || cutPoints.isEmpty) 0
+        else {
+          val k = key.asInstanceOf[S]
+          // Find first index where k <= cutPoints(i), mapping to i, else last partition
+          var lo = 0
+          var hi = cutPoints.length - 1
+          var ans = cutPoints.length
+          while (lo <= hi) {
+            val mid = (lo + hi) >>> 1
+            val cmp = ordering.compare(k, cutPoints(mid))
+            if (cmp <= 0) { ans = mid; hi = mid - 1 } else { lo = mid + 1 }
+          }
+          // ans in [0, P-1] maps to partition ans, tail goes to P-1
+          math.min(ans, numPartitions - 1)
+        }
+      }
+    }
+
+    // Form (key, value) pairs per input partition
+    val kvPartitions: Seq[Partition[(S, A)]] =
+      results.asInstanceOf[Seq[Partition[A]]].map { p =>
+        val it = p.data.iterator
+        val buf = scala.collection.mutable.ArrayBuffer.empty[(S, A)]
+        while (it.hasNext) {
+          val a = it.next()
+          buf += ((sortBy.keyFunc(a), a))
+        }
+        Partition(buf.toSeq)
+      }
+
+    val shuffleData: ShuffleService.ShuffleData[S, A] =
+      shuffle.partitionByKey[S, A](kvPartitions, expectedN, rangePartitioner)
+
+    val actualShuffleId = shuffle.write[S, A](shuffleData)
+    logger.debug(
+      s"Stored range-partitioned sortBy shuffle data for stage ${stageInfo.id.toInt} with shuffle ID ${actualShuffleId.toInt} across ${expectedN} partitions",
+    )
+    actualShuffleId
+  }
+
+  // --- Sampling utilities for sortBy ---
+  private def takeKeySample[S](keys: Seq[S])(using ord: Ordering[S]): Seq[S] = {
+    val perPart = SparkletConf.get.sortSamplePerPartition
+    val maxSample = SparkletConf.get.sortMaxSample
+    if (keys.isEmpty) Seq.empty
+    else {
+      val step = math.max(1, keys.size / math.max(1, SparkletConf.get.defaultShufflePartitions))
+      val raw = keys.grouped(step).flatMap(_.take(perPart)).toSeq
+      if (raw.size <= maxSample) raw else raw.take(maxSample)
+    }
+  }
+
+  private def computeCutPoints[S](sample: Seq[S], numPartitions: Int)(using ord: Ordering[S]): Vector[S] = {
+    if (numPartitions <= 1 || sample.isEmpty) Vector.empty[S]
+    else {
+      val sorted = sample.sorted
+      val P = numPartitions
+      val cutCount = math.max(0, P - 1)
+      val step = sorted.size.toDouble / P
+      (1 to cutCount).map { i =>
+        val idx = math.min(sorted.size - 1, math.max(0, math.ceil(i * step).toInt - 1))
+        sorted(idx)
+      }.toVector
+    }
+  }
 
   /**
    * Handles shuffle output for repartition and coalesce operations by keying each element with a
