@@ -5,10 +5,9 @@ import cats.effect.unsafe.implicits.global
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.ewoodbury.sparklet.core.Partition
+import com.ewoodbury.sparklet.core.{Partition, ShuffleId}
 import com.ewoodbury.sparklet.execution.Task
 import com.ewoodbury.sparklet.runtime.api.*
-import com.ewoodbury.sparklet.core.ShuffleId
 
 class TestPluggability extends AnyFlatSpec with Matchers {
 

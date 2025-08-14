@@ -2,6 +2,7 @@ package com.ewoodbury.sparklet.execution
 
 import com.ewoodbury.sparklet.core.Partition
 
+@SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
 /**
  * Represents a stage: a sequence of narrow transformations that can be executed together. Each
  * stage operates on partitions independently without requiring shuffles.
@@ -24,32 +25,63 @@ object Stage:
 
   // Factory methods for common operations
   def map[A, B](f: A => B): Stage[A, B] =
-    SingleOpStage(p => Partition(p.data.map(f)))
+    SingleOpStage { p =>
+      val it = p.data.iterator.map(f)
+      Partition(IterUtil.iterableOf(it))
+    }
 
   def filter[A](predicate: A => Boolean): Stage[A, A] =
-    SingleOpStage(p => Partition(p.data.filter(predicate)))
+    SingleOpStage { p =>
+      val it = p.data.iterator.filter(predicate)
+      Partition(IterUtil.iterableOf(it))
+    }
 
   def flatMap[A, B](f: A => IterableOnce[B]): Stage[A, B] =
-    SingleOpStage(p => Partition(p.data.flatMap(f)))
+    SingleOpStage { p =>
+      val it = p.data.iterator.flatMap(a => f(a).iterator)
+      Partition(IterUtil.iterableOf(it))
+    }
 
   def distinct[A]: Stage[A, A] =
-    SingleOpStage(p => Partition(p.data.toSeq.distinct))
+    SingleOpStage { p =>
+      val it = p.data.iterator.distinct
+      // Distinct must be stable over multiple traversals of the same partition view
+      Partition(IterUtil.iterableOf(it))
+    }
 
   // Key-value operations
   def keys[K, V]: Stage[(K, V), K] =
-    SingleOpStage(p => Partition(p.data.map(_._1)))
+    SingleOpStage { p =>
+      val it = p.data.iterator.map(_._1)
+      Partition(IterUtil.iterableOf(it))
+    }
 
   def values[K, V]: Stage[(K, V), V] =
-    SingleOpStage(p => Partition(p.data.map(_._2)))
+    SingleOpStage { p =>
+      val it = p.data.iterator.map(_._2)
+      Partition(IterUtil.iterableOf(it))
+    }
 
   def mapValues[K, V, B](f: V => B): Stage[(K, V), (K, B)] =
-    SingleOpStage(p => Partition(p.data.map { case (k, v) => (k, f(v)) }))
+    SingleOpStage { p =>
+      val it = p.data.iterator.map { case (k, v) => (k, f(v)) }
+      Partition(IterUtil.iterableOf(it))
+    }
 
   def filterKeys[K, V](predicate: K => Boolean): Stage[(K, V), (K, V)] =
-    SingleOpStage(p => Partition(p.data.filter { case (k, _) => predicate(k) }))
+    SingleOpStage { p =>
+      val it = p.data.iterator.filter { case (k, _) => predicate(k) }
+      Partition(IterUtil.iterableOf(it))
+    }
 
   def filterValues[K, V](predicate: V => Boolean): Stage[(K, V), (K, V)] =
-    SingleOpStage(p => Partition(p.data.filter { case (_, v) => predicate(v) }))
+    SingleOpStage { p =>
+      val it = p.data.iterator.filter { case (_, v) => predicate(v) }
+      Partition(IterUtil.iterableOf(it))
+    }
 
   def flatMapValues[K, V, B](f: V => IterableOnce[B]): Stage[(K, V), (K, B)] =
-    SingleOpStage(p => Partition(p.data.flatMap { case (k, v) => f(v).iterator.map(b => (k, b)) }))
+    SingleOpStage { p =>
+      val it = p.data.iterator.flatMap { case (k, v) => f(v).iterator.map(b => (k, b)) }
+      Partition(IterUtil.iterableOf(it))
+    }
