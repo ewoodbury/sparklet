@@ -147,6 +147,7 @@ object Task extends StrictLogging:
       val scheduler = new DAGScheduler[IO](rt.shuffle, rt.scheduler, rt.partitioner)
       val results = scheduler.execute(plan).unsafeRunSync()
       // Keep Seq materialization for DAGTask to satisfy tests that expect Seq-typed data
+      // TODO: Remove toSeq and use iterator, and remove Seq checks from tests.
       Partition(results.toSeq)
     }
 
