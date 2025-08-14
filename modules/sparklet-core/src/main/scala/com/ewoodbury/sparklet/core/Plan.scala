@@ -11,6 +11,62 @@ sealed trait Plan[A]
 
 object Plan:
   /**
+   * Applies a user function over each input partition using iterators. The function receives an
+   * iterator view of the partition elements and returns an iterator of output elements. This is a
+   * narrow transformation that preserves partitioning metadata where applicable.
+   *
+   * @param source
+   *   The preceding plan node (producing elements of type A).
+   * @param f
+   *   The partition-level mapping function operating on iterators.
+   * @tparam A
+   *   The input element type from the source plan.
+   * @tparam B
+   *   The output element type.
+   */
+  final case class MapPartitionsOp[A, B](source: Plan[A], f: Iterator[A] => Iterator[B])
+      extends Plan[B]
+
+  /**
+   * Repartitions the dataset to exactly `numPartitions` partitions. Implemented as a shuffle in
+   * the current engine. This transformation does not imply key-based partitioning.
+   *
+   * @param source
+   *   The preceding plan node.
+   * @param numPartitions
+   *   Target number of partitions; must be positive.
+   * @tparam A
+   *   The element type.
+   */
+  final case class RepartitionOp[A](source: Plan[A], numPartitions: Int) extends Plan[A]
+
+  /**
+   * Coalesces the dataset into `numPartitions` partitions. In this initial implementation, this is
+   * performed via a shuffle for simplicity and determinism. Future implementations may avoid
+   * shuffles when safe.
+   *
+   * @param source
+   *   The preceding plan node.
+   * @param numPartitions
+   *   Target number of partitions; must be positive and less than or equal to current partitions.
+   * @tparam A
+   *   The element type.
+   */
+  final case class CoalesceOp[A](source: Plan[A], numPartitions: Int) extends Plan[A]
+
+  /**
+   * Partitions a key-value dataset by key using the runtime's configured partitioner and the
+   * specified number of partitions.
+   *
+   * @param source
+   *   The preceding plan node producing `(K, V)` pairs.
+   * @param numPartitions
+   *   Target number of partitions; must be positive.
+   */
+  final case class PartitionByOp[K, V](source: Plan[(K, V)], numPartitions: Int)
+      extends Plan[(K, V)]
+
+  /**
    * The initial data source. For this local version, it holds an Iterable directly.
    * `() => Iterable[A]` makes it lazier, ensuring the source data isn't iterated until execution
    * starts.

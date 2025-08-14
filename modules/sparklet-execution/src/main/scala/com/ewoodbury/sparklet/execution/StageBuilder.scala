@@ -17,6 +17,8 @@ import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
  * boundaries for wide transformations.
  */
 object StageBuilder:
+  /** Describes how a stage's output is partitioned. */
+  final case class Partitioning(byKey: Boolean, numPartitions: Int)
 
   /**
    * Information about a stage in the execution graph.
@@ -27,6 +29,7 @@ object StageBuilder:
       inputSources: Seq[InputSource], // What this stage reads from
       isShuffleStage: Boolean,
       shuffleOperation: Option[Plan[_]], // The original Plan operation for shuffle stages
+      outputPartitioning: Option[Partitioning],
   )
 
   /**
@@ -111,108 +114,131 @@ object StageBuilder:
           inputSources = Seq(SourceInput(source.partitions)),
           isShuffleStage = false,
           shuffleOperation = None,
+          outputPartitioning =
+            Some(Partitioning(byKey = false, numPartitions = source.partitions.size)),
         )
         stageId
 
       // Narrow transformations - can be chained together
       case Plan.MapOp(sourcePlan, f) =>
         val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
-        extendStageOrCreateNew(
+        extendWithMetadata(
           ctx,
           sourceStageId,
           Stage.map(f).asInstanceOf[Stage[Any, Any]],
           stageMap,
           dependencies,
+          preservePartitioning,
         )
 
       case Plan.FilterOp(sourcePlan, p) =>
         val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
-        extendStageOrCreateNew(
+        extendWithMetadata(
           ctx,
           sourceStageId,
           Stage.filter(p).asInstanceOf[Stage[Any, Any]],
           stageMap,
           dependencies,
+          preservePartitioning,
         )
 
       case Plan.FlatMapOp(sourcePlan, f) =>
         val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
-        extendStageOrCreateNew(
+        extendWithMetadata(
           ctx,
           sourceStageId,
           Stage.flatMap(f).asInstanceOf[Stage[Any, Any]],
           stageMap,
           dependencies,
+          preservePartitioning,
         )
 
       case Plan.DistinctOp(sourcePlan) =>
         val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
-        extendStageOrCreateNew(
+        extendWithMetadata(
           ctx,
           sourceStageId,
           Stage.distinct.asInstanceOf[Stage[Any, Any]],
           stageMap,
           dependencies,
+          preservePartitioning,
         )
 
       case Plan.KeysOp(sourcePlan) =>
         val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
-        extendStageOrCreateNew(
+        extendWithMetadata(
           ctx,
           sourceStageId,
           Stage.keys.asInstanceOf[Stage[Any, Any]],
           stageMap,
           dependencies,
+          clearKeyedPreserveCount,
         )
 
       case Plan.ValuesOp(sourcePlan) =>
         val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
-        extendStageOrCreateNew(
+        extendWithMetadata(
           ctx,
           sourceStageId,
           Stage.values.asInstanceOf[Stage[Any, Any]],
           stageMap,
           dependencies,
+          clearKeyedPreserveCount,
         )
 
       case Plan.MapValuesOp(sourcePlan, f) =>
         val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
-        extendStageOrCreateNew(
+        extendWithMetadata(
           ctx,
           sourceStageId,
           Stage.mapValues(f).asInstanceOf[Stage[Any, Any]],
           stageMap,
           dependencies,
+          preservePartitioning,
         )
 
       case Plan.FilterKeysOp(sourcePlan, p) =>
         val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
-        extendStageOrCreateNew(
+        extendWithMetadata(
           ctx,
           sourceStageId,
           Stage.filterKeys(p).asInstanceOf[Stage[Any, Any]],
           stageMap,
           dependencies,
+          preservePartitioning,
         )
 
       case Plan.FilterValuesOp(sourcePlan, p) =>
         val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
-        extendStageOrCreateNew(
+        extendWithMetadata(
           ctx,
           sourceStageId,
           Stage.filterValues(p).asInstanceOf[Stage[Any, Any]],
           stageMap,
           dependencies,
+          preservePartitioning,
         )
 
       case Plan.FlatMapValuesOp(sourcePlan, f) =>
         val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
-        extendStageOrCreateNew(
+        extendWithMetadata(
           ctx,
           sourceStageId,
           Stage.flatMapValues(f).asInstanceOf[Stage[Any, Any]],
           stageMap,
           dependencies,
+          preservePartitioning,
+        )
+
+      case Plan.MapPartitionsOp(sourcePlan, f) =>
+        val sourceStageId = buildStagesRecursive(ctx, sourcePlan, stageMap, dependencies)
+        extendWithMetadata(
+          ctx,
+          sourceStageId,
+          Stage.mapPartitions(f).asInstanceOf[Stage[Any, Any]],
+          stageMap,
+          dependencies,
+          preservePartitioning,
         )
 
       case Plan.UnionOp(left, right) =>
@@ -231,6 +257,7 @@ object StageBuilder:
           inputSources = Seq(StageOutput(leftStageId), StageOutput(rightStageId)),
           isShuffleStage = false,
           shuffleOperation = None,
+          outputPartitioning = None,
         )
 
         dependencies.getOrElseUpdate(unionStageId, mutable.Set.empty) += leftStageId
@@ -240,27 +267,61 @@ object StageBuilder:
       // --- Wide Transformations (create shuffle boundaries) ---
       case groupByKey: Plan.GroupByKeyOp[_, _] =>
         val sourceStageId = buildStagesRecursive(ctx, groupByKey.source, stageMap, dependencies)
-        createShuffleStage(
-          ctx,
-          sourceStageId,
-          "groupByKey",
-          stageMap,
-          dependencies,
-          None,
-          Some(groupByKey),
-        )
+        val src = stageMap(sourceStageId)
+        val defaultN = SparkletConf.get.defaultShufflePartitions
+        val canSkipShuffle =
+          src.outputPartitioning.exists(p => p.byKey && p.numPartitions == defaultN)
+        if (canSkipShuffle) then
+          extendWithMetadata(
+            ctx,
+            sourceStageId,
+            Stage.groupByKeyLocal.asInstanceOf[Stage[Any, Any]],
+            stageMap,
+            dependencies,
+            preservePartitioning,
+          )
+        else
+          createShuffleStage(
+            ctx,
+            sourceStageId,
+            "groupByKey",
+            stageMap,
+            dependencies,
+            None,
+            Some(groupByKey),
+            numPartitions = defaultN,
+            resultPartitioning = Some(Partitioning(byKey = true, numPartitions = defaultN)),
+          )
 
       case reduceByKey: Plan.ReduceByKeyOp[_, _] =>
         val sourceStageId = buildStagesRecursive(ctx, reduceByKey.source, stageMap, dependencies)
-        createShuffleStage(
-          ctx,
-          sourceStageId,
-          "reduceByKey",
-          stageMap,
-          dependencies,
-          Some(reduceByKey.reduceFunc),
-          Some(reduceByKey),
-        )
+        val src = stageMap(sourceStageId)
+        val defaultN = SparkletConf.get.defaultShufflePartitions
+        val canSkipShuffle =
+          src.outputPartitioning.exists(p => p.byKey && p.numPartitions == defaultN)
+        if (canSkipShuffle) then
+          extendWithMetadata(
+            ctx,
+            sourceStageId,
+            Stage
+              .reduceByKeyLocal(reduceByKey.reduceFunc.asInstanceOf[(Any, Any) => Any])
+              .asInstanceOf[Stage[Any, Any]],
+            stageMap,
+            dependencies,
+            preservePartitioning,
+          )
+        else
+          createShuffleStage(
+            ctx,
+            sourceStageId,
+            "reduceByKey",
+            stageMap,
+            dependencies,
+            Some(reduceByKey.reduceFunc),
+            Some(reduceByKey),
+            numPartitions = defaultN,
+            resultPartitioning = Some(Partitioning(byKey = true, numPartitions = defaultN)),
+          )
 
       case sortBy: Plan.SortByOp[_, _] =>
         val sourceStageId = buildStagesRecursive(ctx, sortBy.source, stageMap, dependencies)
@@ -272,6 +333,51 @@ object StageBuilder:
           dependencies,
           Some(sortBy.keyFunc),
           Some(sortBy),
+          numPartitions = 1,
+          resultPartitioning = None,
+        )
+
+      case pby: Plan.PartitionByOp[_, _] =>
+        val sourceStageId = buildStagesRecursive(ctx, pby.source, stageMap, dependencies)
+        createShuffleStage(
+          ctx,
+          sourceStageId,
+          "partitionBy",
+          stageMap,
+          dependencies,
+          None,
+          Some(pby),
+          numPartitions = pby.numPartitions,
+          resultPartitioning = Some(Partitioning(byKey = true, numPartitions = pby.numPartitions)),
+        )
+
+      case rep: Plan.RepartitionOp[_] =>
+        val sourceStageId = buildStagesRecursive(ctx, rep.source, stageMap, dependencies)
+        createShuffleStage(
+          ctx,
+          sourceStageId,
+          "repartition",
+          stageMap,
+          dependencies,
+          None,
+          Some(rep),
+          numPartitions = rep.numPartitions,
+          resultPartitioning = Some(Partitioning(byKey = false, numPartitions = rep.numPartitions)),
+        )
+
+      case coal: Plan.CoalesceOp[_] =>
+        val sourceStageId = buildStagesRecursive(ctx, coal.source, stageMap, dependencies)
+        createShuffleStage(
+          ctx,
+          sourceStageId,
+          "coalesce",
+          stageMap,
+          dependencies,
+          None,
+          Some(coal),
+          numPartitions = coal.numPartitions,
+          resultPartitioning =
+            Some(Partitioning(byKey = false, numPartitions = coal.numPartitions)),
         )
 
       case joinOp: Plan.JoinOp[_, _, _] =>
@@ -297,6 +403,7 @@ object StageBuilder:
           inputSources = shuffleInputSources,
           isShuffleStage = true,
           shuffleOperation = Some(joinOp), // Store the join operation for execution
+          outputPartitioning = Some(Partitioning(byKey = true, numPartitions = numPartitions)),
         )
 
         dependencies.getOrElseUpdate(joinStageId, mutable.Set.empty) += leftStageId
@@ -327,6 +434,7 @@ object StageBuilder:
           inputSources = shuffleInputSources,
           isShuffleStage = true,
           shuffleOperation = Some(cogroupOp), // Store the cogroup operation for execution
+          outputPartitioning = Some(Partitioning(byKey = true, numPartitions = numPartitions)),
         )
 
         dependencies.getOrElseUpdate(cogroupStageId, mutable.Set.empty) += leftStageId
@@ -361,6 +469,7 @@ object StageBuilder:
         inputSources = inputSources,
         isShuffleStage = false,
         shuffleOperation = None,
+        outputPartitioning = sourceStage.outputPartitioning,
       )
 
       // Add dependency: new stage depends on source stage
@@ -378,6 +487,31 @@ object StageBuilder:
     }
   }
 
+  // --- Metadata helpers ---
+  private def preservePartitioning(prev: Option[Partitioning]): Option[Partitioning] = prev
+
+  private def clearKeyedPreserveCount(prev: Option[Partitioning]): Option[Partitioning] =
+    prev.map(p => p.copy(byKey = false))
+
+  /**
+   * Extends the stage graph with a new narrow operation while updating output partitioning
+   * metadata according to the provided update function.
+   */
+  private def extendWithMetadata(
+      ctx: BuildContext,
+      sourceStageId: StageId,
+      newOperation: Stage[Any, Any],
+      stageMap: mutable.Map[StageId, StageInfo],
+      dependencies: mutable.Map[StageId, mutable.Set[StageId]],
+      update: Option[Partitioning] => Option[Partitioning],
+  ): StageId = {
+    val sid = extendStageOrCreateNew(ctx, sourceStageId, newOperation, stageMap, dependencies)
+    val info = stageMap(sid)
+    val newMeta = update(info.outputPartitioning)
+    stageMap(sid) = info.copy(outputPartitioning = newMeta)
+    sid
+  }
+
   @SuppressWarnings(Array("org.wartremover.warts.DefaultArguments"))
   /**
    * Creates a new shuffle stage that depends on the source stage.
@@ -392,6 +526,8 @@ object StageBuilder:
       dependencies: mutable.Map[StageId, mutable.Set[StageId]],
       @annotation.unused operation: Option[Any] = None,
       shuffleOperation: Option[Plan[_]] = None,
+      numPartitions: Int = SparkletConf.get.defaultShufflePartitions,
+      resultPartitioning: Option[Partitioning] = None,
   ): StageId = {
     val shuffleStageId = ctx.freshId()
 
@@ -401,7 +537,6 @@ object StageBuilder:
 
     /* Set up shuffle input source - the shuffle stage reads from the shuffle data produced by the
      * source stage */
-    val numPartitions = SparkletConf.get.defaultShufflePartitions
     val shuffleInputSources = Seq(ShuffleFrom(sourceStageId, numPartitions))
 
     stageMap(shuffleStageId) = StageInfo(
@@ -410,6 +545,7 @@ object StageBuilder:
       inputSources = shuffleInputSources,
       isShuffleStage = true,
       shuffleOperation = shuffleOperation,
+      outputPartitioning = resultPartitioning,
     )
 
     dependencies.getOrElseUpdate(shuffleStageId, mutable.Set.empty) += sourceStageId
@@ -507,6 +643,13 @@ object StageBuilder:
         extendLastStage(
           stages.asInstanceOf[Seq[(Plan.Source[_], Stage[_, Any])]],
           Stage.flatMapValues(f).asInstanceOf[Stage[Any, A]],
+        )
+
+      case Plan.MapPartitionsOp(sourcePlan, f) =>
+        val stages = buildStagesRecursiveOld(sourcePlan)
+        extendLastStage(
+          stages.asInstanceOf[Seq[(Plan.Source[_], Stage[_, Any])]],
+          Stage.mapPartitions(f).asInstanceOf[Stage[Any, A]],
         )
 
       case Plan.UnionOp(left, right) =>

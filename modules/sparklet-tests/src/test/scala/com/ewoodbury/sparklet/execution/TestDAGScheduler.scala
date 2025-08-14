@@ -53,6 +53,47 @@ class TestDAGScheduler extends AnyFlatSpec with Matchers with StrictLogging {
     result shouldBe Seq(1, 1, 3, 4, 5)
   }
 
+  it should "support mapPartitions" in {
+    SparkletRuntime.get.shuffle.clear()
+    val source = toDistCollection(Seq(1, 2, 3, 4, 5))
+    val result = source.mapPartitions(it => Iterator.single(it.sum)).collect()
+    result shouldBe Seq(15)
+  }
+
+  it should "support repartition" in {
+    SparkletRuntime.get.shuffle.clear()
+    val source = toDistCollection(Seq(1, 2, 3, 4, 5))
+    val result = source.repartition(3).collect()
+    result.toSet shouldBe Set(1, 2, 3, 4, 5)
+  }
+
+  it should "support coalesce" in {
+    SparkletRuntime.get.shuffle.clear()
+    val source = toDistCollection(Seq(1, 2, 3, 4, 5))
+    val result = source.coalesce(3).collect()
+    result.toSet shouldBe Set(1, 2, 3, 4, 5)
+  }
+
+  it should "support partitionBy for key-value datasets" in {
+    SparkletRuntime.get.shuffle.clear()
+    val source = toDistCollection(Seq("a" -> 1, "b" -> 2, "c" -> 3, "a" -> 4))
+    val result = source.partitionBy[String, Int](numPartitions = 3).reduceByKey[String, Int](_ + _).collect().toMap
+    result("a") shouldBe 5
+    result("b") shouldBe 2
+    result("c") shouldBe 3
+  }
+
+  it should "support mapPartitions, repartition, and coalesce together" in {
+    SparkletRuntime.get.shuffle.clear()
+    val data = (1 to 30).toList
+    val ds = toDistCollection(data)
+      .mapPartitions(it => Iterator.single(it.sum)) // 1 sum per source partition
+      .repartition(7)
+      .coalesce(3)
+    val result = ds.collect().toList
+    result.sum shouldBe data.sum
+  }
+
   it should "correctly execute groupByKey operations" in {
     SparkletRuntime.get.shuffle.clear() // Clean state for test isolation
     val source = toDistCollection(Seq("a" -> 1, "b" -> 2, "a" -> 3))

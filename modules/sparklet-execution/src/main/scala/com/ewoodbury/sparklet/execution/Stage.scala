@@ -42,6 +42,15 @@ object Stage:
       Partition(IterUtil.iterableOf(it))
     }
 
+  /**
+   * Partition-level transform using iterators to avoid unnecessary materialization.
+   */
+  def mapPartitions[A, B](f: Iterator[A] => Iterator[B]): Stage[A, B] =
+    SingleOpStage { p =>
+      val it = f(p.data.iterator)
+      Partition(IterUtil.iterableOf(it))
+    }
+
   def distinct[A]: Stage[A, A] =
     SingleOpStage { p =>
       val it = p.data.iterator.distinct
@@ -84,4 +93,33 @@ object Stage:
     SingleOpStage { p =>
       val it = p.data.iterator.flatMap { case (k, v) => f(v).iterator.map(b => (k, b)) }
       Partition(IterUtil.iterableOf(it))
+    }
+
+  /**
+   * Local keyed groupBy on a single partition. Used when upstream is already correctly
+   * key-partitioned and downstream groupByKey can be executed without a shuffle.
+   */
+  def groupByKeyLocal[K, V]: Stage[(K, V), (K, Iterable[V])] =
+    SingleOpStage { p =>
+      val grouped = p.data.iterator.toSeq.groupBy(_._1).view.mapValues(_.map(_._2)).toSeq
+      Partition(grouped)
+    }
+
+  /**
+   * Local keyed reduce on a single partition. Used when upstream is already correctly
+   * key-partitioned and downstream reduceByKey can be executed without a shuffle.
+   */
+  def reduceByKeyLocal[K, V](op: (V, V) => V): Stage[(K, V), (K, V)] =
+    SingleOpStage { p =>
+      val reduced = p.data.iterator.toSeq
+        .groupBy(_._1)
+        .map { case (k, pairs) =>
+          val v = pairs
+            .map(_._2)
+            .reduceOption(op)
+            .getOrElse(throw new NoSuchElementException(s"No values found for key $k"))
+          (k, v)
+        }
+        .toSeq
+      Partition(reduced)
     }

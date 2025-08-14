@@ -46,6 +46,14 @@ final case class DistCollection[A](plan: Plan[A]) extends StrictLogging:
     DistCollection(Plan.FlatMapOp(this.plan, f))
 
   /**
+   * Transformation: Applies a function to each partition as an iterator-in/iterator-out
+   * transformation. Returns a new DistCollection representing the result. Does not trigger
+   * computation.
+   */
+  def mapPartitions[B](f: Iterator[A] => Iterator[B]): DistCollection[B] =
+    DistCollection(Plan.MapPartitionsOp(this.plan, f))
+
+  /**
    * Transformation: Returns a new DistCollection with distinct elements. Does not trigger
    * computation.
    */
@@ -58,6 +66,27 @@ final case class DistCollection[A](plan: Plan[A]) extends StrictLogging:
    */
   def union(other: DistCollection[A]): DistCollection[A] =
     DistCollection(Plan.UnionOp(this.plan, other.plan))
+
+  /**
+   * Transformation: Rebalances data across exactly `numPartitions` partitions (shuffle-based).
+   * Returns a new DistCollection. Does not trigger computation.
+   */
+  def repartition(numPartitions: Int): DistCollection[A] =
+    DistCollection(Plan.RepartitionOp(this.plan, numPartitions))
+
+  /**
+   * Transformation: Coalesces data into `numPartitions` partitions. Currently implemented via a
+   * shuffle for simplicity. Returns a new DistCollection. Does not trigger computation.
+   */
+  def coalesce(numPartitions: Int): DistCollection[A] =
+    DistCollection(Plan.CoalesceOp(this.plan, numPartitions))
+
+  /**
+   * Transformation: Explicitly partitions a key-value dataset by key using the runtime's
+   * configured partitioner into `numPartitions` partitions.
+   */
+  def partitionBy[K, V](numPartitions: Int)(using ev: A =:= (K, V)): DistCollection[(K, V)] =
+    DistCollection(Plan.PartitionByOp(this.plan.asInstanceOf[Plan[(K, V)]], numPartitions))
 
   // --- Key-Value Transformations ---
 

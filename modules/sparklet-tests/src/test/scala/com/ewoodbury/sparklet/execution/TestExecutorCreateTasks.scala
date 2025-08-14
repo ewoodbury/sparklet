@@ -114,6 +114,20 @@ class TestExecutorCreateTasks extends AnyFlatSpec with Matchers with BeforeAndAf
     result.data should contain theSameElementsAs Seq(1, 2, 2, 4, 3, 6)
   }
 
+  it should "create StageTask for MapPartitionsOp plans" in {
+    val sourcePlan = Plan.Source(Seq(Partition(Seq(1, 2, 3))))
+    val mpPlan = Plan.MapPartitionsOp(sourcePlan, (it: Iterator[Int]) => Iterator.single(it.sum))
+
+    val tasks = Executor.createTasks(mpPlan)
+
+    tasks should have length 1
+    tasks.headOption shouldBe a[Some[Task.StageTask[_, _]]]
+
+    val stageTask = tasks.headOption.get.asInstanceOf[Task.StageTask[Int, Int]]
+    val result = stageTask.run()
+    result.data should contain theSameElementsAs Seq(6)
+  }
+
   it should "support GroupByKeyOp shuffle operations" in {
     // Given: A GroupByKey operation plan (shuffle operation)
     val sourcePlan = Plan.Source(Seq(Partition(Seq(("a", 1), ("b", 2), ("a", 3), ("c", 4)))))

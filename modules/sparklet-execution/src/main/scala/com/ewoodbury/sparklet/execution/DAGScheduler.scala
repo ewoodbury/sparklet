@@ -165,9 +165,30 @@ final class DAGScheduler[F[_]: Sync](
           .exists(_.isInstanceOf[Plan.SortByOp[_, _]]),
       )
 
+      val repartitionDep = dependentStages
+        .flatMap(id => stageGraph.stages(id).shuffleOperation.toSeq)
+        .collectFirst { case op: Plan.RepartitionOp[_] => op }
+      val coalesceDep = dependentStages
+        .flatMap(id => stageGraph.stages(id).shuffleOperation.toSeq)
+        .collectFirst { case op: Plan.CoalesceOp[_] => op }
+      val partitionByDep = dependentStages
+        .flatMap(id => stageGraph.stages(id).shuffleOperation.toSeq)
+        .collectFirst { case op: Plan.PartitionByOp[_, _] => op }
+
       val writeF: F[ShuffleId] =
         if (hasSortByDependent) handleSortByShuffleOutput(stageInfo, results)
-        else handleShuffleOutput(stageInfo, results)
+        else
+          repartitionDep
+            .map(op => handleRepartitionOrCoalesceOutput(stageInfo, results, op.numPartitions))
+            .orElse(
+              coalesceDep
+                .map(op => handleRepartitionOrCoalesceOutput(stageInfo, results, op.numPartitions)),
+            )
+            .orElse(
+              partitionByDep
+                .map(op => handleRepartitionOrCoalesceOutput(stageInfo, results, op.numPartitions)),
+            )
+            .getOrElse(handleShuffleOutput(stageInfo, results))
 
       writeF.flatMap { shuffleId =>
         Sync[F].delay { stageToShuffleId(stageInfo.id) = shuffleId }
@@ -341,6 +362,12 @@ final class DAGScheduler[F[_]: Sync](
             }
             Seq(Partition(cogroupedData.toSeq))
 
+          case Some(_: Plan.RepartitionOp[_]) | Some(_: Plan.CoalesceOp[_]) |
+              Some(_: Plan.PartitionByOp[_, _]) =>
+            val typed = inputPartitions.asInstanceOf[Seq[Partition[(Any, Unit)]]]
+            val out = typed.map { p => Partition(p.data.iterator.map(_._1).toList) }
+            out
+
           // A default GroupByKey for any other unhandled shuffle operation.
           case _ =>
             val allData = inputPartitions.flatMap(_.data)
@@ -394,6 +421,31 @@ final class DAGScheduler[F[_]: Sync](
       actualShuffleId
     }
 
+  /**
+   * Handles shuffle output for repartition and coalesce operations by keying each element with a
+   * Unit value and delegating to the shuffle service's partitioner.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
+  private def handleRepartitionOrCoalesceOutput(
+      stageInfo: StageBuilder.StageInfo,
+      results: Seq[Partition[_]],
+      targetNumPartitions: Int,
+  ): F[ShuffleId] =
+    Sync[F].delay {
+      val allData: Seq[Any] = results.flatMap(_.data)
+      val keyedData: Seq[(Any, Unit)] = allData.map(element => (element, ()))
+      val shuffleData = shuffle.partitionByKey[Any, Unit](
+        data = Seq(Partition(keyedData)),
+        numPartitions = targetNumPartitions,
+        partitioner = partitioner,
+      )
+      val actualShuffleId = shuffle.write[Any, Unit](shuffleData)
+      logger.debug(
+        s"Stored repartition/coalesce shuffle data for stage ${stageInfo.id.toInt} with shuffle ID ${actualShuffleId.toInt}",
+      )
+      actualShuffleId
+    }
+
 object DAGScheduler:
   @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
   private def topologicalSort(dependencies: Map[StageId, Set[StageId]]): List[StageId] = {
@@ -431,11 +483,13 @@ object DAGScheduler:
   def requiresDAGScheduling[A](plan: Plan[A]): Boolean = {
     def containsShuffleOps(p: Plan[_]): Boolean = p match {
       case _: Plan.GroupByKeyOp[_, _] | _: Plan.ReduceByKeyOp[_, _] | _: Plan.SortByOp[_, _] |
-          _: Plan.JoinOp[_, _, _] | _: Plan.CoGroupOp[_, _, _] =>
+          _: Plan.JoinOp[_, _, _] | _: Plan.CoGroupOp[_, _, _] | _: Plan.RepartitionOp[_] |
+          _: Plan.CoalesceOp[_] | _: Plan.PartitionByOp[_, _] =>
         true
       case Plan.MapOp(source, _) => containsShuffleOps(source)
       case Plan.FilterOp(source, _) => containsShuffleOps(source)
       case Plan.FlatMapOp(source, _) => containsShuffleOps(source)
+      case Plan.MapPartitionsOp(source, _) => containsShuffleOps(source)
       case Plan.DistinctOp(source) => containsShuffleOps(source)
       case Plan.KeysOp(source) => containsShuffleOps(source)
       case Plan.ValuesOp(source) => containsShuffleOps(source)
