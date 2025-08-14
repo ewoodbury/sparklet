@@ -41,8 +41,9 @@
   - [x] Update `build.sbt` aggregates/dependsOn
 
 ## P1 — Execution Correctness & Performance (next)
-- [ ] Iterator-based execution
-  - [ ] Replace eager `.toSeq`/materialization in operators with streaming `Iterator`
+- [x] Iterator-based execution
+  - [x] Replace eager `.toSeq`/materialization in operators with streaming `Iterator`
+  - Notes: narrow ops stream via LazyList-backed Iterables; shuffle boundaries still materialize. `LocalTaskScheduler` eagerly realizes task outputs to keep timing semantics in tests.
 - [ ] Partitioner metadata propagation
   - [ ] Carry `Partitioner` through plans to avoid unnecessary reshuffles
   - [ ] Add `repartition`, `coalesce`, `mapPartitions`

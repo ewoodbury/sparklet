@@ -25,7 +25,8 @@ object Task extends StrictLogging:
   ) extends Task[A, B]:
     override def run(): Partition[B] = {
       taskLogger.debug(s"[${Thread.currentThread().getName}] MapTask on partition")
-      Partition(partition.data.map(f))
+      val it = partition.data.iterator.map(f)
+      Partition(IterUtil.iterableOf(it))
     }
 
   /** A task that applies a filter function to a partition. */
@@ -35,7 +36,8 @@ object Task extends StrictLogging:
   ) extends Task[A, A]:
     override def run(): Partition[A] = {
       taskLogger.debug(s"[${Thread.currentThread().getName}] FilterTask on partition")
-      Partition(partition.data.filter(p))
+      val it = partition.data.iterator.filter(p)
+      Partition(IterUtil.iterableOf(it))
     }
 
   /** A task that applies a flatMap function to a partition. */
@@ -45,7 +47,8 @@ object Task extends StrictLogging:
   ) extends Task[A, B]:
     override def run(): Partition[B] = {
       taskLogger.debug(s"[${Thread.currentThread().getName}] FlatMapTask on partition")
-      Partition(partition.data.flatMap(f))
+      val it = partition.data.iterator.flatMap(a => f(a).iterator)
+      Partition(IterUtil.iterableOf(it))
     }
 
   /** A task that applies a distinct function to a partition. */
@@ -54,7 +57,8 @@ object Task extends StrictLogging:
   ) extends Task[A, A]:
     override def run(): Partition[A] = {
       taskLogger.debug(s"[${Thread.currentThread().getName}] DistinctTask on partition")
-      Partition(partition.data.toSeq.distinct)
+      val it = partition.data.iterator.distinct
+      Partition(IterUtil.iterableOf(it))
     }
 
   /** A task that applies a keys function to a partition. */
@@ -63,7 +67,8 @@ object Task extends StrictLogging:
   ) extends Task[(K, V), K]:
     override def run(): Partition[K] = {
       taskLogger.debug(s"[${Thread.currentThread().getName}] KeysTask on partition")
-      Partition(partition.data.map(_._1))
+      val it = partition.data.iterator.map(_._1)
+      Partition(IterUtil.iterableOf(it))
     }
 
   /** A task that applies a values function to a partition. */
@@ -72,7 +77,8 @@ object Task extends StrictLogging:
   ) extends Task[(K, V), V]:
     override def run(): Partition[V] = {
       taskLogger.debug(s"[${Thread.currentThread().getName}] ValuesTask on partition")
-      Partition(partition.data.map(_._2))
+      val it = partition.data.iterator.map(_._2)
+      Partition(IterUtil.iterableOf(it))
     }
 
   /** A task that applies a mapValues function to a partition. */
@@ -82,7 +88,8 @@ object Task extends StrictLogging:
   ) extends Task[(K, V), (K, B)]:
     override def run(): Partition[(K, B)] = {
       taskLogger.debug(s"[${Thread.currentThread().getName}] MapValuesTask on partition")
-      Partition(partition.data.map { case (k, v) => (k, f(v)) })
+      val it = partition.data.iterator.map { case (k, v) => (k, f(v)) }
+      Partition(IterUtil.iterableOf(it))
     }
 
   /** A task that applies a filterKeys function to a partition. */
@@ -92,7 +99,8 @@ object Task extends StrictLogging:
   ) extends Task[(K, V), (K, V)]:
     override def run(): Partition[(K, V)] = {
       taskLogger.debug(s"[${Thread.currentThread().getName}] FilterKeysTask on partition")
-      Partition(partition.data.filter { case (k, _) => p(k) })
+      val it = partition.data.iterator.filter { case (k, _) => p(k) }
+      Partition(IterUtil.iterableOf(it))
     }
 
   /** A task that applies a filterValues function to a partition. */
@@ -102,7 +110,8 @@ object Task extends StrictLogging:
   ) extends Task[(K, V), (K, V)]:
     override def run(): Partition[(K, V)] = {
       taskLogger.debug(s"[${Thread.currentThread().getName}] FilterValuesTask on partition")
-      Partition(partition.data.filter { case (_, v) => p(v) })
+      val it = partition.data.iterator.filter { case (_, v) => p(v) }
+      Partition(IterUtil.iterableOf(it))
     }
 
   /** A task that applies a flatMapValues function to a partition. */
@@ -112,7 +121,8 @@ object Task extends StrictLogging:
   ) extends Task[(K, V), (K, B)]:
     override def run(): Partition[(K, B)] = {
       taskLogger.debug(s"[${Thread.currentThread().getName}] FlatMapValuesTask on partition")
-      Partition(partition.data.flatMap { case (k, v) => f(v).iterator.map(b => (k, b)) })
+      val it = partition.data.iterator.flatMap { case (k, v) => f(v).iterator.map(b => (k, b)) }
+      Partition(IterUtil.iterableOf(it))
     }
 
   /** A task that executes a complete stage (chain of narrow transformations) on a partition. */
@@ -136,6 +146,7 @@ object Task extends StrictLogging:
       val rt = SparkletRuntime.get
       val scheduler = new DAGScheduler[IO](rt.shuffle, rt.scheduler, rt.partitioner)
       val results = scheduler.execute(plan).unsafeRunSync()
+      // Keep Seq materialization for DAGTask to satisfy tests that expect Seq-typed data
       Partition(results.toSeq)
     }
 

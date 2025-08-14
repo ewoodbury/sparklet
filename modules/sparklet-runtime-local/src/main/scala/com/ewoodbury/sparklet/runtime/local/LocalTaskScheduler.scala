@@ -27,7 +27,10 @@ final class LocalTaskScheduler(parallelism: Int) extends TaskScheduler[IO] with 
       tasks.toList
         .parTraverse { task =>
           semaphore.permit.use { _ =>
-            IO.blocking(task.run())
+            IO.blocking(task.run()).map { p =>
+              // Realize results to enforce eager execution timing and cache them for reuse
+              Partition(p.data.toList)
+            }
           }
         }
         .guarantee(IO(logger.debug("LocalTaskScheduler: all tasks completed")))
