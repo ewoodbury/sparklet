@@ -3,8 +3,8 @@ package com.ewoodbury.sparklet.core
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.ewoodbury.sparklet.runtime.api.SparkletRuntime
 import com.ewoodbury.sparklet.api.DistCollection
+import com.ewoodbury.sparklet.runtime.api.SparkletRuntime
 
 class TestJoins extends AnyFlatSpec with Matchers {
 

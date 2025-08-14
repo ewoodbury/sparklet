@@ -9,4 +9,3 @@ private[execution] object IterUtil:
    * with caching for repeat traversals, and value-based equality with other Seq implementations.
    */
   def iterableOf[A](source: Iterator[A]): Iterable[A] = LazyList.from(source)
-
