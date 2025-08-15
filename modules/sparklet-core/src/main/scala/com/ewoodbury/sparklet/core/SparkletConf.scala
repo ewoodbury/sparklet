@@ -15,6 +15,13 @@ final case class SparkletConf(
     sortSamplePerPartition: Int = 20,
     /** Cap on total number of samples to bound driver memory. */
     sortMaxSample: Int = 20000,
+    /** Size threshold (in number of records) below which broadcast-hash join is preferred. */
+    broadcastJoinThreshold: Long = 1000L,
+    /**
+     * Whether to enable sort-merge join for large datasets. If false, always uses shuffle-hash
+     * join.
+     */
+    enableSortMergeJoin: Boolean = true,
 )
 
 @SuppressWarnings(Array("org.wartremover.warts.DefaultArguments", "org.wartremover.warts.Var"))

@@ -206,7 +206,7 @@ class TestExecutorCreateTasks extends AnyFlatSpec with Matchers with BeforeAndAf
     // Given: A Join operation plan (shuffle operation)
     val leftPlan = Plan.Source(Seq(Partition(Seq(("a", 1), ("b", 2)))))
     val rightPlan = Plan.Source(Seq(Partition(Seq(("a", 3), ("b", 4)))))
-    val joinPlan = Plan.JoinOp(leftPlan, rightPlan)
+    val joinPlan = Plan.JoinOp(leftPlan, rightPlan, None)
 
     // When: We create tasks from the plan
     val tasks = Executor.createTasks(joinPlan)

@@ -60,7 +60,7 @@ class TestShuffleOperationsPlan extends AnyFlatSpec with Matchers {
     
     // Verify both source plans are preserved
     joined.plan match {
-      case Plan.JoinOp(leftPlan, rightPlan) => 
+      case Plan.JoinOp(leftPlan, rightPlan, _) => 
         leftPlan shouldBe left.plan
         rightPlan shouldBe right.plan
       case _ => fail("Expected JoinOp")

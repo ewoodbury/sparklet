@@ -160,7 +160,8 @@ object Task extends StrictLogging:
       taskLogger.debug(s"[${Thread.currentThread().getName}] ShuffleHashJoinTask on partition")
       // Build a hash map from the smaller side to reduce memory and CPU
       val (small, large, emitLeftFirst) =
-        if (leftData.size <= rightData.size) (leftData, rightData, true) else (rightData, leftData, false)
+        if (leftData.size <= rightData.size) (leftData, rightData, true)
+        else (rightData, leftData, false)
       val grouped = small.groupBy(_._1).view.mapValues(_.map(_._2)).toMap
       val outIter = large.iterator.flatMap { case (k, v) =>
         grouped.getOrElse(k, Seq.empty[L]).iterator.map { s =>
@@ -169,6 +170,55 @@ object Task extends StrictLogging:
         }
       }
       Partition(IterUtil.iterableOf(outIter))
+    }
+
+  /** A per-partition sort-merge inner join task that joins two sorted, co-partitioned inputs. */
+  final case class SortMergeJoinTask[K, L, R](
+      leftData: Seq[(K, L)],
+      rightData: Seq[(K, R)],
+  )(using keyOrdering: Ordering[K])
+      extends RunnableTask[Any, (K, (L, R))]:
+    override def run(): Partition[(K, (L, R))] = {
+      taskLogger.debug(s"[${Thread.currentThread().getName}] SortMergeJoinTask on partition")
+
+      // Sort both sides by key if they're not already sorted
+      val sortedLeft = leftData.sortBy(_._1)
+      val sortedRight = rightData.sortBy(_._1)
+
+      // Group by key and perform cross product for matching keys
+      val leftByKey = sortedLeft.groupBy(_._1).view.mapValues(_.map(_._2)).toMap
+      val rightByKey = sortedRight.groupBy(_._1).view.mapValues(_.map(_._2)).toMap
+
+      val result = for {
+        (key, leftValues) <- leftByKey.toSeq
+        rightValues <- rightByKey.get(key).toSeq
+        leftValue <- leftValues
+        rightValue <- rightValues
+      } yield (key, (leftValue, rightValue))
+
+      Partition(result)
+    }
+
+  /** A broadcast-hash inner join task that joins a local partition with a broadcast dataset. */
+  final case class BroadcastHashJoinTask[K, L, R](
+      localData: Seq[(K, L)],
+      broadcastMap: Map[K, Seq[R]],
+      isRightLocal: Boolean,
+  ) extends RunnableTask[Any, (K, (L, R))]:
+    override def run(): Partition[(K, (L, R))] = {
+      taskLogger.debug(s"[${Thread.currentThread().getName}] BroadcastHashJoinTask on partition")
+      val result = localData.iterator.flatMap { case (k, localValue) =>
+        broadcastMap.getOrElse(k, Seq.empty[R]).iterator.map { broadcastValue =>
+          if (isRightLocal) {
+            // Local data is right side, broadcast is left side
+            (k, (broadcastValue.asInstanceOf[L], localValue.asInstanceOf[R]))
+          } else {
+            // Local data is left side, broadcast is right side
+            (k, (localValue, broadcastValue))
+          }
+        }
+      }
+      Partition(IterUtil.iterableOf(result))
     }
 
 end Task

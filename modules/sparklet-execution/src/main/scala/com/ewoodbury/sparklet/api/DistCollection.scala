@@ -167,7 +167,52 @@ final case class DistCollection[A](plan: Plan[A]) extends StrictLogging:
   def join[K, V, W](other: DistCollection[(K, W)])(using
       ev: A =:= (K, V),
   ): DistCollection[(K, (V, W))] =
-    DistCollection(Plan.JoinOp(this.plan.asInstanceOf[Plan[(K, V)]], other.plan))
+    DistCollection(Plan.JoinOp(this.plan.asInstanceOf[Plan[(K, V)]], other.plan, None))
+
+  /**
+   * Transformation: Joins this collection with another collection by key using shuffle-hash join.
+   * Returns a new DistCollection representing the joined data. Does not trigger computation.
+   */
+  def shuffleHashJoin[K, V, W](other: DistCollection[(K, W)])(using
+      ev: A =:= (K, V),
+  ): DistCollection[(K, (V, W))] =
+    DistCollection(
+      Plan.JoinOp(
+        this.plan.asInstanceOf[Plan[(K, V)]],
+        other.plan,
+        Some(Plan.JoinStrategy.ShuffleHash),
+      ),
+    )
+
+  /**
+   * Transformation: Joins this collection with another collection by key using sort-merge join.
+   * Returns a new DistCollection representing the joined data. Does not trigger computation.
+   */
+  def sortMergeJoin[K, V, W](other: DistCollection[(K, W)])(using
+      ev: A =:= (K, V),
+  ): DistCollection[(K, (V, W))] =
+    DistCollection(
+      Plan.JoinOp(
+        this.plan.asInstanceOf[Plan[(K, V)]],
+        other.plan,
+        Some(Plan.JoinStrategy.SortMerge),
+      ),
+    )
+
+  /**
+   * Transformation: Joins this collection with another collection by key using broadcast-hash
+   * join. Returns a new DistCollection representing the joined data. Does not trigger computation.
+   */
+  def broadcastJoin[K, V, W](other: DistCollection[(K, W)])(using
+      ev: A =:= (K, V),
+  ): DistCollection[(K, (V, W))] =
+    DistCollection(
+      Plan.JoinOp(
+        this.plan.asInstanceOf[Plan[(K, V)]],
+        other.plan,
+        Some(Plan.JoinStrategy.Broadcast),
+      ),
+    )
 
   /**
    * Transformation: Co-groups this collection with another collection by key, requiring a shuffle

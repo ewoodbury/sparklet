@@ -5,6 +5,7 @@ import cats.effect.IO
 import com.ewoodbury.sparklet.core.SparkletConf
 import com.ewoodbury.sparklet.runtime.local.{
   HashPartitioner,
+  LocalBroadcastService,
   LocalExecutorBackend,
   LocalShuffleService,
   LocalTaskScheduler,
@@ -21,6 +22,7 @@ object SparkletRuntime:
       executor = new LocalExecutorBackend,
       shuffle = new LocalShuffleService,
       partitioner = new HashPartitioner,
+      broadcast = new LocalBroadcastService,
     )
 
   // Optional per-thread override to isolate tests or specific executions
@@ -32,6 +34,7 @@ object SparkletRuntime:
       executor: ExecutorBackend,
       shuffle: ShuffleService,
       partitioner: Partitioner,
+      broadcast: BroadcastService,
   )
 
   def get: RuntimeComponents = {

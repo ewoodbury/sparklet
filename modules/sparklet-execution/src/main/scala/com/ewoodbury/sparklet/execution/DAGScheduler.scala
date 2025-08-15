@@ -7,7 +7,12 @@ import cats.syntax.all.*
 import com.typesafe.scalalogging.StrictLogging
 
 import com.ewoodbury.sparklet.core.*
-import com.ewoodbury.sparklet.runtime.api.{Partitioner, ShuffleService, TaskScheduler}
+import com.ewoodbury.sparklet.runtime.api.{
+  Partitioner,
+  ShuffleService,
+  SparkletRuntime,
+  TaskScheduler,
+}
 
 @SuppressWarnings(
   Array(
@@ -179,12 +184,14 @@ final class DAGScheduler[F[_]: Sync](
       val writeF: F[ShuffleId] =
         if (hasSortByDependent) {
           // Find the dependent sortBy stage and use its configuration to range-partition output
-          val sortByDependentId = dependentStages.find(depStageId =>
-            stageGraph
-              .stages(depStageId)
-              .shuffleOperation
-              .exists(_.isInstanceOf[Plan.SortByOp[_, _]]),
-          ).get
+          val sortByDependentId = dependentStages
+            .find(depStageId =>
+              stageGraph
+                .stages(depStageId)
+                .shuffleOperation
+                .exists(_.isInstanceOf[Plan.SortByOp[_, _]]),
+            )
+            .get
 
           handleSortByRangePartitionedOutput(stageInfo, results, stageGraph, sortByDependentId)
         } else
@@ -230,7 +237,7 @@ final class DAGScheduler[F[_]: Sync](
   ): F[Seq[Partition[_]]] = {
     // Join is the only shuffle op that currently requires effectful scheduling work here
     stageInfo.shuffleOperation match {
-      case Some(_: Plan.JoinOp[_, _, _]) =>
+      case Some(joinOp: Plan.JoinOp[_, _, _]) =>
         val tagged = stageInfo.inputSources.collect { case t: StageBuilder.TaggedShuffleFrom => t }
         val leftTagged = tagged
           .find(_.side == StageBuilder.Side.Left)
@@ -259,14 +266,19 @@ final class DAGScheduler[F[_]: Sync](
           ),
         )
         val numPartitions = leftTagged.numPartitions // assume both sides same for now
-        val tasks = (0 until numPartitions).map { partitionId =>
-          val l: Seq[(Any, Any)] =
-            shuffle.readPartition[Any, Any](leftShuffleId, PartitionId(partitionId)).data.toSeq
-          val r: Seq[(Any, Any)] =
-            shuffle.readPartition[Any, Any](rightShuffleId, PartitionId(partitionId)).data.toSeq
-          Task.ShuffleHashJoinTask[Any, Any, Any](l, r)
+
+        // Determine join strategy: use hint if available, otherwise auto-select
+        val strategy =
+          joinOp.joinStrategy.getOrElse(selectJoinStrategy(leftShuffleId, rightShuffleId))
+
+        strategy match {
+          case Plan.JoinStrategy.Broadcast =>
+            executeBroadcastHashJoin(leftShuffleId, rightShuffleId, numPartitions)
+          case Plan.JoinStrategy.SortMerge =>
+            executeSortMergeJoin(leftShuffleId, rightShuffleId, numPartitions)
+          case Plan.JoinStrategy.ShuffleHash =>
+            executeShuffleHashJoin(leftShuffleId, rightShuffleId, numPartitions)
         }
-        scheduler.submit(tasks).map(_.asInstanceOf[Seq[Partition[_]]])
       case _ =>
         Sync[F].delay(
           logger.debug(
@@ -276,119 +288,121 @@ final class DAGScheduler[F[_]: Sync](
           Sync[F].delay {
             val resultPartitions: Seq[Partition[_]] = stageInfo.shuffleOperation match {
 
-          // Pattern match to capture the element type `a` and sorting key type `s`.
-          case Some(sortBy: Plan.SortByOp[a, s]) =>
-            // Input for sort is now key-value pairs of (sortKey, element)
-            val typedPartitions = inputPartitions.asInstanceOf[Seq[Partition[(s, a)]]]
-            implicit val ord: Ordering[s] = sortBy.ordering
+              // Pattern match to capture the element type `a` and sorting key type `s`.
+              case Some(sortBy: Plan.SortByOp[a, s]) =>
+                // Input for sort is now key-value pairs of (sortKey, element)
+                val typedPartitions = inputPartitions.asInstanceOf[Seq[Partition[(s, a)]]]
+                implicit val ord: Ordering[s] = sortBy.ordering
 
-            // Sort within each partition by key
-            val sortedIters: Seq[Iterator[(s, a)]] =
-              typedPartitions.map(p => p.data.toSeq.sortBy(_._1)(ord).iterator)
+                // Sort within each partition by key
+                val sortedIters: Seq[Iterator[(s, a)]] =
+                  typedPartitions.map(p => p.data.toSeq.sortBy(_._1)(ord).iterator)
 
-            // K-way merge across partitions to ensure global order
-            import scala.collection.mutable
-            case class Head(idx: Int, pair: (s, a))
-            implicit val heapOrd: Ordering[Head] = Ordering.by(_.pair._1)
-            val heap = mutable.PriorityQueue.empty[Head](heapOrd.reverse)
-            sortedIters.zipWithIndex.foreach { case (it, i) => if (it.hasNext) heap.enqueue(Head(i, it.next())) }
-            val buffers = sortedIters.toArray
+                // K-way merge across partitions to ensure global order
+                import scala.collection.mutable
+                case class Head(idx: Int, pair: (s, a))
+                implicit val heapOrd: Ordering[Head] = Ordering.by(_.pair._1)
+                val heap = mutable.PriorityQueue.empty[Head](heapOrd.reverse)
+                sortedIters.zipWithIndex.foreach { case (it, i) =>
+                  if (it.hasNext) heap.enqueue(Head(i, it.next()))
+                }
+                val buffers = sortedIters.toArray
 
-            val merged = mutable.ArrayBuffer[a]()
-            while (heap.nonEmpty) {
-              val h = heap.dequeue()
-              merged += h.pair._2
-              val i = h.idx
-              if (buffers(i).hasNext) heap.enqueue(Head(i, buffers(i).next()))
-            }
+                val merged = mutable.ArrayBuffer[a]()
+                while (heap.nonEmpty) {
+                  val h = heap.dequeue()
+                  merged += h.pair._2
+                  val i = h.idx
+                  if (buffers(i).hasNext) heap.enqueue(Head(i, buffers(i).next()))
+                }
 
-            Seq(Partition(merged.toSeq))
+                Seq(Partition(merged.toSeq))
 
-          // The remaining shuffle operations work on standard (K, V) pairs.
-          case Some(Plan.GroupByKeyOp(_)) =>
-            val allData = inputPartitions.flatMap(_.data)
-            val groupedData = allData.groupBy(_._1).map { case (key, pairs) =>
-              (key, pairs.map(_._2))
-            }
-            Seq(Partition(groupedData.toSeq)).asInstanceOf[Seq[Partition[Any]]]
+              // The remaining shuffle operations work on standard (K, V) pairs.
+              case Some(Plan.GroupByKeyOp(_)) =>
+                val allData = inputPartitions.flatMap(_.data)
+                val groupedData = allData.groupBy(_._1).map { case (key, pairs) =>
+                  (key, pairs.map(_._2))
+                }
+                Seq(Partition(groupedData.toSeq)).asInstanceOf[Seq[Partition[Any]]]
 
-          case Some(reduceByKey: Plan.ReduceByKeyOp[_, _]) =>
-            val allData = inputPartitions.flatMap(_.data)
-            val reduceFunc = reduceByKey.reduceFunc.asInstanceOf[(V, V) => V]
-            val reducedData = allData.groupBy(_._1).map { case (key, pairs) =>
-              val reducedValue = pairs
-                .map(_._2)
-                .reduceOption(reduceFunc)
-                .getOrElse(throw new NoSuchElementException(s"No values found for key $key"))
-              (key, reducedValue)
-            }
-            Seq(Partition(reducedData.toSeq))
-          
+              case Some(reduceByKey: Plan.ReduceByKeyOp[_, _]) =>
+                val allData = inputPartitions.flatMap(_.data)
+                val reduceFunc = reduceByKey.reduceFunc.asInstanceOf[(V, V) => V]
+                val reducedData = allData.groupBy(_._1).map { case (key, pairs) =>
+                  val reducedValue = pairs
+                    .map(_._2)
+                    .reduceOption(reduceFunc)
+                    .getOrElse(throw new NoSuchElementException(s"No values found for key $key"))
+                  (key, reducedValue)
+                }
+                Seq(Partition(reducedData.toSeq))
 
-          case Some(_: Plan.CoGroupOp[_, _, _]) =>
-            val tagged = stageInfo.inputSources.collect { case t: StageBuilder.TaggedShuffleFrom =>
-              t
-            }
-            val leftTagged = tagged
-              .find(_.side == StageBuilder.Side.Left)
-              .getOrElse(
-                throw new IllegalStateException(
-                  s"Cogroup missing Left input for stage ${stageInfo.id.toInt}",
-                ),
-              )
-            val rightTagged = tagged
-              .find(_.side == StageBuilder.Side.Right)
-              .getOrElse(
-                throw new IllegalStateException(
-                  s"Cogroup missing Right input for stage ${stageInfo.id.toInt}",
-                ),
-              )
-            val leftShuffleId = stageToShuffleId.getOrElse(
-              leftTagged.stageId,
-              throw new IllegalStateException(
-                s"Missing shuffle id for Left upstream stage ${leftTagged.stageId.toInt}",
-              ),
-            )
-            val rightShuffleId = stageToShuffleId.getOrElse(
-              rightTagged.stageId,
-              throw new IllegalStateException(
-                s"Missing shuffle id for Right upstream stage ${rightTagged.stageId.toInt}",
-              ),
-            )
-            val numPartitions = leftTagged.numPartitions
-            val leftData = (0 until numPartitions).flatMap { partitionId =>
-              shuffle.readPartition[Any, Any](leftShuffleId, PartitionId(partitionId)).data
-            }
-            val rightData = (0 until numPartitions).flatMap { partitionId =>
-              shuffle.readPartition[Any, Any](rightShuffleId, PartitionId(partitionId)).data
-            }
+              case Some(_: Plan.CoGroupOp[_, _, _]) =>
+                val tagged = stageInfo.inputSources.collect {
+                  case t: StageBuilder.TaggedShuffleFrom =>
+                    t
+                }
+                val leftTagged = tagged
+                  .find(_.side == StageBuilder.Side.Left)
+                  .getOrElse(
+                    throw new IllegalStateException(
+                      s"Cogroup missing Left input for stage ${stageInfo.id.toInt}",
+                    ),
+                  )
+                val rightTagged = tagged
+                  .find(_.side == StageBuilder.Side.Right)
+                  .getOrElse(
+                    throw new IllegalStateException(
+                      s"Cogroup missing Right input for stage ${stageInfo.id.toInt}",
+                    ),
+                  )
+                val leftShuffleId = stageToShuffleId.getOrElse(
+                  leftTagged.stageId,
+                  throw new IllegalStateException(
+                    s"Missing shuffle id for Left upstream stage ${leftTagged.stageId.toInt}",
+                  ),
+                )
+                val rightShuffleId = stageToShuffleId.getOrElse(
+                  rightTagged.stageId,
+                  throw new IllegalStateException(
+                    s"Missing shuffle id for Right upstream stage ${rightTagged.stageId.toInt}",
+                  ),
+                )
+                val numPartitions = leftTagged.numPartitions
+                val leftData = (0 until numPartitions).flatMap { partitionId =>
+                  shuffle.readPartition[Any, Any](leftShuffleId, PartitionId(partitionId)).data
+                }
+                val rightData = (0 until numPartitions).flatMap { partitionId =>
+                  shuffle.readPartition[Any, Any](rightShuffleId, PartitionId(partitionId)).data
+                }
 
-            // Group left and right data by key
-            val leftByKey = leftData.groupBy(_._1)
-            val rightByKey = rightData.groupBy(_._1)
+                // Group left and right data by key
+                val leftByKey = leftData.groupBy(_._1)
+                val rightByKey = rightData.groupBy(_._1)
 
-            // Perform cogroup - include all keys from both sides
-            val allKeys = leftByKey.keySet ++ rightByKey.keySet
-            val cogroupedData = allKeys.map { key =>
-              val leftValues = leftByKey.getOrElse(key, Seq.empty).map(_._2)
-              val rightValues = rightByKey.getOrElse(key, Seq.empty).map(_._2)
-              (key, (leftValues, rightValues))
-            }
-            Seq(Partition(cogroupedData.toSeq))
+                // Perform cogroup - include all keys from both sides
+                val allKeys = leftByKey.keySet ++ rightByKey.keySet
+                val cogroupedData = allKeys.map { key =>
+                  val leftValues = leftByKey.getOrElse(key, Seq.empty).map(_._2)
+                  val rightValues = rightByKey.getOrElse(key, Seq.empty).map(_._2)
+                  (key, (leftValues, rightValues))
+                }
+                Seq(Partition(cogroupedData.toSeq))
 
-          case Some(_: Plan.RepartitionOp[_]) | Some(_: Plan.CoalesceOp[_]) |
-              Some(_: Plan.PartitionByOp[_, _]) =>
-            val typed = inputPartitions.asInstanceOf[Seq[Partition[(Any, Unit)]]]
-            val out = typed.map { p => Partition(p.data.iterator.map(_._1).toList) }
-            out
+              case Some(_: Plan.RepartitionOp[_]) | Some(_: Plan.CoalesceOp[_]) |
+                  Some(_: Plan.PartitionByOp[_, _]) =>
+                val typed = inputPartitions.asInstanceOf[Seq[Partition[(Any, Unit)]]]
+                val out = typed.map { p => Partition(p.data.iterator.map(_._1).toList) }
+                out
 
-          // A default GroupByKey for any other unhandled shuffle operation.
-          case _ =>
-            val allData = inputPartitions.flatMap(_.data)
-            val groupedData = allData.groupBy(_._1).map { case (key, pairs) =>
-              (key, pairs.map(_._2))
-            }
-            Seq(Partition(groupedData.toSeq))
+              // A default GroupByKey for any other unhandled shuffle operation.
+              case _ =>
+                val allData = inputPartitions.flatMap(_.data)
+                val groupedData = allData.groupBy(_._1).map { case (key, pairs) =>
+                  (key, pairs.map(_._2))
+                }
+                Seq(Partition(groupedData.toSeq))
             }
             resultPartitions
           }
@@ -453,10 +467,14 @@ final class DAGScheduler[F[_]: Sync](
       sortBy: Plan.SortByOp[A, S],
   )(using ordering: Ordering[S]): ShuffleId = {
     // Determine partition count for the dependent sort stage
-    val expectedN = stageGraph.stages(dependentSortByStageId).inputSources.collectFirst {
-      case StageBuilder.ShuffleFrom(_, n) => n
-      case StageBuilder.TaggedShuffleFrom(_, _, n) => n
-    }.getOrElse(SparkletConf.get.defaultShufflePartitions)
+    val expectedN = stageGraph
+      .stages(dependentSortByStageId)
+      .inputSources
+      .collectFirst {
+        case StageBuilder.ShuffleFrom(_, n) => n
+        case StageBuilder.TaggedShuffleFrom(_, _, n) => n
+      }
+      .getOrElse(SparkletConf.get.defaultShufflePartitions)
 
     val elements: Seq[A] = results.flatMap(_.data.asInstanceOf[Iterable[A]])
     val keys: Seq[S] = elements.map(sortBy.keyFunc)
@@ -477,7 +495,8 @@ final class DAGScheduler[F[_]: Sync](
           while (lo <= hi) {
             val mid = (lo + hi) >>> 1
             val cmp = ordering.compare(k, cutPoints(mid))
-            if (cmp <= 0) { ans = mid; hi = mid - 1 } else { lo = mid + 1 }
+            if (cmp <= 0) { ans = mid; hi = mid - 1 }
+            else { lo = mid + 1 }
           }
           // ans in [0, P-1] maps to partition ans, tail goes to P-1
           math.min(ans, numPartitions - 1)
@@ -519,7 +538,9 @@ final class DAGScheduler[F[_]: Sync](
     }
   }
 
-  private def computeCutPoints[S](sample: Seq[S], numPartitions: Int)(using ord: Ordering[S]): Vector[S] = {
+  private def computeCutPoints[S](sample: Seq[S], numPartitions: Int)(using
+      ord: Ordering[S],
+  ): Vector[S] = {
     if (numPartitions <= 1 || sample.isEmpty) Vector.empty[S]
     else {
       val sorted = sample.sorted
@@ -528,11 +549,10 @@ final class DAGScheduler[F[_]: Sync](
       val step = sorted.size.toDouble / P
       (1 to cutCount).map { i =>
         val idx = math.min(sorted.size - 1, math.max(0, math.ceil(i * step).toInt - 1))
-        sorted(idx)  // Now safe because sorted is a Vector and idx is clamped
+        sorted(idx) // Now safe because sorted is a Vector and idx is clamped
       }.toVector
     }
   }
-
 
   /**
    * Handles shuffle output for repartition and coalesce operations by keying each element with a
@@ -558,6 +578,129 @@ final class DAGScheduler[F[_]: Sync](
       )
       actualShuffleId
     }
+
+  /**
+   * Select the best join strategy based on data size heuristics.
+   */
+  private def selectJoinStrategy(
+      leftShuffleId: ShuffleId,
+      rightShuffleId: ShuffleId,
+  ): Plan.JoinStrategy = {
+    val leftSize = estimateShuffleSize(leftShuffleId)
+    val rightSize = estimateShuffleSize(rightShuffleId)
+    val broadcastThreshold = SparkletConf.get.broadcastJoinThreshold
+
+    if (leftSize <= broadcastThreshold || rightSize <= broadcastThreshold) {
+      Plan.JoinStrategy.Broadcast
+    } else if (SparkletConf.get.enableSortMergeJoin) {
+      Plan.JoinStrategy.SortMerge
+    } else {
+      Plan.JoinStrategy.ShuffleHash
+    }
+  }
+
+  /**
+   * Estimate the size of a shuffle dataset for join strategy selection.
+   */
+  private def estimateShuffleSize(shuffleId: ShuffleId): Long = {
+    val numPartitions = shuffle.partitionCount(shuffleId)
+    var totalSize = 0L
+    for (partitionId <- 0 until numPartitions) {
+      val partition = shuffle.readPartition[Any, Any](shuffleId, PartitionId(partitionId))
+      totalSize += partition.data.size
+    }
+    totalSize
+  }
+
+  /**
+   * Execute broadcast-hash join by broadcasting the smaller dataset.
+   */
+  private def executeBroadcastHashJoin(
+      leftShuffleId: ShuffleId,
+      rightShuffleId: ShuffleId,
+      numPartitions: Int,
+  ): F[Seq[Partition[_]]] = {
+    val leftSize = estimateShuffleSize(leftShuffleId)
+    val rightSize = estimateShuffleSize(rightShuffleId)
+
+    if (leftSize <= rightSize) {
+      // Broadcast left side, iterate over right side
+      val leftData = (0 until numPartitions).flatMap { partitionId =>
+        shuffle.readPartition[Any, Any](leftShuffleId, PartitionId(partitionId)).data
+      }
+      val broadcastId = SparkletRuntime.get.broadcast.broadcast(leftData)
+      val broadcastData = SparkletRuntime.get.broadcast.getBroadcast[(Any, Any)](broadcastId)
+      val broadcastMap = broadcastData.groupBy(_._1).view.mapValues(_.map(_._2)).toMap
+      val tasks = (0 until numPartitions).map { partitionId =>
+        val rightLocalData: Seq[(Any, Any)] =
+          shuffle.readPartition[Any, Any](rightShuffleId, PartitionId(partitionId)).data.toSeq
+        Task.BroadcastHashJoinTask[Any, Any, Any](
+          rightLocalData,
+          broadcastMap,
+          isRightLocal = true,
+        )
+      }
+      scheduler.submit(tasks).map(_.asInstanceOf[Seq[Partition[_]]])
+    } else {
+      // Broadcast right side, iterate over left side
+      val rightData = (0 until numPartitions).flatMap { partitionId =>
+        shuffle.readPartition[Any, Any](rightShuffleId, PartitionId(partitionId)).data
+      }
+      val broadcastId = SparkletRuntime.get.broadcast.broadcast(rightData)
+      val broadcastData = SparkletRuntime.get.broadcast.getBroadcast[(Any, Any)](broadcastId)
+      val broadcastMap = broadcastData.groupBy(_._1).view.mapValues(_.map(_._2)).toMap
+      val tasks = (0 until numPartitions).map { partitionId =>
+        val leftLocalData: Seq[(Any, Any)] =
+          shuffle.readPartition[Any, Any](leftShuffleId, PartitionId(partitionId)).data.toSeq
+        Task.BroadcastHashJoinTask[Any, Any, Any](
+          leftLocalData,
+          broadcastMap,
+          isRightLocal = false,
+        )
+      }
+      scheduler.submit(tasks).map(_.asInstanceOf[Seq[Partition[_]]])
+    }
+  }
+
+  /**
+   * Execute sort-merge join by sorting both sides before merging.
+   */
+  private def executeSortMergeJoin(
+      leftShuffleId: ShuffleId,
+      rightShuffleId: ShuffleId,
+      numPartitions: Int,
+  ): F[Seq[Partition[_]]] = {
+    // For sort-merge join, we need to ensure data is sorted by key within each partition
+    val tasks = (0 until numPartitions).map { partitionId =>
+      val leftData: Seq[(Any, Any)] =
+        shuffle.readPartition[Any, Any](leftShuffleId, PartitionId(partitionId)).data.toSeq
+      val rightData: Seq[(Any, Any)] =
+        shuffle.readPartition[Any, Any](rightShuffleId, PartitionId(partitionId)).data.toSeq
+
+      // Use Any ordering for simplicity - in production would use proper key ordering
+      given Ordering[Any] = Ordering.fromLessThan((a, b) => a.hashCode() < b.hashCode())
+      Task.SortMergeJoinTask[Any, Any, Any](leftData, rightData)
+    }
+    scheduler.submit(tasks).map(_.asInstanceOf[Seq[Partition[_]]])
+  }
+
+  /**
+   * Execute shuffle-hash join (the original implementation).
+   */
+  private def executeShuffleHashJoin(
+      leftShuffleId: ShuffleId,
+      rightShuffleId: ShuffleId,
+      numPartitions: Int,
+  ): F[Seq[Partition[_]]] = {
+    val tasks = (0 until numPartitions).map { partitionId =>
+      val l: Seq[(Any, Any)] =
+        shuffle.readPartition[Any, Any](leftShuffleId, PartitionId(partitionId)).data.toSeq
+      val r: Seq[(Any, Any)] =
+        shuffle.readPartition[Any, Any](rightShuffleId, PartitionId(partitionId)).data.toSeq
+      Task.ShuffleHashJoinTask[Any, Any, Any](l, r)
+    }
+    scheduler.submit(tasks).map(_.asInstanceOf[Seq[Partition[_]]])
+  }
 
 object DAGScheduler:
   @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))

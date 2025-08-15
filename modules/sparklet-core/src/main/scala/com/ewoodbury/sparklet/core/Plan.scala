@@ -237,11 +237,19 @@ object Plan:
       extends Plan[A]
 
   /**
+   * Join execution strategies for physical planning.
+   */
+  enum JoinStrategy:
+    case ShuffleHash, SortMerge, Broadcast
+
+  /**
    * Represents a join transformation that requires shuffling both datasets by key.
    * @param left
    *   The left plan node (producing elements of type (K, V)).
    * @param right
    *   The right plan node (producing elements of type (K, W)).
+   * @param joinStrategy
+   *   Hint for join strategy selection (None means auto-select).
    * @tparam K
    *   The key type.
    * @tparam V
@@ -249,7 +257,11 @@ object Plan:
    * @tparam W
    *   The right value type.
    */
-  case class JoinOp[K, V, W](left: Plan[(K, V)], right: Plan[(K, W)]) extends Plan[(K, (V, W))]
+  case class JoinOp[K, V, W](
+      left: Plan[(K, V)],
+      right: Plan[(K, W)],
+      joinStrategy: Option[JoinStrategy],
+  ) extends Plan[(K, (V, W))]
 
   /**
    * Represents a cogroup transformation that groups both datasets by key.

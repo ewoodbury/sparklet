@@ -45,6 +45,19 @@ object PartitionId:
     def compare(x: PartitionId, y: PartitionId): Int = java.lang.Integer.compare(x, y)
 
 /**
+ * Broadcast dataset identifier for distributed variable sharing.
+ */
+opaque type BroadcastId = Int
+object BroadcastId:
+  /** Construct a BroadcastId from an `Int`. */
+  inline def apply(i: Int): BroadcastId = i
+
+  /** Extract the underlying `Int` for interop. */
+  extension (id: BroadcastId) inline def toInt: Int = id
+  given Ordering[BroadcastId] with
+    def compare(x: BroadcastId, y: BroadcastId): Int = java.lang.Integer.compare(x, y)
+
+/**
  * Job identifier placeholder for future uniqueness scoping. Not yet wired through the system; here
  * for forward-compatibility.
  */
