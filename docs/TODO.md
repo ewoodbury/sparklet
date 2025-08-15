@@ -50,11 +50,12 @@
 - [x] Global sort pipeline
   - [x] Sampling + range partitioner
   - [x] Repartition by ranges, local sort per partition, streaming merge on read
-- [ ] Join strategies
-  - [ ] Broadcast-hash Join (BHJ) when one side is small (config threshold)
-  - [ ] Hash/merge join selection hooks (basic heuristics)
-  - [ ] Shuffle-Hash Join (SHJ)
-  - [ ] Sort-Merge Join (SMJ)
+- [x] Join strategies
+  - [x] Broadcast-hash Join (BHJ) when one side is small (config threshold)
+  - [x] Hash/merge join selection hooks (basic heuristics)
+  - [x] Shuffle-Hash Join (SHJ)
+  - [x] Sort-Merge Join (SMJ)
+  - [ ] Add more tests to cover all join strategies, and test automatic join strategy decisions
 
 ## P2 — Advanced Features (later)
 - [ ] Caching & checkpointing
