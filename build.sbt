@@ -38,7 +38,8 @@ lazy val commonSettings = Seq(
     Wart.JavaConversions,
     Wart.Recursion,
     Wart.Enumeration,
-    Wart.ExplicitImplicitTypes
+    Wart.ExplicitImplicitTypes,
+    Wart.SizeIs,
   )
 )
 

@@ -14,6 +14,7 @@ import com.ewoodbury.sparklet.runtime.api.{Partitioner, ShuffleService, TaskSche
     "org.wartremover.warts.MutableDataStructures",
     "org.wartremover.warts.Any",
     "org.wartremover.warts.Equals",
+    "org.wartremover.warts.Var",
   ),
 )
 final class DAGScheduler[F[_]: Sync](
@@ -226,14 +227,54 @@ final class DAGScheduler[F[_]: Sync](
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[(K, V)]],
       stageToShuffleId: mutable.Map[StageId, ShuffleId],
-  ): F[Seq[Partition[_]]] =
-    Sync[F].delay(
-      logger.debug(
-        s"Executing shuffle stage ${stageInfo.id.toInt} with ${inputPartitions.size} input partitions",
-      ),
-    ) *>
-      Sync[F].delay {
-        val resultPartitions: Seq[Partition[_]] = stageInfo.shuffleOperation match {
+  ): F[Seq[Partition[_]]] = {
+    // Join is the only shuffle op that currently requires effectful scheduling work here
+    stageInfo.shuffleOperation match {
+      case Some(_: Plan.JoinOp[_, _, _]) =>
+        val tagged = stageInfo.inputSources.collect { case t: StageBuilder.TaggedShuffleFrom => t }
+        val leftTagged = tagged
+          .find(_.side == StageBuilder.Side.Left)
+          .getOrElse(
+            throw new IllegalStateException(
+              s"Join missing Left input for stage ${stageInfo.id.toInt}",
+            ),
+          )
+        val rightTagged = tagged
+          .find(_.side == StageBuilder.Side.Right)
+          .getOrElse(
+            throw new IllegalStateException(
+              s"Join missing Right input for stage ${stageInfo.id.toInt}",
+            ),
+          )
+        val leftShuffleId = stageToShuffleId.getOrElse(
+          leftTagged.stageId,
+          throw new IllegalStateException(
+            s"Missing shuffle id for Left upstream stage ${leftTagged.stageId.toInt}",
+          ),
+        )
+        val rightShuffleId = stageToShuffleId.getOrElse(
+          rightTagged.stageId,
+          throw new IllegalStateException(
+            s"Missing shuffle id for Right upstream stage ${rightTagged.stageId.toInt}",
+          ),
+        )
+        val numPartitions = leftTagged.numPartitions // assume both sides same for now
+        val tasks = (0 until numPartitions).map { partitionId =>
+          val l: Seq[(Any, Any)] =
+            shuffle.readPartition[Any, Any](leftShuffleId, PartitionId(partitionId)).data.toSeq
+          val r: Seq[(Any, Any)] =
+            shuffle.readPartition[Any, Any](rightShuffleId, PartitionId(partitionId)).data.toSeq
+          Task.ShuffleHashJoinTask[Any, Any, Any](l, r)
+        }
+        scheduler.submit(tasks).map(_.asInstanceOf[Seq[Partition[_]]])
+      case _ =>
+        Sync[F].delay(
+          logger.debug(
+            s"Executing shuffle stage ${stageInfo.id.toInt} with ${inputPartitions.size} input partitions",
+          ),
+        ) *>
+          Sync[F].delay {
+            val resultPartitions: Seq[Partition[_]] = stageInfo.shuffleOperation match {
 
           // Pattern match to capture the element type `a` and sorting key type `s`.
           case Some(sortBy: Plan.SortByOp[a, s]) =>
@@ -282,58 +323,7 @@ final class DAGScheduler[F[_]: Sync](
               (key, reducedValue)
             }
             Seq(Partition(reducedData.toSeq))
-
-          case Some(_: Plan.JoinOp[_, _, _]) =>
-            // Resolve explicit left/right tagged inputs and read exactly those shuffles
-            val tagged = stageInfo.inputSources.collect { case t: StageBuilder.TaggedShuffleFrom =>
-              t
-            }
-            val leftTagged = tagged
-              .find(_.side == StageBuilder.Side.Left)
-              .getOrElse(
-                throw new IllegalStateException(
-                  s"Join missing Left input for stage ${stageInfo.id.toInt}",
-                ),
-              )
-            val rightTagged = tagged
-              .find(_.side == StageBuilder.Side.Right)
-              .getOrElse(
-                throw new IllegalStateException(
-                  s"Join missing Right input for stage ${stageInfo.id.toInt}",
-                ),
-              )
-            val leftShuffleId = stageToShuffleId.getOrElse(
-              leftTagged.stageId,
-              throw new IllegalStateException(
-                s"Missing shuffle id for Left upstream stage ${leftTagged.stageId.toInt}",
-              ),
-            )
-            val rightShuffleId = stageToShuffleId.getOrElse(
-              rightTagged.stageId,
-              throw new IllegalStateException(
-                s"Missing shuffle id for Right upstream stage ${rightTagged.stageId.toInt}",
-              ),
-            )
-            val numPartitions = leftTagged.numPartitions // assume both sides same for now
-            val leftData = (0 until numPartitions).flatMap { partitionId =>
-              shuffle.readPartition[Any, Any](leftShuffleId, PartitionId(partitionId)).data
-            }
-            val rightData = (0 until numPartitions).flatMap { partitionId =>
-              shuffle.readPartition[Any, Any](rightShuffleId, PartitionId(partitionId)).data
-            }
-
-            // Group left and right data by key
-            val leftByKey = leftData.groupBy(_._1)
-            val rightByKey = rightData.groupBy(_._1)
-
-            // Perform inner join with cartesian product for matching keys
-            val joinedData = for {
-              (key, leftValues) <- leftByKey.toSeq
-              rightValues <- rightByKey.get(key).toSeq
-              leftValue <- leftValues.map(_._2)
-              rightValue <- rightValues.map(_._2)
-            } yield (key, (leftValue, rightValue))
-            Seq(Partition(joinedData))
+          
 
           case Some(_: Plan.CoGroupOp[_, _, _]) =>
             val tagged = stageInfo.inputSources.collect { case t: StageBuilder.TaggedShuffleFrom =>
@@ -399,9 +389,11 @@ final class DAGScheduler[F[_]: Sync](
               (key, pairs.map(_._2))
             }
             Seq(Partition(groupedData.toSeq))
-        }
-        resultPartitions
-      }
+            }
+            resultPartitions
+          }
+    }
+  }
 
   /**
    * Handles shuffle output. The cast is necessary as the results from `executeStage` are untyped.
@@ -536,10 +528,11 @@ final class DAGScheduler[F[_]: Sync](
       val step = sorted.size.toDouble / P
       (1 to cutCount).map { i =>
         val idx = math.min(sorted.size - 1, math.max(0, math.ceil(i * step).toInt - 1))
-        sorted(idx)
+        sorted(idx)  // Now safe because sorted is a Vector and idx is clamped
       }.toVector
     }
   }
+
 
   /**
    * Handles shuffle output for repartition and coalesce operations by keying each element with a

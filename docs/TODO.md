@@ -51,8 +51,10 @@
   - [x] Sampling + range partitioner
   - [x] Repartition by ranges, local sort per partition, streaming merge on read
 - [ ] Join strategies
-  - [ ] Broadcast-hash join when one side is small (config threshold)
+  - [ ] Broadcast-hash Join (BHJ) when one side is small (config threshold)
   - [ ] Hash/merge join selection hooks (basic heuristics)
+  - [ ] Shuffle-Hash Join (SHJ)
+  - [ ] Sort-Merge Join (SMJ)
 
 ## P2 — Advanced Features (later)
 - [ ] Caching & checkpointing

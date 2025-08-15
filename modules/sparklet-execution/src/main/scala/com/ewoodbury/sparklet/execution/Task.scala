@@ -151,4 +151,24 @@ object Task extends StrictLogging:
       Partition(results.toSeq)
     }
 
+  /** A per-partition shuffle-hash inner join task that joins two co-partitioned inputs. */
+  final case class ShuffleHashJoinTask[K, L, R](
+      leftData: Seq[(K, L)],
+      rightData: Seq[(K, R)],
+  ) extends RunnableTask[Any, (K, (L, R))]:
+    override def run(): Partition[(K, (L, R))] = {
+      taskLogger.debug(s"[${Thread.currentThread().getName}] ShuffleHashJoinTask on partition")
+      // Build a hash map from the smaller side to reduce memory and CPU
+      val (small, large, emitLeftFirst) =
+        if (leftData.size <= rightData.size) (leftData, rightData, true) else (rightData, leftData, false)
+      val grouped = small.groupBy(_._1).view.mapValues(_.map(_._2)).toMap
+      val outIter = large.iterator.flatMap { case (k, v) =>
+        grouped.getOrElse(k, Seq.empty[L]).iterator.map { s =>
+          if (emitLeftFirst) (k, (s.asInstanceOf[L], v.asInstanceOf[R]))
+          else (k, (v.asInstanceOf[L], s.asInstanceOf[R]))
+        }
+      }
+      Partition(IterUtil.iterableOf(outIter))
+    }
+
 end Task
