@@ -40,7 +40,7 @@ class TestPluggability extends AnyFlatSpec with Matchers {
 
     val fakeBroadcast: BroadcastService = new BroadcastService {
       def broadcast[T](data: Seq[T]): com.ewoodbury.sparklet.core.BroadcastId = com.ewoodbury.sparklet.core.BroadcastId(0)
-      def getBroadcast[T](id: com.ewoodbury.sparklet.core.BroadcastId): Seq[T] = Seq.empty.asInstanceOf[Seq[T]]
+      def getBroadcast[T](id: com.ewoodbury.sparklet.core.BroadcastId): Seq[T] = Seq.empty[T]
       def clear(): Unit = ()
     }
 

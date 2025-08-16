@@ -460,7 +460,7 @@ final class DAGScheduler[F[_]: Sync](
       }
     }
 
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf", "org.wartremover.warts.SeqApply"))
   private def handleSortByRangePartitionedOutputTyped[A, S](
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],
@@ -529,7 +529,7 @@ final class DAGScheduler[F[_]: Sync](
   }
 
   // --- Sampling utilities for sortBy ---
-  private def takeKeySample[S](keys: Seq[S])(using ord: Ordering[S]): Seq[S] = {
+  private def takeKeySample[S](keys: Seq[S]): Seq[S] = {
     val perPart = SparkletConf.get.sortSamplePerPartition
     val maxSample = SparkletConf.get.sortMaxSample
     if (keys.isEmpty) Seq.empty
@@ -540,6 +540,7 @@ final class DAGScheduler[F[_]: Sync](
     }
   }
 
+  @SuppressWarnings(Array("org.wartremover.warts.SeqApply"))
   private def computeCutPoints[S](sample: Seq[S], numPartitions: Int)(using
       ord: Ordering[S],
   ): Vector[S] = {
@@ -683,6 +684,7 @@ final class DAGScheduler[F[_]: Sync](
         shuffle.readPartition[Any, Any](rightShuffleId, PartitionId(partitionId)).data.toSeq
 
       // Use Any ordering for simplicity - in production would use proper key ordering
+      @SuppressWarnings(Array("org.wartremover.warts.Any"))
       given Ordering[Any] = Ordering.fromLessThan((a, b) => a.hashCode() < b.hashCode())
       Task.SortMergeJoinTask[Any, Any, Any](leftData, rightData)
     }

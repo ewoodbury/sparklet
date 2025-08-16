@@ -6,6 +6,7 @@ import org.scalatest.BeforeAndAfter
 import com.typesafe.scalalogging.StrictLogging
 import cats.effect.IO
 import scala.collection.mutable.ListBuffer
+import java.io.{ByteArrayOutputStream, PrintStream}
 
 import com.ewoodbury.sparklet.api.DistCollection
 import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf}

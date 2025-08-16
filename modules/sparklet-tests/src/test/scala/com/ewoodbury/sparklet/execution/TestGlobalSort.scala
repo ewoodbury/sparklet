@@ -23,9 +23,9 @@ class TestGlobalSort extends AnyFlatSpec with Matchers {
     sortStageInfo.isShuffleStage shouldBe true
     // The sort stage should read from a shuffle of the prior stage with configured partition count
     val expectedN = SparkletConf.get.defaultShufflePartitions
-    val inputN = sortStageInfo.inputSources.collect { case StageBuilder.ShuffleFrom(_, n) => n }
-    inputN should not be empty
-    inputN.head shouldBe expectedN
+    val inputN: Seq[Int] = sortStageInfo.inputSources.collect { case StageBuilder.ShuffleFrom(_, n) => n }
+    assert(inputN.nonEmpty)
+    inputN.headOption shouldBe Some(expectedN)
   }
 
   it should "produce a globally sorted result on skewed datasets" in {
