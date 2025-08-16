@@ -271,6 +271,8 @@ final class DAGScheduler[F[_]: Sync](
         val strategy =
           joinOp.joinStrategy.getOrElse(selectJoinStrategy(leftShuffleId, rightShuffleId))
 
+        logger.info(s"Using join strategy: $strategy for stage ${stageInfo.id.toInt}")
+
         strategy match {
           case Plan.JoinStrategy.Broadcast =>
             executeBroadcastHashJoin(leftShuffleId, rightShuffleId, numPartitions)
@@ -590,13 +592,16 @@ final class DAGScheduler[F[_]: Sync](
     val rightSize = estimateShuffleSize(rightShuffleId)
     val broadcastThreshold = SparkletConf.get.broadcastJoinThreshold
 
-    if (leftSize <= broadcastThreshold || rightSize <= broadcastThreshold) {
+    val selectedStrategy = if (leftSize <= broadcastThreshold || rightSize <= broadcastThreshold) {
       Plan.JoinStrategy.Broadcast
     } else if (SparkletConf.get.enableSortMergeJoin) {
       Plan.JoinStrategy.SortMerge
     } else {
       Plan.JoinStrategy.ShuffleHash
     }
+
+    logger.info(s"Auto-selected join strategy: $selectedStrategy (leftSize=$leftSize, rightSize=$rightSize, threshold=$broadcastThreshold)")
+    selectedStrategy
   }
 
   /**

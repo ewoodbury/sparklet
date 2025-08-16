@@ -55,7 +55,7 @@
   - [x] Hash/merge join selection hooks (basic heuristics)
   - [x] Shuffle-Hash Join (SHJ)
   - [x] Sort-Merge Join (SMJ)
-  - [ ] Add more tests to cover all join strategies, and test automatic join strategy decisions
+  - [x] Add tests to cover all join strategies, and test automatic join strategy decisions
 
 ## P2 — Advanced Features (later)
 - [ ] Caching & checkpointing
