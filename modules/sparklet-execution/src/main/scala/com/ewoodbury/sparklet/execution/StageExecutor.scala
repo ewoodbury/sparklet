@@ -6,7 +6,6 @@ import com.typesafe.scalalogging.StrictLogging
 
 import com.ewoodbury.sparklet.core.{Partition, PartitionId, Plan, ShuffleId, StageId}
 import com.ewoodbury.sparklet.runtime.api.{ShuffleService, TaskScheduler}
-import scala.collection.mutable
 
 /**
  * Executor for handling stage execution.
@@ -23,8 +22,8 @@ final class StageExecutor[F[_]: Sync](
    */
   def getInputPartitionsForStage(
       stageInfo: StageBuilder.StageInfo,
-      stageResults: mutable.Map[StageId, Seq[Partition[_]]],
-      stageToShuffleId: mutable.Map[StageId, ShuffleId],
+      stageResults: Map[StageId, Seq[Partition[_]]],
+      stageToShuffleId: Map[StageId, ShuffleId],
   ): Seq[Partition[_]] = {
     stageInfo.inputSources.flatMap {
       case StageBuilder.SourceInput(partitions) =>
@@ -67,7 +66,7 @@ final class StageExecutor[F[_]: Sync](
   def executeStage(
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[_]],
-      stageToShuffleId: mutable.Map[StageId, ShuffleId],
+      stageToShuffleId: Map[StageId, ShuffleId],
   ): F[Seq[Partition[_]]] = {
     if (inputPartitions.isEmpty) then
       Sync[F].delay(logger.warn(s"Stage ${stageInfo.id.toInt} has no input partitions")) *> Sync[F]
@@ -90,7 +89,7 @@ final class StageExecutor[F[_]: Sync](
   private def executeNarrowStage[A, B](
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[A]],
-      @annotation.unused stageToShuffleId: mutable.Map[StageId, ShuffleId],
+      @annotation.unused stageToShuffleId: Map[StageId, ShuffleId],
   ): F[Seq[Partition[_]]] = {
     val stage = stageInfo.stage.asInstanceOf[Stage[A, B]]
     val tasks = inputPartitions.map { partition => Task.StageTask(partition, stage) }
@@ -104,7 +103,7 @@ final class StageExecutor[F[_]: Sync](
   private def executeShuffleStage[K, V](
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[(K, V)]],
-      stageToShuffleId: mutable.Map[StageId, ShuffleId],
+      stageToShuffleId: Map[StageId, ShuffleId],
   ): F[Seq[Partition[_]]] = {
     // Join is the only shuffle op that currently requires effectful scheduling work here
     stageInfo.shuffleOperation match {
@@ -140,7 +139,9 @@ final class StageExecutor[F[_]: Sync](
 
         // Determine join strategy: use hint if available, otherwise auto-select
         val strategy =
-          joinOp.joinStrategy.getOrElse(joinExecutor.selectJoinStrategy(leftShuffleId, rightShuffleId))
+          joinOp.joinStrategy.getOrElse(
+            joinExecutor.selectJoinStrategy(leftShuffleId, rightShuffleId),
+          )
 
         logger.info(s"Using join strategy: $strategy for stage ${stageInfo.id.toInt}")
 

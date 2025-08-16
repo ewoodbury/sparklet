@@ -34,7 +34,9 @@ final class JoinExecutor[F[_]: Sync](
       Plan.JoinStrategy.ShuffleHash
     }
 
-    logger.info(s"Auto-selected join strategy: $selectedStrategy (leftSize=$leftSize, rightSize=$rightSize, threshold=$broadcastThreshold)")
+    logger.info(
+      s"Auto-selected join strategy: $selectedStrategy (leftSize=$leftSize, rightSize=$rightSize, threshold=$broadcastThreshold)",
+    )
     selectedStrategy
   }
 
@@ -43,12 +45,10 @@ final class JoinExecutor[F[_]: Sync](
    */
   private def estimateShuffleSize(shuffleId: ShuffleId): Long = {
     val numPartitions = shuffle.partitionCount(shuffleId)
-    var totalSize = 0L
-    for (partitionId <- 0 until numPartitions) {
+    (0 until numPartitions).map { partitionId =>
       val partition = shuffle.readPartition[Any, Any](shuffleId, PartitionId(partitionId))
-      totalSize += partition.data.size
-    }
-    totalSize
+      partition.data.size.toLong
+    }.sum
   }
 
   /**

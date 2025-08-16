@@ -1,17 +1,10 @@
 package com.ewoodbury.sparklet.execution
-
-import scala.collection.mutable
-
 import cats.effect.kernel.Sync
 import cats.syntax.all.*
 import com.typesafe.scalalogging.StrictLogging
 
 import com.ewoodbury.sparklet.core.*
-import com.ewoodbury.sparklet.runtime.api.{
-  Partitioner,
-  ShuffleService,
-  TaskScheduler,
-}
+import com.ewoodbury.sparklet.runtime.api.{Partitioner, ShuffleService, TaskScheduler}
 
 final class DAGScheduler[F[_]: Sync](
     shuffle: ShuffleService,
@@ -24,7 +17,7 @@ final class DAGScheduler[F[_]: Sync](
   private val shuffleHandler = new ShuffleHandler[F](shuffle, partitioner)
   private val stageExecutor = new StageExecutor[F](shuffle, scheduler, joinExecutor)
   private val executionPlanner = new ExecutionPlanner[F](stageExecutor, shuffleHandler)
-  
+
   /**
    * Executes a plan using multi-stage execution, handling shuffle boundaries.
    */

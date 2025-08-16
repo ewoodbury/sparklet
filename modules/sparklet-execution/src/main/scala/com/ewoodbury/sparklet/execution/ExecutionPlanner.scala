@@ -5,7 +5,6 @@ import cats.syntax.all.*
 import com.typesafe.scalalogging.StrictLogging
 
 import com.ewoodbury.sparklet.core.{Partition, Plan, ShuffleId, StageId}
-import scala.collection.mutable
 
 /**
  * Planner for coordinating stage execution.
@@ -22,24 +21,24 @@ final class ExecutionPlanner[F[_]: Sync](
   def runStages(
       stageGraph: StageBuilder.StageGraph,
       executionOrder: List[StageId],
-  ): F[mutable.Map[StageId, Seq[Partition[_]]]] = {
-    val stageResults = mutable.Map[StageId, Seq[Partition[_]]]()
-    val stageToShuffleId = mutable.Map[StageId, ShuffleId]()
-
+  ): F[Map[StageId, Seq[Partition[_]]]] = {
     executionOrder
-      .foldLeftM(()) { (_, stageId) =>
-        val stageInfo = stageGraph.stages(stageId)
-        for {
-          _ <- Sync[F].delay(logger.info(s"ExecutionPlanner: executing stage ${stageId.toInt}"))
-          inputPartitions <- Sync[F].delay(
-            stageExecutor.getInputPartitionsForStage(stageInfo, stageResults, stageToShuffleId),
-          )
-          results <- stageExecutor.executeStage(stageInfo, inputPartitions, stageToShuffleId)
-          _ <- Sync[F].delay { stageResults(stageId) = results }
-          _ <- writeShuffleIfNeeded(stageInfo, results, stageGraph, stageToShuffleId)
-        } yield ()
+      .foldLeftM((Map.empty[StageId, Seq[Partition[_]]], Map.empty[StageId, ShuffleId])) {
+        case ((stageResults, shuffleMappings), stageId) =>
+          val stageInfo = stageGraph.stages(stageId)
+          for {
+            _ <- Sync[F].delay(logger.info(s"ExecutionPlanner: executing stage ${stageId.toInt}"))
+            inputPartitions <- Sync[F].delay(
+              stageExecutor.getInputPartitionsForStage(stageInfo, stageResults, shuffleMappings),
+            )
+            results <- stageExecutor.executeStage(stageInfo, inputPartitions, shuffleMappings)
+            updatedMappings <- writeShuffleIfNeeded(stageInfo, results, stageGraph).map {
+              case Some(shuffleId) => shuffleMappings + (stageInfo.id -> shuffleId)
+              case None => shuffleMappings
+            }
+          } yield (stageResults + (stageId -> results), updatedMappings)
       }
-      .as(stageResults)
+      .map(_._1)
   }
 
   /**
@@ -50,15 +49,14 @@ final class ExecutionPlanner[F[_]: Sync](
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],
       stageGraph: StageBuilder.StageGraph,
-      stageToShuffleId: mutable.Map[StageId, ShuffleId],
-  ): F[Unit] = {
+  ): F[Option[ShuffleId]] = {
     val dependentStages: Iterable[StageId] =
       stageGraph.dependencies.filter(_._2.contains(stageInfo.id)).keys
 
     val needsShuffleOutput =
       dependentStages.exists(depStageId => stageGraph.stages(depStageId).isShuffleStage)
 
-    if (!needsShuffleOutput) Sync[F].unit
+    if (!needsShuffleOutput) Sync[F].pure(None)
     else {
       val hasSortByDependent = dependentStages.exists(depStageId =>
         stageGraph
@@ -89,22 +87,34 @@ final class ExecutionPlanner[F[_]: Sync](
             )
             .get
 
-          shuffleHandler.handleSortByRangePartitionedOutput(stageInfo, results, stageGraph, sortByDependentId)
+          shuffleHandler.handleSortByRangePartitionedOutput(
+            stageInfo,
+            results,
+            stageGraph,
+            sortByDependentId,
+          )
         } else
           repartitionDep
-            .map(op => shuffleHandler.handleRepartitionOrCoalesceOutput(stageInfo, results, op.numPartitions))
+            .map(op =>
+              shuffleHandler
+                .handleRepartitionOrCoalesceOutput(stageInfo, results, op.numPartitions),
+            )
             .orElse(
               coalesceDep
-                .map(op => shuffleHandler.handleRepartitionOrCoalesceOutput(stageInfo, results, op.numPartitions)),
+                .map(op =>
+                  shuffleHandler
+                    .handleRepartitionOrCoalesceOutput(stageInfo, results, op.numPartitions),
+                ),
             )
             .orElse(
               partitionByDep
-                .map(op => shuffleHandler.handleRepartitionOrCoalesceOutput(stageInfo, results, op.numPartitions)),
+                .map(op =>
+                  shuffleHandler
+                    .handleRepartitionOrCoalesceOutput(stageInfo, results, op.numPartitions),
+                ),
             )
             .getOrElse(shuffleHandler.handleShuffleOutput(stageInfo, results))
 
-      writeF.flatMap { shuffleId =>
-        Sync[F].delay { stageToShuffleId(stageInfo.id) = shuffleId }
-      }
+      writeF.map(Some(_))
     }
   }

@@ -1,16 +1,18 @@
 package com.ewoodbury.sparklet.execution
 
+import java.io.{ByteArrayOutputStream, PrintStream}
+
+import scala.collection.mutable.ListBuffer
+
+import cats.effect.IO
+import com.typesafe.scalalogging.StrictLogging
+import org.scalatest.BeforeAndAfter
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import org.scalatest.BeforeAndAfter
-import com.typesafe.scalalogging.StrictLogging
-import cats.effect.IO
-import scala.collection.mutable.ListBuffer
-import java.io.{ByteArrayOutputStream, PrintStream}
 
 import com.ewoodbury.sparklet.api.DistCollection
 import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf}
-import com.ewoodbury.sparklet.runtime.api.{SparkletRuntime}
+import com.ewoodbury.sparklet.runtime.api.SparkletRuntime
 
 /**
  * Comprehensive test suite for join strategies that verifies:

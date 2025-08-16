@@ -4,7 +4,7 @@ import cats.effect.kernel.Sync
 import cats.syntax.all.*
 import com.typesafe.scalalogging.StrictLogging
 
-import com.ewoodbury.sparklet.core.{Partition, PartitionId, Plan, ShuffleId, SparkletConf, StageId}
+import com.ewoodbury.sparklet.core.{Partition, Plan, ShuffleId, SparkletConf, StageId}
 import com.ewoodbury.sparklet.runtime.api.{Partitioner, ShuffleService}
 
 /**
@@ -91,22 +91,23 @@ final class ShuffleHandler[F[_]: Sync](
     // Range partitioner using binary search over cut points
     val rangePartitioner = new Partitioner {
       def partition(key: Any, numPartitions: Int): Int = {
-        if (numPartitions <= 1 || cutPoints.isEmpty) 0
-        else {
-          val k = key.asInstanceOf[S]
-          // Find first index where k <= cutPoints(i), mapping to i, else last partition
-          var lo = 0
-          var hi = cutPoints.length - 1
-          var ans = cutPoints.length
-          while (lo <= hi) {
+        if (numPartitions <= 1 || cutPoints.isEmpty) return 0
+
+        val k = key.asInstanceOf[S]
+
+        @annotation.tailrec
+        def binarySearch(lo: Int, hi: Int, ans: Int): Int = {
+          if (lo > hi) ans
+          else {
             val mid = (lo + hi) >>> 1
             val cmp = ordering.compare(k, cutPoints(mid))
-            if (cmp <= 0) { ans = mid; hi = mid - 1 }
-            else { lo = mid + 1 }
+            if (cmp <= 0) binarySearch(lo, mid - 1, mid)
+            else binarySearch(mid + 1, hi, ans)
           }
-          // ans in [0, P-1] maps to partition ans, tail goes to P-1
-          math.min(ans, numPartitions - 1)
         }
+
+        val result = binarySearch(0, cutPoints.length - 1, cutPoints.length)
+        math.min(result, numPartitions - 1)
       }
     }
 
