@@ -54,6 +54,7 @@ final class JoinExecutor[F[_]: Sync](
   /**
    * Execute broadcast-hash join by broadcasting the smaller dataset.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Any"))
   def executeBroadcastHashJoin(
       leftShuffleId: ShuffleId,
       rightShuffleId: ShuffleId,
@@ -69,7 +70,7 @@ final class JoinExecutor[F[_]: Sync](
       }
       val broadcastId = SparkletRuntime.get.broadcast.broadcast(leftData)
       val broadcastData = SparkletRuntime.get.broadcast.getBroadcast[(Any, Any)](broadcastId)
-      val broadcastMap = broadcastData.groupBy(_._1).view.mapValues(_.map(_._2)).toMap
+      val broadcastMap = broadcastData.groupBy(_._1).view.map { case (k, values) => k -> values.map(_._2) }.toMap
       val tasks = (0 until numPartitions).map { partitionId =>
         val rightLocalData: Seq[(Any, Any)] =
           shuffle.readPartition[Any, Any](rightShuffleId, PartitionId(partitionId)).data.toSeq
@@ -87,7 +88,7 @@ final class JoinExecutor[F[_]: Sync](
       }
       val broadcastId = SparkletRuntime.get.broadcast.broadcast(rightData)
       val broadcastData = SparkletRuntime.get.broadcast.getBroadcast[(Any, Any)](broadcastId)
-      val broadcastMap = broadcastData.groupBy(_._1).view.mapValues(_.map(_._2)).toMap
+      val broadcastMap = broadcastData.groupBy(_._1).view.map { case (k, values) => k -> values.map(_._2) }.toMap
       val tasks = (0 until numPartitions).map { partitionId =>
         val leftLocalData: Seq[(Any, Any)] =
           shuffle.readPartition[Any, Any](leftShuffleId, PartitionId(partitionId)).data.toSeq
@@ -104,6 +105,7 @@ final class JoinExecutor[F[_]: Sync](
   /**
    * Execute sort-merge join by sorting both sides before merging.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Any"))
   def executeSortMergeJoin(
       leftShuffleId: ShuffleId,
       rightShuffleId: ShuffleId,
@@ -127,6 +129,7 @@ final class JoinExecutor[F[_]: Sync](
   /**
    * Execute shuffle-hash join (the original implementation).
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Any"))
   def executeShuffleHashJoin(
       leftShuffleId: ShuffleId,
       rightShuffleId: ShuffleId,
