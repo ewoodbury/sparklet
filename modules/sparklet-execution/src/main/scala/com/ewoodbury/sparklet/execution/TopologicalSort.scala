@@ -11,9 +11,12 @@ object TopologicalSort:
   /**
    * Performs a topological sort on the stage dependencies.
    *
-   * @param dependencies A map of stage IDs to their dependent stage IDs
-   * @return A list of stage IDs in topological order
-   * @throws IllegalStateException if a cycle is detected in the dependencies
+   * @param dependencies
+   *   A map of stage IDs to their dependent stage IDs
+   * @return
+   *   A list of stage IDs in topological order
+   * @throws IllegalStateException
+   *   if a cycle is detected in the dependencies
    */
   def sort(dependencies: Map[StageId, Set[StageId]]): List[StageId] = {
     val inDegree = mutable.Map[StageId, Int]()

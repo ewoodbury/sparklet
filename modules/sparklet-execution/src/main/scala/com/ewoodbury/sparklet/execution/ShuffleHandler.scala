@@ -64,7 +64,13 @@ final class ShuffleHandler[F[_]: Sync](
       }
     }
 
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf", "org.wartremover.warts.SeqApply", "org.wartremover.warts.MutableDataStructures"))
+  @SuppressWarnings(
+    Array(
+      "org.wartremover.warts.AsInstanceOf",
+      "org.wartremover.warts.SeqApply",
+      "org.wartremover.warts.MutableDataStructures",
+    ),
+  )
   private def handleSortByRangePartitionedOutputTyped[A, S](
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],
@@ -166,7 +172,9 @@ final class ShuffleHandler[F[_]: Sync](
    * Handles shuffle output for repartition and coalesce operations by keying each element with a
    * Unit value and delegating to the shuffle service's partitioner.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures", "org.wartremover.warts.Any"))
+  @SuppressWarnings(
+    Array("org.wartremover.warts.MutableDataStructures", "org.wartremover.warts.Any"),
+  )
   def handleRepartitionOrCoalesceOutput(
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],

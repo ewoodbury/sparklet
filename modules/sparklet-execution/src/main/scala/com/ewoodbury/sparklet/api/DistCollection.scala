@@ -279,7 +279,6 @@ final case class DistCollection[A](plan: Plan[A]) extends StrictLogging:
     }
   }
 
-
   // All other actions (count, take, reduce, etc.) can now be defined
   // in terms of collect() for simplicity.
 
