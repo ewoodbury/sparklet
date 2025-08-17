@@ -236,30 +236,49 @@ final case class DistCollection[A](plan: Plan[A]) extends StrictLogging:
 
     // Check if plan requires DAG scheduling (contains shuffle operations)
     if (DAGScheduler.requiresDAGScheduling(this.plan)) {
-      // Use DAGScheduler for plans with shuffle operations
-      logger.debug("collect(): using DAGScheduler (plan contains shuffle)")
-      val rt = SparkletRuntime.get
-      val scheduler = new DAGScheduler[IO](rt.shuffle, rt.scheduler, rt.partitioner)
-      scheduler.execute(this.plan).unsafeRunSync()
+      runPlanWithDAGScheduling()
     } else {
-      // Use legacy single-stage execution for narrow-only operations
-      logger.debug("collect(): using single-stage executor (narrow-only plan)")
-      this.plan match {
-        case s: Plan.Source[A] =>
-          // Sources don't need tasks, just return the data directly
-          s.partitions.flatMap(_.data)
-
-        case _ =>
-          val tasks = Executor.createTasks(this.plan)
-          // Cast to the expected type for TaskScheduler - this is safe because createTasks
-          // returns tasks that produce the correct output type A
-          val typedTasks = tasks.asInstanceOf[Seq[Task[Any, A]]]
-
-          val resultPartitions = SparkletRuntime.get.scheduler.submit(typedTasks).unsafeRunSync()
-          resultPartitions.flatMap(_.data)
-      }
+      runNarrowOnlyPlan()
     }
   }
+
+  /**
+   * Executes a plan using the DAG scheduler.
+   *
+   * @return
+   *   The results of the plan.
+   */
+  private def runPlanWithDAGScheduling(): Iterable[A] = {
+    logger.debug("collect(): using DAG scheduler")
+    val rt = SparkletRuntime.get
+    val scheduler = new DAGScheduler[IO](rt.shuffle, rt.scheduler, rt.partitioner)
+    scheduler.execute(this.plan).unsafeRunSync()
+  }
+
+  /**
+   * Executes a narrow-only plan using the single-stage executor.
+   *
+   * @return
+   *   The results of the plan.
+   */
+  private def runNarrowOnlyPlan(): Iterable[A] = {
+    logger.debug("collect(): using single-stage executor (narrow-only plan)")
+    this.plan match {
+      case s: Plan.Source[A] =>
+        // Sources don't need tasks, just return the data directly
+        s.partitions.flatMap(_.data)
+
+      case _ =>
+        val tasks = Executor.createTasks(this.plan)
+        // Cast to the expected type for TaskScheduler - this is safe because createTasks
+        // returns tasks that produce the correct output type A
+        val typedTasks = tasks.asInstanceOf[Seq[Task[Any, A]]]
+
+        val resultPartitions = SparkletRuntime.get.scheduler.submit(typedTasks).unsafeRunSync()
+        resultPartitions.flatMap(_.data)
+    }
+  }
+
 
   // All other actions (count, take, reduce, etc.) can now be defined
   // in terms of collect() for simplicity.
