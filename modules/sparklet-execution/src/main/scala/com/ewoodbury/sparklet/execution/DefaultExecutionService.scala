@@ -49,8 +49,8 @@ class DefaultExecutionService extends ExecutionService {
 }
 
 /**
- * Auto-registration of the default execution service.
- * This gets called when the execution module is loaded.
+ * Auto-registration of the default execution service. This gets called when the execution module
+ * is loaded.
  */
 object DefaultExecutionService {
   // Register the service when this object is first accessed

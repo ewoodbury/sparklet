@@ -5,8 +5,8 @@ import cats.syntax.all.*
 import com.typesafe.scalalogging.StrictLogging
 
 import com.ewoodbury.sparklet.core.{Partition, PartitionId, Plan, ShuffleId, SparkletConf}
-import com.ewoodbury.sparklet.runtime.api.{ShuffleService, TaskScheduler}
 import com.ewoodbury.sparklet.runtime.SparkletRuntime
+import com.ewoodbury.sparklet.runtime.api.{ShuffleService, TaskScheduler}
 
 /**
  * Executor for handling different join strategies.

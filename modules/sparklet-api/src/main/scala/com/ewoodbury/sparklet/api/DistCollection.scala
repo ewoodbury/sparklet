@@ -230,7 +230,7 @@ final case class DistCollection[A](plan: Plan[A]):
    * Action: Executes the plan and returns the results as a single local Iterable. This triggers
    * the computation using the registered ExecutionService.
    */
-  def collect(): Iterable[A] = 
+  def collect(): Iterable[A] =
     ExecutionService.get.execute(this.plan)
 
   /**
@@ -252,24 +252,28 @@ final case class DistCollection[A](plan: Plan[A]):
     take(1).headOption.getOrElse(throw new NoSuchElementException("Collection is empty"))
 
   /**
-   * Action: Executes the plan and reduces all elements using the given function. This triggers computation.
+   * Action: Executes the plan and reduces all elements using the given function. This triggers
+   * computation.
    */
   def reduce(op: (A, A) => A): A =
     collect().reduceOption(op).getOrElse(throw new NoSuchElementException("Collection is empty"))
 
   /**
-   * Action: Executes the plan and folds all elements using the given initial value and function. This triggers computation.
+   * Action: Executes the plan and folds all elements using the given initial value and function.
+   * This triggers computation.
    */
   def fold(initial: A)(op: (A, A) => A): A = collect().fold(initial)(op)
 
   /**
-   * Action: Executes the plan and aggregates the elements using the given functions. This triggers computation.
+   * Action: Executes the plan and aggregates the elements using the given functions. This triggers
+   * computation.
    */
   def aggregate[B](zero: B)(seqOp: (B, A) => B, combOp: (B, B) => B): B =
     collect().foldLeft(zero)(seqOp)
 
   /**
-   * Action: Executes the plan and applies the given function to each element. This triggers computation.
+   * Action: Executes the plan and applies the given function to each element. This triggers
+   * computation.
    */
   def foreach(f: A => Unit): Unit = collect().foreach(f)
 
@@ -312,7 +316,7 @@ object DistCollection:
   // Lazy initialization to ensure execution service is available
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   @volatile private var initialized = false
-  
+
   private def ensureExecutionServiceInitialized(): Unit = {
     if (!initialized) {
       synchronized {
