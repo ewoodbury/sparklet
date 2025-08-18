@@ -54,6 +54,15 @@ lazy val disruptor = "com.lmax" % "disruptor" % "3.4.4" // required for Log4j2 a
 lazy val scalatest = "org.scalatest" %% "scalatest" % "3.2.17"
 lazy val ceTesting = "org.typelevel" %% "cats-effect-testing-scalatest" % "1.5.0"
 
+// User-facing API (clean interface)
+lazy val `sparklet-api` = (project in file("modules/sparklet-api"))
+  .settings(
+    name := "sparklet-api",
+    commonSettings,
+    libraryDependencies ++= Seq(scalaLogging)
+  )
+  .dependsOn(`sparklet-core`)
+
 // Core model and logical plan
 lazy val `sparklet-core` = (project in file("modules/sparklet-core"))
   .settings(
@@ -105,7 +114,7 @@ lazy val `sparklet-execution` = (project in file("modules/sparklet-execution"))
     commonSettings,
     libraryDependencies ++= Seq(catsCore, catsEffect, scalaLogging, log4jApi, log4jCore, log4jSlf4j, disruptor)
   )
-  .dependsOn(`sparklet-core`, `sparklet-runtime-api`, `sparklet-runtime-default`)
+  .dependsOn(`sparklet-api`, `sparklet-core`, `sparklet-runtime-api`, `sparklet-runtime-default`)
 
 // Test module aggregating all tests
 lazy val `sparklet-tests` = (project in file("modules/sparklet-tests"))
@@ -114,11 +123,12 @@ lazy val `sparklet-tests` = (project in file("modules/sparklet-tests"))
     commonSettings,
     libraryDependencies ++= Seq(scalatest % Test, ceTesting % Test)
   )
-  .dependsOn(`sparklet-execution`, `sparklet-runtime-default`, `sparklet-runtime-local`, `sparklet-shuffle-local`)
+  .dependsOn(`sparklet-api`, `sparklet-execution`, `sparklet-runtime-default`, `sparklet-runtime-local`, `sparklet-shuffle-local`)
 
 // Root aggregator
 lazy val root = (project in file("."))
   .aggregate(
+    `sparklet-api`,
     `sparklet-core`,
     `sparklet-runtime-api`,
     `sparklet-runtime-local`,

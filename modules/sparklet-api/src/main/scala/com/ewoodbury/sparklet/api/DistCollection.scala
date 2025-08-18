@@ -1,23 +1,23 @@
 package com.ewoodbury.sparklet.api
 
-import cats.effect.IO
-import cats.effect.unsafe.implicits.global
-import com.typesafe.scalalogging.StrictLogging
-
-import com.ewoodbury.sparklet.core.{Partition, Plan}
-import com.ewoodbury.sparklet.execution.{DAGScheduler, Executor, Task}
-import com.ewoodbury.sparklet.runtime.api.SparkletRuntime
+import com.ewoodbury.sparklet.core.{ExecutionService, Partition, Plan}
 
 /**
  * A lazy, immutable representation of a "distributed" collection. Operations build up a Plan,
  * execution is deferred until an action is called.
+ *
+ * This is the primary user-facing API for Sparklet, providing familiar transformation and action
+ * operations for distributed data processing.
  *
  * @param plan
  *   The logical plan defining how to compute this collection.
  * @tparam A
  *   The type of elements in the collection.
  */
-final case class DistCollection[A](plan: Plan[A]) extends StrictLogging:
+final case class DistCollection[A](plan: Plan[A]):
+
+  // Initialize execution service on first use
+  DistCollection.ensureExecutionServiceInitialized()
 
   // --- Helper to view the plan ---
   override def toString: String = s"DistCollection(plan = $plan)"
@@ -228,81 +228,49 @@ final case class DistCollection[A](plan: Plan[A]) extends StrictLogging:
 
   /**
    * Action: Executes the plan and returns the results as a single local Iterable. This triggers
-   * the computation using the runtime's TaskScheduler.
+   * the computation using the registered ExecutionService.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Any"))
-  def collect(): Iterable[A] = {
-    logger.info("Action collect() triggered")
-
-    // Check if plan requires DAG scheduling (contains shuffle operations)
-    if (DAGScheduler.requiresDAGScheduling(this.plan)) {
-      runPlanWithDAGScheduling()
-    } else {
-      runNarrowOnlyPlan()
-    }
-  }
+  def collect(): Iterable[A] = 
+    ExecutionService.get.execute(this.plan)
 
   /**
-   * Executes a plan using the DAG scheduler.
-   *
-   * @return
-   *   The results of the plan.
+   * Action: Executes the plan and returns the count of elements. This triggers computation.
    */
-  private def runPlanWithDAGScheduling(): Iterable[A] = {
-    logger.debug("collect(): using DAG scheduler")
-    val rt = SparkletRuntime.get
-    val scheduler = new DAGScheduler[IO](rt.shuffle, rt.scheduler, rt.partitioner)
-    scheduler.execute(this.plan).unsafeRunSync()
-  }
-
-  /**
-   * Executes a narrow-only plan using the single-stage executor.
-   *
-   * @return
-   *   The results of the plan.
-   */
-  private def runNarrowOnlyPlan(): Iterable[A] = {
-    logger.debug("collect(): using single-stage executor (narrow-only plan)")
-    this.plan match {
-      case s: Plan.Source[A] =>
-        // Sources don't need tasks, just return the data directly
-        s.partitions.flatMap(_.data)
-
-      case _ =>
-        val tasks = Executor.createTasks(this.plan)
-        // Cast to the expected type for TaskScheduler - this is safe because createTasks
-        // returns tasks that produce the correct output type A
-        val typedTasks = tasks.asInstanceOf[Seq[Task[Any, A]]]
-
-        val resultPartitions = SparkletRuntime.get.scheduler.submit(typedTasks).unsafeRunSync()
-        resultPartitions.flatMap(_.data)
-    }
-  }
-
-  // All other actions (count, take, reduce, etc.) can now be defined
-  // in terms of collect() for simplicity.
-
   def count(): Long =
-    logger.info("Action count() triggered")
-    collect().size.toLong
+    ExecutionService.get.count(this.plan)
 
+  /**
+   * Action: Executes the plan and returns the first n elements. This triggers computation.
+   */
   def take(n: Int): List[A] =
-    logger.info(s"Action take($n) triggered")
-    // This is inefficient as it collects everything first. A real implementation
-    // would have a more optimized executor for `take`.
-    collect().take(n).toList
+    ExecutionService.get.take(this.plan, n).toList
 
+  /**
+   * Action: Executes the plan and returns the first element. This triggers computation.
+   */
   def first(): A =
     take(1).headOption.getOrElse(throw new NoSuchElementException("Collection is empty"))
 
+  /**
+   * Action: Executes the plan and reduces all elements using the given function. This triggers computation.
+   */
   def reduce(op: (A, A) => A): A =
     collect().reduceOption(op).getOrElse(throw new NoSuchElementException("Collection is empty"))
 
+  /**
+   * Action: Executes the plan and folds all elements using the given initial value and function. This triggers computation.
+   */
   def fold(initial: A)(op: (A, A) => A): A = collect().fold(initial)(op)
 
+  /**
+   * Action: Executes the plan and aggregates the elements using the given functions. This triggers computation.
+   */
   def aggregate[B](zero: B)(seqOp: (B, A) => B, combOp: (B, B) => B): B =
     collect().foldLeft(zero)(seqOp)
 
+  /**
+   * Action: Executes the plan and applies the given function to each element. This triggers computation.
+   */
   def foreach(f: A => Unit): Unit = collect().foreach(f)
 
   // --- Legacy Actions (these will be removed once DAG scheduler is implemented) ---
@@ -341,6 +309,33 @@ end DistCollection
 
 // Companion object for creating a DistCollection from a source
 object DistCollection:
+  // Lazy initialization to ensure execution service is available
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  @volatile private var initialized = false
+  
+  private def ensureExecutionServiceInitialized(): Unit = {
+    if (!initialized) {
+      synchronized {
+        if (!initialized) {
+          // Try to initialize the execution module if available on classpath
+          try {
+            val clazz = Class.forName("com.ewoodbury.sparklet.execution.ExecutionModuleInit")
+            val method = clazz.getMethod("initialize")
+            method.invoke(null)
+          } catch {
+            case _: ClassNotFoundException =>
+              // Execution module not on classpath - user must provide their own ExecutionService
+              ()
+            case _: Exception =>
+              // Other initialization errors - log but continue
+              ()
+          }
+          initialized = true
+        }
+      }
+    }
+  }
+
   /**
    * Creates a DistCollection from an existing Iterable data source, splitting it into a specified
    * number of partitions.
