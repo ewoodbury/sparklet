@@ -6,7 +6,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.ewoodbury.sparklet.api.DistCollection
 import com.ewoodbury.sparklet.core.{Partition, Plan}
-import com.ewoodbury.sparklet.runtime.api.SparkletRuntime
+import com.ewoodbury.sparklet.runtime.SparkletRuntime
 
 /**
   * Tests for Executor.createTasks()

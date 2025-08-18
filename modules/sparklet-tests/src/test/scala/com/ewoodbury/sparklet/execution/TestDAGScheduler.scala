@@ -6,7 +6,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.ewoodbury.sparklet.api.DistCollection
 import com.ewoodbury.sparklet.core.{Partition, Plan}
-import com.ewoodbury.sparklet.runtime.api.SparkletRuntime
+import com.ewoodbury.sparklet.runtime.SparkletRuntime
 
 class TestDAGScheduler extends AnyFlatSpec with Matchers with StrictLogging {
   val toDistCollection: [T] => (seq: Seq[T]) => DistCollection[T] = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))

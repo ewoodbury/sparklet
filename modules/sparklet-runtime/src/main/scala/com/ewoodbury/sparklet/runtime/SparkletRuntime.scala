@@ -1,15 +1,10 @@
-package com.ewoodbury.sparklet.runtime.api
+package com.ewoodbury.sparklet.runtime
 
 import cats.effect.IO
 
 import com.ewoodbury.sparklet.core.SparkletConf
-import com.ewoodbury.sparklet.runtime.local.{
-  HashPartitioner,
-  LocalBroadcastService,
-  LocalExecutorBackend,
-  LocalShuffleService,
-  LocalTaskScheduler,
-}
+import com.ewoodbury.sparklet.runtime.api.*
+import com.ewoodbury.sparklet.runtime.local.*
 
 /**
  * Global wiring holder for the active Sparklet runtime (scheduler, shuffle, etc.).
@@ -48,5 +43,5 @@ object SparkletRuntime:
   def setForCurrentThread(components: RuntimeComponents): Unit =
     threadLocal.set(components)
 
-  /** Clears the current-thread override, falling back to the global components. */
-  def clearForCurrentThread(): Unit = threadLocal.remove()
+  /** Clears the thread-local override (restores global components). */
+  def clearThreadLocal(): Unit = threadLocal.remove()

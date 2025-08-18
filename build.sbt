@@ -68,44 +68,17 @@ lazy val `sparklet-core` = (project in file("modules/sparklet-core"))
   .settings(
     name := "sparklet-core",
     commonSettings,
-    libraryDependencies ++= Seq(scalaLogging)
+    libraryDependencies ++= Seq(catsCore, catsEffect, scalaLogging, log4jApi, log4jCore, log4jSlf4j, disruptor)
   )
 
 // Runtime SPI (RunnableTask, TaskScheduler, ExecutorBackend, Partitioner, ShuffleService)
-lazy val `sparklet-runtime-api` = (project in file("modules/sparklet-runtime-api"))
+lazy val `sparklet-runtime` = (project in file("modules/sparklet-runtime"))
   .settings(
-    name := "sparklet-runtime-api",
+    name := "sparklet-runtime",
     commonSettings,
     libraryDependencies ++= Seq(scalaLogging)
   )
   .dependsOn(`sparklet-core`)
-
-// Local runtime implementations (TaskScheduler, ExecutorBackend)
-lazy val `sparklet-runtime-local` = (project in file("modules/sparklet-runtime-local"))
-  .settings(
-    name := "sparklet-runtime-local",
-    commonSettings,
-    libraryDependencies ++= Seq(catsCore, catsEffect, scalaLogging, log4jApi, log4jCore, log4jSlf4j, disruptor)
-  )
-  .dependsOn(`sparklet-core`, `sparklet-runtime-api`)
-
-// Local shuffle + partitioner implementations
-lazy val `sparklet-shuffle-local` = (project in file("modules/sparklet-shuffle-local"))
-  .settings(
-    name := "sparklet-shuffle-local",
-    commonSettings,
-    libraryDependencies ++= Seq(scalaLogging)
-  )
-  .dependsOn(`sparklet-core`, `sparklet-runtime-api`)
-
-// Default runtime wiring that picks local implementations
-lazy val `sparklet-runtime-default` = (project in file("modules/sparklet-runtime-default"))
-  .settings(
-    name := "sparklet-runtime-default",
-    commonSettings,
-    libraryDependencies ++= Seq(catsCore, catsEffect, scalaLogging)
-  )
-  .dependsOn(`sparklet-core`, `sparklet-runtime-api`, `sparklet-runtime-local`, `sparklet-shuffle-local`)
 
 // Execution engine (Stage, Task, DAGScheduler, StageBuilder, DistCollection, Executor)
 lazy val `sparklet-execution` = (project in file("modules/sparklet-execution"))
@@ -114,7 +87,7 @@ lazy val `sparklet-execution` = (project in file("modules/sparklet-execution"))
     commonSettings,
     libraryDependencies ++= Seq(catsCore, catsEffect, scalaLogging, log4jApi, log4jCore, log4jSlf4j, disruptor)
   )
-  .dependsOn(`sparklet-api`, `sparklet-core`, `sparklet-runtime-api`, `sparklet-runtime-default`)
+  .dependsOn(`sparklet-api`, `sparklet-core`, `sparklet-runtime`)
 
 // Test module aggregating all tests
 lazy val `sparklet-tests` = (project in file("modules/sparklet-tests"))
@@ -123,17 +96,14 @@ lazy val `sparklet-tests` = (project in file("modules/sparklet-tests"))
     commonSettings,
     libraryDependencies ++= Seq(scalatest % Test, ceTesting % Test)
   )
-  .dependsOn(`sparklet-api`, `sparklet-execution`, `sparklet-runtime-default`, `sparklet-runtime-local`, `sparklet-shuffle-local`)
+  .dependsOn(`sparklet-api`, `sparklet-execution`, `sparklet-runtime`)
 
 // Root aggregator
 lazy val root = (project in file("."))
   .aggregate(
     `sparklet-api`,
     `sparklet-core`,
-    `sparklet-runtime-api`,
-    `sparklet-runtime-local`,
-    `sparklet-shuffle-local`,
-    `sparklet-runtime-default`,
+    `sparklet-runtime`,
     `sparklet-execution`,
     `sparklet-tests`
   )

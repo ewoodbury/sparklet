@@ -5,7 +5,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.ewoodbury.sparklet.api.DistCollection
 import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf}
-import com.ewoodbury.sparklet.runtime.api.SparkletRuntime
+import com.ewoodbury.sparklet.runtime.SparkletRuntime
 
 class TestGlobalSort extends AnyFlatSpec with Matchers {
   private val toDistCollection: [T] => (seq: Seq[T]) => DistCollection[T] = [T] => (seq: Seq[T]) =>

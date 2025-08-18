@@ -4,7 +4,7 @@ import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 
 import com.ewoodbury.sparklet.core.{ExecutionService, Plan}
-import com.ewoodbury.sparklet.runtime.api.SparkletRuntime
+import com.ewoodbury.sparklet.runtime.SparkletRuntime
 
 /**
  * Implementation of ExecutionService that bridges the API to the execution engine.

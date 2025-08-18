@@ -4,7 +4,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.ewoodbury.sparklet.core.{Partition, PartitionId}
-import com.ewoodbury.sparklet.runtime.api.SparkletRuntime
+import com.ewoodbury.sparklet.runtime.SparkletRuntime
 
 class TestShuffleService extends AnyFlatSpec with Matchers {
 

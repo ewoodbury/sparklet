@@ -5,7 +5,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.ewoodbury.sparklet.api.DistCollection
 import com.ewoodbury.sparklet.core.{Partition, Plan}
-import com.ewoodbury.sparklet.runtime.api.SparkletRuntime
+import com.ewoodbury.sparklet.runtime.SparkletRuntime
 
 class TestShuffleOperationsExecution extends AnyFlatSpec with Matchers {
   val toDistCollection: [T] => (seq: Seq[T]) => DistCollection[T] = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
