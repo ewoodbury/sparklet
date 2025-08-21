@@ -5,7 +5,7 @@ import cats.effect.std.Semaphore
 import cats.syntax.all.*
 import com.typesafe.scalalogging.StrictLogging
 
-import com.ewoodbury.sparklet.core.Partition
+import com.ewoodbury.sparklet.core.{Partition, RetryPolicy}
 import com.ewoodbury.sparklet.runtime.api.{RunnableTask, TaskScheduler}
 
 /**
@@ -35,6 +35,27 @@ final class LocalTaskScheduler(parallelism: Int) extends TaskScheduler[IO] with 
         }
         .guarantee(IO(logger.debug("LocalTaskScheduler: all tasks completed")))
     }
+
+  /**
+   * Submits tasks with retry logic using the provided retry policy.
+   *
+   * @param tasks The tasks to execute with retry support
+   * @param retryPolicy The policy determining retry behavior and delays
+   * @tparam A Input element type for each task's partition
+   * @tparam B Output element type produced by each task
+   * @return An effect that yields the sequence of output partitions
+   */
+  def submitWithRetry[A, B](
+    tasks: Seq[RunnableTask[A, B]],
+    retryPolicy: RetryPolicy
+  ): IO[Seq[Partition[B]]] =
+    logger.debug(
+      s"LocalTaskScheduler: submitting ${tasks.length} tasks with retry policy (maxRetries=${retryPolicy.maxRetries})"
+    )
+
+    // For now, delegate to the regular submit method
+    // Phase 2 will implement the actual retry logic
+    submit(tasks)
 
   /**
    * No-op for local scheduler; resources are managed by the runtime.

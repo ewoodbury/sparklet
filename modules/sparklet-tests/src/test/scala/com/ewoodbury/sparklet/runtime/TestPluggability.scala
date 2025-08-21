@@ -5,7 +5,7 @@ import cats.effect.unsafe.implicits.global
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.ewoodbury.sparklet.core.{Partition, ShuffleId}
+import com.ewoodbury.sparklet.core.{Partition, RetryPolicy, ShuffleId}
 import com.ewoodbury.sparklet.execution.Task
 import com.ewoodbury.sparklet.runtime.api.*
 
@@ -18,6 +18,13 @@ class TestPluggability extends AnyFlatSpec with Matchers {
     val fakeScheduler = new TaskScheduler[IO] {
       def submit[A, B](tasks: Seq[RunnableTask[A, B]]): IO[Seq[Partition[B]]] =
         IO.pure(tasks.map(_.run()))
+
+      def submitWithRetry[A, B](
+        tasks: Seq[RunnableTask[A, B]],
+        retryPolicy: RetryPolicy
+      ): IO[Seq[Partition[B]]] =
+        submit(tasks) // Simple implementation for test
+
       def shutdown(): IO[Unit] = IO.unit
     }
 
