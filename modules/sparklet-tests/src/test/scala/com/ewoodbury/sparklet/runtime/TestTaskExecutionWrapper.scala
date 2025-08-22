@@ -11,9 +11,9 @@ import com.ewoodbury.sparklet.runtime.api.RunnableTask
 import scala.concurrent.duration._
 
 /**
- * Demonstration test showing Phase 2 retry functionality working
+ * Demonstration test showing TaskExecutionWrapper functionality working
  */
-class TestPhase2RetryDemo extends AnyFlatSpec with Matchers {
+class TestTaskExecutionWrapper extends AnyFlatSpec with Matchers {
 
   class FailingTask(var attempts: Int = 0, succeedAfter: Int = 2) extends RunnableTask[String, String]:
     override def run(): Partition[String] = {
@@ -25,7 +25,7 @@ class TestPhase2RetryDemo extends AnyFlatSpec with Matchers {
       }
     }
 
-  "Phase 2 TaskExecutionWrapper" should "successfully retry failed tasks" in {
+  "TaskExecutionWrapper Retry Policy" should "successfully retry failed tasks" in {
     val failingTask = new FailingTask(succeedAfter = 3)
     val retryPolicy = RetryPolicy.ExponentialBackoff(
       maxRetries = 3,
@@ -83,7 +83,7 @@ class TestPhase2RetryDemo extends AnyFlatSpec with Matchers {
     result.data should contain ("Immediate success")
   }
 
-  "Phase 2 Retry Policies" should "implement exponential backoff correctly" in {
+  it should "implement exponential backoff correctly" in {
     val policy = RetryPolicy.ExponentialBackoff(
       maxRetries = 3,
       baseDelay = 100.millis,
