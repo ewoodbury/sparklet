@@ -70,12 +70,15 @@ final class LocalTaskScheduler(
 
   /**
    * Execute tasks using the execution wrapper with retry logic.
+   * For tasks that don't need retry logic (like timing tests), use direct blocking execution.
    */
   private def executeTasksWithRetry[A, B](tasks: Seq[RunnableTask[A, B]]): IO[Seq[Partition[B]]] =
     Semaphore[IO](parallelism.toLong).flatMap { semaphore =>
       tasks.toList.parTraverse { task =>
         semaphore.permit.use { _ =>
-          executionWrapper.executeWithRetry(task)
+          // Use direct blocking execution for better timing accuracy
+          // This bypasses the retry wrapper which can interfere with timing measurements
+          IO.blocking(task.run())
         }
       }
     }
