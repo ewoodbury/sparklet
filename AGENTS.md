@@ -11,6 +11,7 @@ Code Style
 - Use case classes when handling data types with fields. Use traits if there are common fields that should be shared across classes.
 - Try to avoid for loops and while loops. Use functional patterns instead.
 - Use single-letter variables only for functions which are taken in as arguments. Use descriptive names for all named functions and for all variables.
+- Do not use full classpaths in core code. Import relevant packages at the top of the file instead.
 
 WartRemover Rules
 - Avoid `var`, use `val` instead.
@@ -19,6 +20,6 @@ WartRemover Rules
 - Avoid writign code that results in inferred Any types. Type Anys explicitly.
 
 Documentation
-- Do not use all-caps or emojis in technical documentation
+- Do not use all-caps or emojis in technical documentation or to-do lists.
 - Keep documentation concise and approachable, while still including all necessary details.
 - Assume your audience is a Senior Software Engineer who may is not deeply familiar with this particular topic.
