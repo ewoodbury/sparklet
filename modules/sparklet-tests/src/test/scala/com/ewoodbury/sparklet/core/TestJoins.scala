@@ -8,8 +8,8 @@ import com.ewoodbury.sparklet.runtime.SparkletRuntime
 
 class TestJoins extends AnyFlatSpec with Matchers {
 
-  private val toDistCollection: [T] => (seq: Seq[T]) => com.ewoodbury.sparklet.api.DistCollection[T] =
-    [T] => (seq: Seq[T]) => com.ewoodbury.sparklet.api.DistCollection(Plan.Source(Seq(Partition(seq))))
+  private val toDistCollection: [T] => (seq: Seq[T]) => DistCollection[T] =
+    [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
 
   it should "read the explicit left/right join inputs, not unrelated prior shuffles" in {
     // This test is for a specific bug where joins were using recent shuffles as inputs,

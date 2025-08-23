@@ -5,7 +5,7 @@ import cats.effect.unsafe.implicits.global
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.ewoodbury.sparklet.core.{Partition, RetryPolicy, ShuffleId}
+import com.ewoodbury.sparklet.core.{BroadcastId, Partition, PartitionId, RetryPolicy, ShuffleId}
 import com.ewoodbury.sparklet.execution.Task
 import com.ewoodbury.sparklet.runtime.api.*
 
@@ -38,16 +38,16 @@ class TestPluggability extends AnyFlatSpec with Matchers {
       import ShuffleService.*
       def partitionByKey[K, V](data: Seq[Partition[(K, V)]], numPartitions: Int, partitioner: Partitioner): ShuffleData[K, V] =
         ShuffleData(Map.empty)
-      def write[K, V](sd: ShuffleData[K, V]): ShuffleId = com.ewoodbury.sparklet.core.ShuffleId(0)
-      def readPartition[K, V](id: com.ewoodbury.sparklet.core.ShuffleId, pid: com.ewoodbury.sparklet.core.PartitionId): Partition[(K, V)] =
+      def write[K, V](sd: ShuffleData[K, V]): ShuffleId = ShuffleId(0)
+      def readPartition[K, V](id: ShuffleId, pid: PartitionId): Partition[(K, V)] =
         Partition(Seq.empty)
-      def partitionCount(id: com.ewoodbury.sparklet.core.ShuffleId): Int = 0
+      def partitionCount(id: ShuffleId): Int = 0
       def clear(): Unit = ()
     }
 
     val fakeBroadcast: BroadcastService = new BroadcastService {
-      def broadcast[T](data: Seq[T]): com.ewoodbury.sparklet.core.BroadcastId = com.ewoodbury.sparklet.core.BroadcastId(0)
-      def getBroadcast[T](id: com.ewoodbury.sparklet.core.BroadcastId): Seq[T] = Seq.empty[T]
+      def broadcast[T](data: Seq[T]): BroadcastId = BroadcastId(0)
+      def getBroadcast[T](id: BroadcastId): Seq[T] = Seq.empty[T]
       def clear(): Unit = ()
     }
 

@@ -7,7 +7,7 @@ import com.ewoodbury.sparklet.api.DistCollection
 
 class TestLocalTransformations extends AnyFlatSpec with Matchers {
   val toDistCollection: [T] => (seq: Seq[T]) => DistCollection[T] = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
-  val sourceInt: com.ewoodbury.sparklet.api.DistCollection[Int] = toDistCollection(Seq(1, 2, 3, 4, 5))
+  val sourceInt: DistCollection[Int] = toDistCollection(Seq(1, 2, 3, 4, 5))
 
   "Executor" should "execute a simple map operation" in {
     val mapped = sourceInt.map(_ * 2)

@@ -29,12 +29,12 @@ class TaskExecutionWrapper[F[_]: Async] private (
    * @tparam B Output type
    * @return Effect that yields the partition result or throws exception
    */
-  def executeWithRetry[A, B](task: com.ewoodbury.sparklet.runtime.api.RunnableTask[A, B]): F[Partition[B]] = {
+  def executeWithRetry[A, B](task: RunnableTask[A, B]): F[Partition[B]] = {
     executeWithRetryInternal(task, attempt = 1)
   }
 
   private def executeWithRetryInternal[A, B](
-    task: com.ewoodbury.sparklet.runtime.api.RunnableTask[A, B],
+    task: RunnableTask[A, B],
     attempt: Int
   ): F[Partition[B]] = {
     logger.debug(s"Executing task (attempt $attempt)")

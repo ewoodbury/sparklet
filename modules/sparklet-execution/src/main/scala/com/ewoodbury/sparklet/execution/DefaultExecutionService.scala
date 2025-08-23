@@ -55,7 +55,7 @@ class DefaultExecutionService extends ExecutionService {
 object DefaultExecutionService {
   // Register the service when this object is first accessed
   private lazy val registration = {
-    com.ewoodbury.sparklet.core.ExecutionService.set(new DefaultExecutionService())
+    ExecutionService.set(new DefaultExecutionService())
   }
 
   // Ensure the registration happens by calling this method
