@@ -14,7 +14,7 @@ import com.ewoodbury.sparklet.runtime.api.{Partitioner, RunnableTask, ShuffleSer
  * Comprehensive test suite for LineageRecoveryManager.
  * Tests recovery logic for different operation types and failure scenarios.
  */
-@SuppressWarnings(Array("org.wartremover.warts.Any"))
+@SuppressWarnings(Array("org.wartremover.warts.Any", "org.wartremover.warts.Null", "org.wartremover.warts.Var"))
 class TestLineageRecoveryManager extends AnyFlatSpec with Matchers with BeforeAndAfterEach with BeforeAndAfterAll {
 
   // Mock ShuffleService for testing
