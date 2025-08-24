@@ -21,6 +21,7 @@ final class DAGScheduler[F[_]: Sync](
   private val executionPlanner = new ExecutionPlanner[F](stageExecutor, shuffleHandler)
 
   // Task ID counter for lineage tracking
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private var taskIdCounter: Int = 0
 
   private def generateTaskId(): String = {

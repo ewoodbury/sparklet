@@ -7,6 +7,7 @@ import com.ewoodbury.sparklet.core.StageId
 /**
  * Utility class for performing topological sort on stage dependencies.
  */
+@SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
 object TopologicalSort:
   /**
    * Performs a topological sort on the stage dependencies.

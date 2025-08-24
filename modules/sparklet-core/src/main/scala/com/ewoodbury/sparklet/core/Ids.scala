@@ -69,7 +69,7 @@ object JobId:
  * Lineage information for task recovery and debugging.
  * Tracks task execution context for lineage-based recomputation.
  */
-case class LineageInfo(
+final case class LineageInfo(
   stageId: StageId,
   taskId: Int,
   inputPartitions: Seq[Int],

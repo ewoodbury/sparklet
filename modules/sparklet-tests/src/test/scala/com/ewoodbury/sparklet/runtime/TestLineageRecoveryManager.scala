@@ -4,8 +4,8 @@ import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.effect.implicits.concurrentParSequenceOps
 import com.ewoodbury.sparklet.core.{Partition, ShuffleId, PartitionId, StageId}
-import com.ewoodbury.sparklet.runtime.api.{ShuffleService, Partitioner}
-import com.ewoodbury.sparklet.core.LineageInfo
+import com.ewoodbury.sparklet.runtime.api.{ShuffleService, Partitioner, RunnableTask}
+import com.ewoodbury.sparklet.core.{LineageInfo, RetryPolicy}
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.{BeforeAndAfterEach, BeforeAndAfterAll}
@@ -14,6 +14,7 @@ import org.scalatest.{BeforeAndAfterEach, BeforeAndAfterAll}
  * Comprehensive test suite for LineageRecoveryManager.
  * Tests recovery logic for different operation types and failure scenarios.
  */
+@SuppressWarnings(Array("org.wartremover.warts.Any"))
 class TestLineageRecoveryManager extends AnyFlatSpec with Matchers with BeforeAndAfterEach with BeforeAndAfterAll {
 
   // Mock ShuffleService for testing
@@ -72,7 +73,7 @@ class TestLineageRecoveryManager extends AnyFlatSpec with Matchers with BeforeAn
   override def beforeEach(): Unit = {
     mockShuffleService = new MockShuffleService()
     val taskReconstructor = new TaskReconstructor[IO](mockShuffleService)
-    recoveryManager = LineageRecoveryManager.withMaxAttempts(mockShuffleService, taskReconstructor, 3)
+    recoveryManager = LineageRecoveryManager.withMaxAttempts(taskReconstructor, 3)
   }
 
   override def afterEach(): Unit = {
@@ -412,6 +413,9 @@ class TestLineageRecoveryManager extends AnyFlatSpec with Matchers with BeforeAn
       stats.totalAttempts shouldBe 2
       stats.successfulRecoveries shouldBe 1
       stats.failedRecoveries shouldBe 1
+      stats.successRate shouldBe 0.5
+      // Check recovery time greater than 200ms
+      stats.totalRecoveryTimeMs should be >= 200L
     }
   }
 
@@ -570,11 +574,11 @@ class TestLineageRecoveryManager extends AnyFlatSpec with Matchers with BeforeAn
     val lineage = LineageInfo(StageId(1), 1, Seq(0), Seq(shuffleId), "MapTask", 1)
 
     val wrapper = TaskExecutionWrapper.withRecovery(
-      retryPolicy = com.ewoodbury.sparklet.core.RetryPolicy.NoRetry,
+      retryPolicy = RetryPolicy.NoRetry,
       recoveryManager = recoveryManager
     )
 
-    import com.ewoodbury.sparklet.runtime.api.RunnableTask
+   
     val failingTask = new RunnableTask[Any, String] {
       override def run(): Partition[String] = throw new RuntimeException("Task failed")
     }
@@ -588,11 +592,10 @@ class TestLineageRecoveryManager extends AnyFlatSpec with Matchers with BeforeAn
     val lineage = LineageInfo(StageId(1), 1, Seq(0), Seq.empty, "MapTask", 1) // No shuffle dependencies
 
     val wrapper = TaskExecutionWrapper.withRecovery(
-      retryPolicy = com.ewoodbury.sparklet.core.RetryPolicy.NoRetry,
+      retryPolicy = RetryPolicy.NoRetry,
       recoveryManager = recoveryManager
     )
 
-    import com.ewoodbury.sparklet.runtime.api.RunnableTask
     val failingTask = new RunnableTask[Any, String] {
       override def run(): Partition[String] = throw new RuntimeException("Task failed")
     }

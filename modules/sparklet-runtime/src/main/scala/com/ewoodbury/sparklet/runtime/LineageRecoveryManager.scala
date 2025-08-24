@@ -1,38 +1,44 @@
 package com.ewoodbury.sparklet.runtime
 
-import cats.effect.Async
+import cats.effect.{Async, Ref}
 import cats.syntax.all.*
+import cats.data.OptionT
 import com.typesafe.scalalogging.StrictLogging
+import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
+import scala.concurrent.duration.*
 import scala.jdk.CollectionConverters.*
 
 import com.ewoodbury.sparklet.core.{Partition, LineageInfo}
-import com.ewoodbury.sparklet.runtime.api.{ShuffleService, RunnableTask}
+import com.ewoodbury.sparklet.runtime.api.RunnableTask
 
 /**
  * Manages recovery of failed tasks through lineage-based recomputation.
- * Attempts to reconstruct and re-execute tasks using their dependency information.
+ * Features exponential backoff and enhanced statistics tracking.
+ * 
+ * TODO: Add shuffle service to the constructor to allow for reading shuffle data
+ * when we're ready to support recovery of complex operations (joins, aggregations, etc.)
  *
- * @param shuffleService The shuffle service to use for reading shuffle data
  * @param taskReconstructor The task reconstructor to use for reconstructing tasks
  * @param maxRecoveryAttempts The maximum number of recovery attempts to make
+ * @param baseBackoffDelay Base delay for exponential backoff between attempts
  * @tparam F The effect type
  */
 class LineageRecoveryManager[F[_]: Async](
-  shuffleService: ShuffleService,
   taskReconstructor: TaskReconstructor[F],
-  maxRecoveryAttempts: Int = 3
+  maxRecoveryAttempts: Int = 3,
+  baseBackoffDelay: FiniteDuration = 200.millis
 ) extends StrictLogging {
 
   // Cache for storing lineage information of running tasks
-  private val lineageCache: ConcurrentHashMap[String, LineageInfo] = new ConcurrentHashMap()
+  private val lineageCache: ConcurrentHashMap[String, TaskLineageEntry] = new ConcurrentHashMap()
 
-  // Recovery statistics
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  private var stats = RecoveryStats(0, 0, 0)
+  // Thread-safe recovery statistics using Ref
+  private val statsRef: F[Ref[F, RecoveryStats]] = Async[F].ref(RecoveryStats.empty)
 
   /**
    * Attempt to recover a failed task using its lineage information.
+   * Includes exponential backoff between attempts.
    *
    * @param taskId The ID of the failed task
    * @param originalException The original exception that caused the failure
@@ -42,27 +48,38 @@ class LineageRecoveryManager[F[_]: Async](
     taskId: String,
     originalException: Throwable
   ): F[Option[Partition[Any]]] = {
-    for {
-      lineageOpt <- getTaskLineage(taskId)
-      result <- lineageOpt match {
-        case Some(lineage) if isRecoverable(lineage) =>
-          logger.info(s"Attempting recovery for task $taskId with operation: ${lineage.operation}")
-          attemptRecovery(lineage, originalException)
-        case Some(lineage) =>
-          logger.warn(s"Task $taskId is not recoverable (operation: ${lineage.operation})")
-          Async[F].pure(None)
-        case None =>
-          logger.warn(s"No lineage information found for task $taskId")
-          Async[F].pure(None)
-      }
-    } yield result
+    (for {
+      entry <- OptionT(getTaskLineageEntry(taskId))
+      _ = logger.info(s"Attempting recovery for task $taskId (attempt ${entry.attemptCount + 1}/$maxRecoveryAttempts)")
+      
+      // Check if recovery should proceed
+      canRecover = isRecoverable(entry.lineage)
+      _ <- OptionT.when(canRecover)(Async[F].unit)
+      
+      // Apply exponential backoff delay if this isn't the first attempt
+      backoffDelay = calculateBackoffDelay(entry.attemptCount)
+      _ <- OptionT.liftF(if (backoffDelay > Duration.Zero) {
+        logger.debug(s"Applying backoff delay of ${backoffDelay.toMillis}ms for task $taskId")
+        Async[F].sleep(backoffDelay)
+      } else Async[F].unit)
+      
+      // Update attempt count
+      _ <- OptionT.liftF(updateTaskLineageAttempt(taskId, entry.attemptCount + 1))
+      
+      // Attempt actual recovery
+      result <- OptionT(attemptRecovery(entry.lineage, originalException))
+      
+    } yield result).value.handleErrorWith { error =>
+      logger.error(s"Recovery attempt failed for task $taskId", error)
+      updateStats(_.incrementFailures) *> Async[F].pure(None)
+    }
   }
 
   /**
    * Check if a task is recoverable based on its lineage information.
    */
   def isRecoverable(lineage: LineageInfo): Boolean = {
-    isSupportedOperation(lineage.operation) && lineage.attemptCount < maxRecoveryAttempts
+    isRecoverableOperation(lineage.operation) && lineage.attemptCount < maxRecoveryAttempts
   }
 
   /**
@@ -74,7 +91,8 @@ class LineageRecoveryManager[F[_]: Async](
    */
   def registerTaskLineage(taskId: String, lineage: LineageInfo): F[Unit] = {
     Async[F].delay {
-      lineageCache.put(taskId, lineage)
+      val entry = TaskLineageEntry(lineage, 0, Instant.now())
+      lineageCache.put(taskId, entry)
       logger.debug(s"Registered lineage for task $taskId: ${lineage.operation}")
     }
   }
@@ -98,7 +116,7 @@ class LineageRecoveryManager[F[_]: Async](
    * @return Effect that yields Option[LineageInfo]
    */
   def getTaskLineage(taskId: String): F[Option[LineageInfo]] = {
-    Async[F].delay(Option(lineageCache.get(taskId)))
+    Async[F].delay(Option(lineageCache.get(taskId)).map(_.lineage))
   }
 
   /**
@@ -109,9 +127,23 @@ class LineageRecoveryManager[F[_]: Async](
    * @return Effect that yields Unit
    */
   def updateTaskLineage(taskId: String, newAttempt: Int): F[Unit] = {
+    updateTaskLineageAttempt(taskId, newAttempt)
+  }
+
+  /**
+   * Get current lineage entry for a task.
+   */
+  private def getTaskLineageEntry(taskId: String): F[Option[TaskLineageEntry]] = {
+    Async[F].delay(Option(lineageCache.get(taskId)))
+  }
+
+  /**
+   * Update task lineage attempt count.
+   */
+  private def updateTaskLineageAttempt(taskId: String, newAttempt: Int): F[Unit] = {
     Async[F].delay {
-      Option(lineageCache.get(taskId)).foreach { lineage =>
-        val updated = lineage.copy(attemptCount = newAttempt)
+      Option(lineageCache.get(taskId)).foreach { entry =>
+        val updated = entry.copy(attemptCount = newAttempt)
         lineageCache.put(taskId, updated)
       }
     }
@@ -129,25 +161,29 @@ class LineageRecoveryManager[F[_]: Async](
     originalException: Throwable
   ): F[Option[Partition[Any]]] = {
     logger.debug(s"Attempting recovery for operation: ${lineage.operation}")
+    val startTime = Instant.now()
 
     for {
+      _ <- updateStats(_.incrementAttempts)
       reconstructedTaskOpt <- taskReconstructor.reconstructTask(lineage, originalException)
       result <- reconstructedTaskOpt match {
         case Some(reconstructedTask) =>
           executeReconstructedTask(reconstructedTask, lineage).attempt.flatMap {
             case Right(partition) =>
-              updateRecoveryStats(success = true)
-              logger.info(s"Successfully recovered task with operation: ${lineage.operation}")
-              Async[F].pure(Some(partition))
+              val duration = java.time.Duration.between(startTime, Instant.now())
+              updateStats(_.recordSuccess(duration)) *>
+              logger.info(s"Successfully recovered task with operation: ${lineage.operation} in ${duration.toMillis}ms").pure[F] *>
+              Some(partition).pure[F]
             case Left(recoveryException) =>
-              updateRecoveryStats(success = false)
-              logger.warn(s"Recovery failed for operation: ${lineage.operation}. Original: ${originalException.getMessage}, Recovery: ${recoveryException.getMessage}")
-              Async[F].pure(None)
+              val duration = java.time.Duration.between(startTime, Instant.now())
+              updateStats(_.recordFailure(duration)) *>
+              logger.warn(s"Recovery failed for operation: ${lineage.operation} after ${duration.toMillis}ms. Original: ${originalException.getMessage}, Recovery: ${recoveryException.getMessage}").pure[F] *>
+              None.pure[F]
           }
         case None =>
-          updateRecoveryStats(success = false)
-          logger.warn(s"Could not reconstruct task for operation: ${lineage.operation}")
-          Async[F].pure(None)
+          updateStats(_.incrementReconstructionFailures) *>
+          logger.warn(s"Could not reconstruct task for operation: ${lineage.operation}").pure[F] *>
+          None.pure[F]
       }
     } yield result
   }
@@ -170,9 +206,22 @@ class LineageRecoveryManager[F[_]: Async](
   }
 
   /**
+   * Calculate exponential backoff delay based on attempt number.
+   * Formula: baseDelay * 2^(attempt-1), capped at 30 seconds
+   */
+  private def calculateBackoffDelay(attemptNumber: Int): FiniteDuration = {
+    if (attemptNumber == 0) Duration.Zero
+    else {
+      val exponentialDelay = baseBackoffDelay.toMillis * math.pow(2, attemptNumber - 1)
+      val cappedDelay = math.min(exponentialDelay, 30000) // Cap at 30 seconds
+      cappedDelay.millis
+    }
+  }
+
+  /**
    * Check if an operation type supports recovery.
    */
-  private def isSupportedOperation(operation: String): Boolean = {
+  private def isRecoverableOperation(operation: String): Boolean = {
     operation match {
       case op if op.startsWith("MapTask") => true
       case op if op.startsWith("FilterTask") => true
@@ -192,42 +241,88 @@ class LineageRecoveryManager[F[_]: Async](
   }
 
   /**
-   * Update recovery statistics.
+   * Thread-safe stats update using Ref.
    */
-  private def updateRecoveryStats(success: Boolean): F[Unit] = {
-    Async[F].delay {
-      val newStats = if (success) {
-        stats.copy(
-          totalAttempts = stats.totalAttempts + 1,
-          successfulRecoveries = stats.successfulRecoveries + 1
-        )
-      } else {
-        stats.copy(
-          totalAttempts = stats.totalAttempts + 1,
-          failedRecoveries = stats.failedRecoveries + 1
-        )
-      }
-      stats = newStats
-      logger.debug(s"Recovery stats updated - Success: $success, Total: ${stats.totalAttempts}")
-    }
+  private def updateStats(f: RecoveryStats => RecoveryStats): F[Unit] = {
+    statsRef.flatMap(_.update(f))
   }
 
   /**
-   * Get recovery statistics (could be useful for monitoring).
+   * Get recovery statistics.
    */
   def getRecoveryStats: F[RecoveryStats] = {
-    Async[F].pure(stats)
+    statsRef.flatMap(_.get)
   }
 }
 
 /**
- * Statistics about recovery attempts.
+ * Internal representation of task lineage with metadata.
+ */
+private final case class TaskLineageEntry(
+  lineage: LineageInfo,
+  attemptCount: Int,
+  registrationTime: Instant
+)
+
+/**
+ * Enhanced statistics with timing information and better metrics.
  */
 final case class RecoveryStats(
   totalAttempts: Int,
   successfulRecoveries: Int,
-  failedRecoveries: Int
-)
+  failedRecoveries: Int,
+  reconstructionFailures: Int,
+  totalRecoveryTimeMs: Long,
+  lastUpdated: Instant
+) {
+  def incrementAttempts: RecoveryStats = copy(
+    totalAttempts = totalAttempts + 1,
+    lastUpdated = Instant.now()
+  )
+  
+  def incrementFailures: RecoveryStats = copy(
+    failedRecoveries = failedRecoveries + 1,
+    lastUpdated = Instant.now()
+  )
+  
+  def incrementReconstructionFailures: RecoveryStats = copy(
+    reconstructionFailures = reconstructionFailures + 1,
+    lastUpdated = Instant.now()
+  )
+  
+  def recordSuccess(duration: java.time.Duration): RecoveryStats = copy(
+    successfulRecoveries = successfulRecoveries + 1,
+    totalRecoveryTimeMs = totalRecoveryTimeMs + duration.toMillis,
+    lastUpdated = Instant.now()
+  )
+  
+  def recordFailure(duration: java.time.Duration): RecoveryStats = copy(
+    failedRecoveries = failedRecoveries + 1,
+    totalRecoveryTimeMs = totalRecoveryTimeMs + duration.toMillis,
+    lastUpdated = Instant.now()
+  )
+  
+  def successRate: Double = {
+    if (totalAttempts == 0) 0.0
+    else successfulRecoveries.toDouble / totalAttempts.toDouble
+  }
+  
+  def averageRecoveryTimeMs: Option[Double] = {
+    if (successfulRecoveries == 0) None
+    else Some(totalRecoveryTimeMs.toDouble / successfulRecoveries.toDouble)
+  }
+}
+
+object RecoveryStats {
+  def empty: RecoveryStats = RecoveryStats(
+    totalAttempts = 0,
+    successfulRecoveries = 0,
+    failedRecoveries = 0,
+    reconstructionFailures = 0,
+    totalRecoveryTimeMs = 0L,
+    lastUpdated = Instant.now()
+  )
+}
 
 object LineageRecoveryManager {
 
@@ -235,18 +330,26 @@ object LineageRecoveryManager {
    * Create a LineageRecoveryManager with default settings.
    */
   def default[F[_]: Async](
-    shuffleService: ShuffleService,
     taskReconstructor: TaskReconstructor[F]
   ): LineageRecoveryManager[F] =
-    new LineageRecoveryManager[F](shuffleService, taskReconstructor)
+    new LineageRecoveryManager[F](taskReconstructor)
 
   /**
    * Create a LineageRecoveryManager with custom settings.
    */
   def withMaxAttempts[F[_]: Async](
-    shuffleService: ShuffleService,
     taskReconstructor: TaskReconstructor[F],
     maxRecoveryAttempts: Int
   ): LineageRecoveryManager[F] =
-    new LineageRecoveryManager[F](shuffleService, taskReconstructor, maxRecoveryAttempts)
+    new LineageRecoveryManager[F](taskReconstructor, maxRecoveryAttempts)
+
+  /**
+   * Create a LineageRecoveryManager with custom backoff settings.
+   */
+  def withBackoff[F[_]: Async](
+    taskReconstructor: TaskReconstructor[F],
+    maxRecoveryAttempts: Int,
+    baseBackoffDelay: FiniteDuration
+  ): LineageRecoveryManager[F] =
+    new LineageRecoveryManager[F](taskReconstructor, maxRecoveryAttempts, baseBackoffDelay)
 }
