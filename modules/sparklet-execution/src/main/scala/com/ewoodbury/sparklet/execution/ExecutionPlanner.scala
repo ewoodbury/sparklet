@@ -43,13 +43,13 @@ final class ExecutionPlanner[F[_]: Sync](
   }
 
   /**
-   * Iterates through the stages in topological order, executing each with recovery support
-   * when available. Returns a map of stage results.
+   * Iterates through the stages in topological order, executing each with recovery support when
+   * available. Returns a map of stage results.
    */
   def runStagesWithRecovery(
       stageGraph: StageBuilder.StageGraph,
       executionOrder: List[StageId],
-      recoveryManager: Option[LineageRecoveryManager[F]]
+      recoveryManager: Option[LineageRecoveryManager[F]],
   ): F[Map[StageId, Seq[Partition[_]]]] = {
     // For now, delegate to the regular runStages method
     // Recovery integration can be added at the stage level in StageExecutor

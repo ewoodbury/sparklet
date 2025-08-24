@@ -25,15 +25,20 @@ trait TaskScheduler[F[_]]:
   /**
    * Submits tasks with retry logic using the provided retry policy.
    *
-   * @param tasks The tasks to execute with retry support
-   * @param retryPolicy The policy determining retry behavior and delays
-   * @tparam A Input element type for each task's partition
-   * @tparam B Output element type produced by each task
-   * @return An effect that yields the sequence of output partitions
+   * @param tasks
+   *   The tasks to execute with retry support
+   * @param retryPolicy
+   *   The policy determining retry behavior and delays
+   * @tparam A
+   *   Input element type for each task's partition
+   * @tparam B
+   *   Output element type produced by each task
+   * @return
+   *   An effect that yields the sequence of output partitions
    */
   def submitWithRetry[A, B](
-    tasks: Seq[RunnableTask[A, B]],
-    retryPolicy: RetryPolicy
+      tasks: Seq[RunnableTask[A, B]],
+      retryPolicy: RetryPolicy,
   ): F[Seq[Partition[B]]]
 
   /**

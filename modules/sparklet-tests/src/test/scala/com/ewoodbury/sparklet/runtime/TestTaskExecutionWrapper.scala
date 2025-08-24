@@ -1,5 +1,7 @@
 package com.ewoodbury.sparklet.runtime
 
+import scala.concurrent.duration.*
+
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import org.scalatest.flatspec.AnyFlatSpec
@@ -7,8 +9,6 @@ import org.scalatest.matchers.should.Matchers
 
 import com.ewoodbury.sparklet.core.{Partition, RetryPolicy}
 import com.ewoodbury.sparklet.runtime.api.RunnableTask
-
-import scala.concurrent.duration._
 
 /**
  * Demonstration test showing TaskExecutionWrapper functionality working

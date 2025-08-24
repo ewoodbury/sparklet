@@ -1,13 +1,13 @@
 package com.ewoodbury.sparklet.runtime
 
+import scala.concurrent.duration.*
+
 import cats.effect.IO
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.ewoodbury.sparklet.core.{Partition, RetryPolicy}
 import com.ewoodbury.sparklet.runtime.api.{RunnableTask, TaskScheduler}
-
-import scala.concurrent.duration._
 
 class TestTaskSchedulerInterface extends AnyFlatSpec with Matchers {
 

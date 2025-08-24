@@ -1,28 +1,27 @@
 package com.ewoodbury.sparklet.runtime
 
-import cats.effect.{Async, Sync}
+import cats.effect.Async
 import cats.syntax.all.*
-import cats.Traverse
 import com.typesafe.scalalogging.StrictLogging
 
-import com.ewoodbury.sparklet.core.{Partition, ShuffleId, LineageInfo, PartitionId}
-import com.ewoodbury.sparklet.runtime.api.{RunnableTask, ShuffleService, Partitioner}
+import com.ewoodbury.sparklet.core.{LineageInfo, Partition, PartitionId}
+import com.ewoodbury.sparklet.runtime.api.{RunnableTask, ShuffleService}
 
 /**
- * TaskReconstructor handles the reconstruction of failed tasks based on lineage information.
- * This is in the runtime module to avoid circular dependencies with the execution module.
+ * TaskReconstructor handles the reconstruction of failed tasks based on lineage information. This
+ * is in the runtime module to avoid circular dependencies with the execution module.
  */
 class TaskReconstructor[F[_]: Async](
-  shuffleService: ShuffleService
+    shuffleService: ShuffleService,
 ) extends StrictLogging {
 
   /**
-   * Reconstruct a task from lineage information.
-   * Returns a task that can be executed to recover the lost data.
+   * Reconstruct a task from lineage information. Returns a task that can be executed to recover
+   * the lost data.
    */
   def reconstructTask(
-    lineage: LineageInfo,
-    originalException: Throwable
+      lineage: LineageInfo,
+      originalException: Throwable,
   ): F[Option[RunnableTask[Any, Any]]] = {
     logger.debug(s"Attempting to reconstruct task with operation: ${lineage.operation}")
 
@@ -38,7 +37,7 @@ class TaskReconstructor[F[_]: Async](
    * Reconstruct task based on operation type.
    */
   private def reconstructTaskFromOperation(
-    lineage: LineageInfo
+      lineage: LineageInfo,
   ): F[Option[RunnableTask[Any, Any]]] = {
     val operation = lineage.operation
 
@@ -151,8 +150,8 @@ class TaskReconstructor[F[_]: Async](
       inputData.map { data =>
         new RunnableTask[Any, Any] {
           override def run(): Partition[Any] = {
-            val keys = data.collect {
-              case (k, _) => k
+            val keys = data.collect { case (k, _) =>
+              k
             }
             Partition(keys)
           }
@@ -171,8 +170,8 @@ class TaskReconstructor[F[_]: Async](
       inputData.map { data =>
         new RunnableTask[Any, Any] {
           override def run(): Partition[Any] = {
-            val values = data.collect {
-              case (_, v) => v
+            val values = data.collect { case (_, v) =>
+              v
             }
             Partition(values)
           }
@@ -193,8 +192,8 @@ class TaskReconstructor[F[_]: Async](
           override def run(): Partition[Any] = {
             // Since we can't reconstruct the original mapping function,
             // we preserve the key-value structure with the original values
-            val result = data.collect {
-              case (k, v) => (k, v)
+            val result = data.collect { case (k, v) =>
+              (k, v)
             }
             Partition(result)
           }
@@ -206,7 +205,9 @@ class TaskReconstructor[F[_]: Async](
   /**
    * Reconstruct a filterKeys task by reading key-value pairs and preserving structure.
    */
-  private def reconstructFilterKeysTask(lineage: LineageInfo): F[Option[RunnableTask[Any, Any]]] = {
+  private def reconstructFilterKeysTask(
+      lineage: LineageInfo,
+  ): F[Option[RunnableTask[Any, Any]]] = {
     for {
       inputData <- readInputDataFromShuffle(lineage)
     } yield {
@@ -224,7 +225,9 @@ class TaskReconstructor[F[_]: Async](
   /**
    * Reconstruct a filterValues task by reading key-value pairs and preserving structure.
    */
-  private def reconstructFilterValuesTask(lineage: LineageInfo): F[Option[RunnableTask[Any, Any]]] = {
+  private def reconstructFilterValuesTask(
+      lineage: LineageInfo,
+  ): F[Option[RunnableTask[Any, Any]]] = {
     for {
       inputData <- readInputDataFromShuffle(lineage)
     } yield {
@@ -242,7 +245,9 @@ class TaskReconstructor[F[_]: Async](
   /**
    * Reconstruct a flatMapValues task by reading key-value pairs and preserving structure.
    */
-  private def reconstructFlatMapValuesTask(lineage: LineageInfo): F[Option[RunnableTask[Any, Any]]] = {
+  private def reconstructFlatMapValuesTask(
+      lineage: LineageInfo,
+  ): F[Option[RunnableTask[Any, Any]]] = {
     for {
       inputData <- readInputDataFromShuffle(lineage)
     } yield {
@@ -251,8 +256,8 @@ class TaskReconstructor[F[_]: Async](
           override def run(): Partition[Any] = {
             // Since we can't reconstruct the original flatMap function,
             // we preserve the key-value structure with the original values
-            val result = data.collect {
-              case (k, v) => (k, v)
+            val result = data.collect { case (k, v) =>
+              (k, v)
             }
             Partition(result)
           }
@@ -296,8 +301,8 @@ class TaskReconstructor[F[_]: Async](
    * Wrapper that adds lineage-aware error handling to reconstructed tasks.
    */
   private class LineageAwareTaskWrapper(
-    underlyingTask: RunnableTask[Any, Any],
-    lineage: LineageInfo
+      underlyingTask: RunnableTask[Any, Any],
+      lineage: LineageInfo,
   ) extends RunnableTask[Any, Any] {
     override def run(): Partition[Any] = {
       try {
@@ -317,7 +322,7 @@ object TaskReconstructor {
    * Create a TaskReconstructor with default settings.
    */
   def default[F[_]: Async](
-    shuffleService: ShuffleService
+      shuffleService: ShuffleService,
   ): TaskReconstructor[F] =
     new TaskReconstructor[F](shuffleService)
 
@@ -325,7 +330,7 @@ object TaskReconstructor {
    * Create a TaskReconstructor with custom settings.
    */
   def withCustomSettings[F[_]: Async](
-    shuffleService: ShuffleService
+      shuffleService: ShuffleService,
   ): TaskReconstructor[F] =
     new TaskReconstructor[F](shuffleService)
 }

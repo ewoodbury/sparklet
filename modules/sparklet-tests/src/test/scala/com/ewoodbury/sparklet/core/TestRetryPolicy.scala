@@ -1,9 +1,9 @@
 package com.ewoodbury.sparklet.core
 
+import scala.concurrent.duration.*
+
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-
-import scala.concurrent.duration._
 
 class TestRetryPolicy extends AnyFlatSpec with Matchers {
 

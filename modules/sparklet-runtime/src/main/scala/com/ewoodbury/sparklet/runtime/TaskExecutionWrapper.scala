@@ -4,39 +4,52 @@ import cats.effect.Async
 import cats.syntax.all.*
 import com.typesafe.scalalogging.StrictLogging
 
-import com.ewoodbury.sparklet.core.{Partition, RetryPolicy, LineageInfo}
+import com.ewoodbury.sparklet.core.{LineageInfo, Partition, RetryPolicy}
 import com.ewoodbury.sparklet.runtime.api.RunnableTask
 
 /**
- * Wrapper that executes tasks with retry logic and lineage tracking.
- * Handles transient failures and provides detailed execution information.
+ * Wrapper that executes tasks with retry logic and lineage tracking. Handles transient failures
+ * and provides detailed execution information.
  */
 class TaskExecutionWrapper[F[_]: Async] private (
-  retryPolicy: RetryPolicy,
-  recoveryManager: Option[LineageRecoveryManager[F]]
+    retryPolicy: RetryPolicy,
+    recoveryManager: Option[LineageRecoveryManager[F]],
 ) extends StrictLogging {
 
   /**
    * Execute a task with retry logic and lineage tracking.
    *
-   * @param task The task to execute
-   * @param taskId Unique identifier for the task (used for lineage tracking)
-   * @tparam A Input type
-   * @tparam B Output type
-   * @return Effect that yields the partition result or throws exception
+   * @param task
+   *   The task to execute
+   * @param taskId
+   *   Unique identifier for the task (used for lineage tracking)
+   * @tparam A
+   *   Input type
+   * @tparam B
+   *   Output type
+   * @return
+   *   Effect that yields the partition result or throws exception
    */
-  def executeWithRetry[A, B](task: RunnableTask[A, B], taskId: String = "unknown"): F[Partition[B]] = {
+  def executeWithRetry[A, B](
+      task: RunnableTask[A, B],
+      taskId: String = "unknown",
+  ): F[Partition[B]] = {
     executeWithRetryInternal(task, taskId, attempt = 1)
   }
 
   /**
    * Execute a task with lineage tracking and recovery.
    *
-   * @param task The task to execute
-   * @param lineage The lineage information for the task
-   * @tparam A Input type
-   * @tparam B Output type
-   * @return Effect that yields the partition result or throws exception
+   * @param task
+   *   The task to execute
+   * @param lineage
+   *   The lineage information for the task
+   * @tparam A
+   *   Input type
+   * @tparam B
+   *   Output type
+   * @return
+   *   Effect that yields the partition result or throws exception
    */
   def executeWithLineage[A, B](task: RunnableTask[A, B], lineage: LineageInfo): F[Partition[B]] = {
     val taskId = s"${lineage.stageId}-${lineage.taskId}"
@@ -44,16 +57,20 @@ class TaskExecutionWrapper[F[_]: Async] private (
     // Register lineage before execution
     recoveryManager match {
       case Some(manager) =>
-        manager.registerTaskLineage(taskId, lineage) *> executeWithRetryInternal(task, taskId, attempt = 1)
+        manager.registerTaskLineage(taskId, lineage) *> executeWithRetryInternal(
+          task,
+          taskId,
+          attempt = 1,
+        )
       case None =>
         executeWithRetryInternal(task, taskId, attempt = 1)
     }
   }
 
   private def executeWithRetryInternal[A, B](
-    task: RunnableTask[A, B],
-    taskId: String,
-    attempt: Int
+      task: RunnableTask[A, B],
+      taskId: String,
+      attempt: Int,
   ): F[Partition[B]] = {
     logger.debug(s"Executing task $taskId (attempt $attempt)")
 
@@ -74,7 +91,7 @@ class TaskExecutionWrapper[F[_]: Async] private (
 
           logger.info(
             s"Retrying task $taskId in ${delay.toMillis}ms " +
-            s"(attempt ${attempt + 1}/${retryPolicy.maxRetries + 1})"
+              s"(attempt ${attempt + 1}/${retryPolicy.maxRetries + 1})",
           )
 
           // Update lineage with new attempt count
@@ -92,14 +109,14 @@ class TaskExecutionWrapper[F[_]: Async] private (
                   logger.info(s"Successfully recovered task $taskId")
                   // Clean up lineage after successful recovery
                   manager.unregisterTaskLineage(taskId) *>
-                  // Cast the recovered partition to the expected type
-                  // This is safe because recovery preserves the original data type
-                  Async[F].pure(recoveredPartition.asInstanceOf[Partition[B]])
+                    // Cast the recovered partition to the expected type
+                    // This is safe because recovery preserves the original data type
+                    Async[F].pure(recoveredPartition.asInstanceOf[Partition[B]])
                 case None =>
                   logger.error(s"Failed to recover task $taskId after $attempt attempts")
                   // Clean up lineage after failed recovery
                   manager.unregisterTaskLineage(taskId) *>
-                  Async[F].raiseError(exception)
+                    Async[F].raiseError(exception)
               }
             case None =>
               logger.error(s"Task $taskId failed permanently after $attempt attempts")
@@ -112,16 +129,20 @@ class TaskExecutionWrapper[F[_]: Async] private (
   /**
    * Execute a simple RunnableTask without lineage support (for backward compatibility).
    *
-   * @param task The task to execute
-   * @tparam A Input type
-   * @tparam B Output type
-   * @return Effect that yields the partition result
+   * @param task
+   *   The task to execute
+   * @tparam A
+   *   Input type
+   * @tparam B
+   *   Output type
+   * @return
+   *   Effect that yields the partition result
    */
   def executeSimple[A, B](task: RunnableTask[A, B]): F[Partition[B]] = {
     Async[F].attempt(Async[F].blocking(task.run())).flatMap {
       case Right(partition) => Async[F].pure(partition)
       case Left(exception) =>
-        logger.error(s"Simple task execution failed", exception)
+        logger.error("Simple task execution failed", exception)
         Async[F].raiseError(exception)
     }
   }
@@ -139,8 +160,8 @@ object TaskExecutionWrapper {
    * Create a TaskExecutionWrapper with both retry policy and recovery manager.
    */
   def withRecovery[F[_]: Async](
-    retryPolicy: RetryPolicy,
-    recoveryManager: LineageRecoveryManager[F]
+      retryPolicy: RetryPolicy,
+      recoveryManager: LineageRecoveryManager[F],
   ): TaskExecutionWrapper[F] =
     new TaskExecutionWrapper[F](retryPolicy, Some(recoveryManager))
 

@@ -4,14 +4,14 @@ import cats.syntax.all.*
 import com.typesafe.scalalogging.StrictLogging
 
 import com.ewoodbury.sparklet.core.*
-import com.ewoodbury.sparklet.runtime.api.{Partitioner, ShuffleService, TaskScheduler}
 import com.ewoodbury.sparklet.runtime.LineageRecoveryManager
+import com.ewoodbury.sparklet.runtime.api.{Partitioner, ShuffleService, TaskScheduler}
 
 final class DAGScheduler[F[_]: Sync](
     shuffle: ShuffleService,
     scheduler: TaskScheduler[F],
     partitioner: Partitioner,
-    recoveryManager: Option[LineageRecoveryManager[F]] = None
+    recoveryManager: Option[LineageRecoveryManager[F]] = None,
 ) extends StrictLogging {
 
   // Create instances of the new components
@@ -24,11 +24,6 @@ final class DAGScheduler[F[_]: Sync](
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private var taskIdCounter: Int = 0
 
-  private def generateTaskId(): String = {
-    taskIdCounter += 1
-    s"dag-task-${taskIdCounter}"
-  }
-
   /**
    * Executes a plan using multi-stage execution, handling shuffle boundaries.
    */
@@ -39,8 +34,12 @@ final class DAGScheduler[F[_]: Sync](
    */
   def executeWithRecovery[A](plan: Plan[A]): F[Iterable[A]] =
     for {
-      _ <- Sync[F].delay(logger.info("DAGScheduler: starting multi-stage execution" +
-        (if (recoveryManager.isDefined) " with recovery support" else "")))
+      _ <- Sync[F].delay(
+        logger.info(
+          "DAGScheduler: starting multi-stage execution" +
+            (if (recoveryManager.isDefined) " with recovery support" else ""),
+        ),
+      )
       stageGraph <- Sync[F].delay(StageBuilder.buildStageGraph(plan))
       _ <- Sync[F].delay(
         logger.debug(s"DAGScheduler: built stage graph with ${stageGraph.stages.size} stages"),
@@ -54,7 +53,7 @@ final class DAGScheduler[F[_]: Sync](
       stageResults <- executionPlanner.runStagesWithRecovery(
         stageGraph,
         executionOrder,
-        recoveryManager
+        recoveryManager,
       )
       finalData <- Sync[F].delay {
         val finalResults = stageResults(stageGraph.finalStageId)

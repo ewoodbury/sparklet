@@ -66,21 +66,23 @@ object JobId:
   def random(): JobId = JobId(UUID.randomUUID())
 
 /**
- * Lineage information for task recovery and debugging.
- * Tracks task execution context for lineage-based recomputation.
+ * Lineage information for task recovery and debugging. Tracks task execution context for
+ * lineage-based recomputation.
  */
 final case class LineageInfo(
-  stageId: StageId,
-  taskId: Int,
-  inputPartitions: Seq[Int],
-  shuffleDependencies: Seq[ShuffleId],
-  operation: String,
-  attemptCount: Int = 1
+    stageId: StageId,
+    taskId: Int,
+    inputPartitions: Seq[Int],
+    shuffleDependencies: Seq[ShuffleId],
+    operation: String,
+    attemptCount: Int = 1,
 )
 
 /**
  * Result of task execution with potential failure information.
  */
 sealed trait TaskResult[+B]
-final case class TaskSuccess[B](partition: Partition[B], lineage: LineageInfo) extends TaskResult[B]
-final case class TaskFailure[B](lineage: LineageInfo, exception: Throwable, attempt: Int) extends TaskResult[B]
+final case class TaskSuccess[B](partition: Partition[B], lineage: LineageInfo)
+    extends TaskResult[B]
+final case class TaskFailure[B](lineage: LineageInfo, exception: Throwable, attempt: Int)
+    extends TaskResult[B]

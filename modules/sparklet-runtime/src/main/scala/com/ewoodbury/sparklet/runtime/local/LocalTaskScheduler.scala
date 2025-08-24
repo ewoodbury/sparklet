@@ -6,8 +6,13 @@ import cats.syntax.all.*
 import com.typesafe.scalalogging.StrictLogging
 
 import com.ewoodbury.sparklet.core.{Partition, RetryPolicy}
-import com.ewoodbury.sparklet.runtime.{LineageRecoveryManager, SparkletRuntime, TaskExecutionWrapper, TaskReconstructor}
 import com.ewoodbury.sparklet.runtime.api.{RunnableTask, TaskScheduler}
+import com.ewoodbury.sparklet.runtime.{
+  LineageRecoveryManager,
+  SparkletRuntime,
+  TaskExecutionWrapper,
+  TaskReconstructor,
+}
 
 /**
  * Enhanced local implementation of the task scheduler with fault tolerance support.
@@ -17,10 +22,11 @@ import com.ewoodbury.sparklet.runtime.api.{RunnableTask, TaskScheduler}
  * for enhanced fault tolerance.
  */
 final class LocalTaskScheduler(
-  parallelism: Int,
-  retryPolicy: RetryPolicy = RetryPolicy.default,
-  enableRecovery: Boolean = true
-) extends TaskScheduler[IO] with StrictLogging:
+    parallelism: Int,
+    retryPolicy: RetryPolicy = RetryPolicy.default,
+    enableRecovery: Boolean = true,
+) extends TaskScheduler[IO]
+    with StrictLogging:
 
   // Lazy initialization of execution wrapper and recovery manager
   private lazy val executionWrapper: TaskExecutionWrapper[IO] = {
@@ -51,11 +57,11 @@ final class LocalTaskScheduler(
    * Submits tasks with retry logic using the provided retry policy.
    */
   def submitWithRetry[A, B](
-    tasks: Seq[RunnableTask[A, B]],
-    policy: RetryPolicy
+      tasks: Seq[RunnableTask[A, B]],
+      policy: RetryPolicy,
   ): IO[Seq[Partition[B]]] =
     logger.debug(
-      s"LocalTaskScheduler: submitting ${tasks.length} tasks with retry policy (maxRetries=${policy.maxRetries})"
+      s"LocalTaskScheduler: submitting ${tasks.length} tasks with retry policy (maxRetries=${policy.maxRetries})",
     )
 
     // Create a temporary execution wrapper with the provided policy
@@ -71,8 +77,8 @@ final class LocalTaskScheduler(
     executeWithWrapper(tasks, tempWrapper)
 
   /**
-   * Execute tasks using the execution wrapper with retry logic.
-   * For tasks that don't need retry logic (like timing tests), use direct blocking execution.
+   * Execute tasks using the execution wrapper with retry logic. For tasks that don't need retry
+   * logic (like timing tests), use direct blocking execution.
    */
   private def executeTasksWithRetry[A, B](tasks: Seq[RunnableTask[A, B]]): IO[Seq[Partition[B]]] =
     Semaphore[IO](parallelism.toLong).flatMap { semaphore =>
@@ -88,21 +94,13 @@ final class LocalTaskScheduler(
   /**
    * Execute simple tasks (without lineage support) using blocking execution.
    */
-  private def executeSimpleTasks[A, B](tasks: Seq[RunnableTask[A, B]]): IO[Seq[Partition[B]]] =
-    Semaphore[IO](parallelism.toLong).flatMap { semaphore =>
-      tasks.toList.parTraverse { task =>
-        semaphore.permit.use { _ =>
-          executionWrapper.executeSimple(task)
-        }
-      }
-    }
 
   /**
    * Execute tasks with a specific wrapper (used by submitWithRetry).
    */
   private def executeWithWrapper[A, B](
-    tasks: Seq[RunnableTask[A, B]],
-    wrapper: TaskExecutionWrapper[IO]
+      tasks: Seq[RunnableTask[A, B]],
+      wrapper: TaskExecutionWrapper[IO],
   ): IO[Seq[Partition[B]]] =
     Semaphore[IO](parallelism.toLong).flatMap { semaphore =>
       tasks.toList.parTraverse { task =>

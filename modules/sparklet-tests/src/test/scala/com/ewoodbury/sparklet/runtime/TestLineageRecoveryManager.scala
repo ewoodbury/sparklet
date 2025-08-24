@@ -1,14 +1,14 @@
 package com.ewoodbury.sparklet.runtime
 
 import cats.effect.IO
-import cats.effect.unsafe.implicits.global
 import cats.effect.implicits.concurrentParSequenceOps
-import com.ewoodbury.sparklet.core.{Partition, ShuffleId, PartitionId, StageId}
-import com.ewoodbury.sparklet.runtime.api.{ShuffleService, Partitioner, RunnableTask}
-import com.ewoodbury.sparklet.core.{LineageInfo, RetryPolicy}
+import cats.effect.unsafe.implicits.global
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import org.scalatest.{BeforeAndAfterEach, BeforeAndAfterAll}
+import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach}
+
+import com.ewoodbury.sparklet.core.*
+import com.ewoodbury.sparklet.runtime.api.{Partitioner, RunnableTask, ShuffleService}
 
 /**
  * Comprehensive test suite for LineageRecoveryManager.
