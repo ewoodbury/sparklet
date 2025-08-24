@@ -4,28 +4,11 @@ import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import com.typesafe.scalalogging.{Logger, StrictLogging}
 
-import com.ewoodbury.sparklet.core.{Partition, Plan, ShuffleId}
+import com.ewoodbury.sparklet.core.{Partition, Plan, ShuffleId, LineageInfo, TaskResult, TaskSuccess, TaskFailure, StageId}
 import com.ewoodbury.sparklet.runtime.SparkletRuntime
 import com.ewoodbury.sparklet.runtime.api.RunnableTask
 
-/**
- * Lineage information for task recovery and debugging
- */
-case class LineageInfo(
-  stageId: Int,
-  taskId: Int,
-  inputPartitions: Seq[Int],
-  shuffleDependencies: Seq[ShuffleId],
-  operation: String,
-  attemptCount: Int = 1
-)
 
-/**
- * Result of task execution with potential failure information
- */
-sealed trait TaskResult[+B]
-case class TaskSuccess[B](partition: Partition[B], lineage: LineageInfo) extends TaskResult[B]
-case class TaskFailure[B](lineage: LineageInfo, exception: Throwable, attempt: Int) extends TaskResult[B]
 
 /**
  * A Task represents a unit of computation that can be run on an executor. It operates on a single
@@ -40,11 +23,11 @@ sealed trait Task[A, B] extends RunnableTask[A, B]:
       val result = run()
       lineage match {
         case Some(lin) => TaskSuccess(result, lin.copy(attemptCount = lin.attemptCount + 1))
-        case None => TaskSuccess(result, LineageInfo(0, 0, Seq.empty, Seq.empty, "unknown"))
+        case None => TaskSuccess(result, LineageInfo(StageId(0), 0, Seq.empty, Seq.empty, "unknown"))
       }
     } catch {
       case e: Exception =>
-        val lin = lineage.getOrElse(LineageInfo(0, 0, Seq.empty, Seq.empty, "unknown"))
+        val lin = lineage.getOrElse(LineageInfo(StageId(0), 0, Seq.empty, Seq.empty, "unknown"))
         TaskFailure(lin, e, 1)
     }
 

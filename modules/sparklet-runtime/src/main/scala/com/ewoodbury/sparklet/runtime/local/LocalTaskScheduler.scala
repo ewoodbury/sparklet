@@ -6,7 +6,7 @@ import cats.syntax.all.*
 import com.typesafe.scalalogging.StrictLogging
 
 import com.ewoodbury.sparklet.core.{Partition, RetryPolicy, SparkletConf}
-import com.ewoodbury.sparklet.runtime.{LineageRecoveryManager, SparkletRuntime, TaskExecutionWrapper}
+import com.ewoodbury.sparklet.runtime.{LineageRecoveryManager, SparkletRuntime, TaskExecutionWrapper, TaskReconstructor}
 import com.ewoodbury.sparklet.runtime.api.{RunnableTask, ShuffleService, TaskScheduler}
 
 /**
@@ -26,7 +26,8 @@ final class LocalTaskScheduler(
   private lazy val executionWrapper: TaskExecutionWrapper[IO] = {
     if (enableRecovery) {
       val runtime = SparkletRuntime.get
-      val recoveryManager = LineageRecoveryManager.default[IO](runtime.shuffle)
+      val taskReconstructor = TaskReconstructor.default[IO](runtime.shuffle)
+      val recoveryManager = LineageRecoveryManager.default[IO](runtime.shuffle, taskReconstructor)
       TaskExecutionWrapper.withRecovery[IO](retryPolicy, recoveryManager)
     } else {
       TaskExecutionWrapper.withRetryPolicy[IO](retryPolicy)
@@ -60,7 +61,8 @@ final class LocalTaskScheduler(
     // Create a temporary execution wrapper with the provided policy
     val tempWrapper = if (enableRecovery) {
       val runtime = SparkletRuntime.get
-      val recoveryManager = LineageRecoveryManager.default[IO](runtime.shuffle)
+      val taskReconstructor = TaskReconstructor.default[IO](runtime.shuffle)
+      val recoveryManager = LineageRecoveryManager.default[IO](runtime.shuffle, taskReconstructor)
       TaskExecutionWrapper.withRecovery[IO](policy, recoveryManager)
     } else {
       TaskExecutionWrapper.withRetryPolicy[IO](policy)

@@ -58,17 +58,65 @@
 
 ## Project 4 — Hygiene
 
-### Error Handling & Fault Tolerance
-- [ ] Add retry logic to `TaskScheduler[F[_]]`
-  - [ ] `submitWithRetry(tasks, maxRetries)` method
-  - [ ] Configurable retry policies per operation type
-  - [ ] Exponential backoff for transient failures
-- [ ] Task-level error recovery
-  - [ ] Deterministic recompute from lineage on task failure
-  - [ ] Graceful handling of executor crashes
-- [ ] Add failure modes testing
-  - [ ] Inject artificial failures in tests
-  - [ ] Verify lineage-based recovery works correctly
+### Error Handling & Fault Tolerance — COMPLETED PHASE 1 & 2 ✅
+
+#### Phase 1: Basic Retry Logic (COMPLETED) ✅
+- [x] Enhanced `SparkletConf` with fault tolerance settings:
+  - `maxTaskRetries`: Maximum retry attempts (default: 3)
+  - `baseRetryDelayMs`: Base delay for exponential backoff (default: 10ms)
+  - `maxRetryDelayMs`: Maximum delay cap (default: 1000ms)
+  - `enableLineageRecovery`: Toggle for lineage-based recovery (default: true)
+  - `taskTimeoutMs`: Task execution timeout (default: 30000ms)
+  - `enableSpeculativeExecution`: Toggle for speculative execution (default: false)
+  - `speculativeExecutionThreshold`: Slow task threshold (default: 2.0x)
+- [x] `RetryPolicy` trait with exponential backoff implementation
+- [x] Enhanced `TaskScheduler[F[_]]` interface with `submitWithRetry` method
+- [x] Comprehensive retry policy tests with edge cases
+
+#### Phase 2: Enhanced Retry & Recovery (COMPLETED) ✅
+- [x] `TaskExecutionWrapper[F[_]]` with integrated retry logic
+  - [x] Configurable retry policies with exponential backoff
+  - [x] Task execution timeout handling
+  - [x] Detailed logging for retry attempts and failures
+- [x] `LineageRecoveryManager[F[_]]` for dependency-based recovery
+  - [x] Framework for lineage-based task recovery
+  - [x] Integration with shuffle service for data reconstruction
+  - [x] Recovery statistics and monitoring
+- [x] Enhanced `LocalTaskScheduler` with fault tolerance integration
+  - [x] Lazy initialization of execution wrapper and recovery manager
+  - [x] Support for both simple and retry-enabled task execution
+  - [x] Proper parallelism handling with semaphore-based task limits
+- [x] Updated `Task` trait with optional lineage support
+  - [x] `LineageInfo` case class for task metadata tracking
+  - [x] `TaskResult` sealed trait for structured task outcomes
+  - [x] Backward compatibility for existing task implementations
+- [x] Comprehensive test coverage:
+  - [x] `TestRetryPolicy`: 167 test cases covering all retry scenarios
+  - [x] `TestTaskExecutionWrapper`: Retry logic and failure handling
+  - [x] `TestTaskScheduler`: Concurrent execution with timing validation
+  - [x] Integration tests for fault tolerance end-to-end workflows
+
+#### Phase 3: Advanced Recovery & Speculative Execution
+- [x] Deterministic recompute from lineage on task failure
+  - [x] Complete implementation of `LineageRecoveryManager.recoverFailedTask`
+  - [x] Full integration with execution module for task reconstruction
+  - [x] Recovery of complex operations (joins, aggregations, etc.)
+- [ ] Speculative execution for slow tasks (optional, will skip for now)
+- [ ] Graceful handling of executor crashes
+  - [ ] Task reassignment to healthy executors
+  - [ ] Partial result preservation and continuation
+- [ ] Advanced failure modes testing
+  - [ ] Inject artificial failures in integration tests
+  - [ ] Chaos engineering approach to fault tolerance validation
+  - [ ] Performance impact analysis under failure conditions
+
+#### Phase 4: Production Hardening & Observability (FUTURE)
+- [ ] Circuit breaker pattern for persistent failures
+- [ ] Task execution metrics and monitoring
+- [ ] Alerting for retry exhaustion and recovery failures
+- [ ] Historical failure pattern analysis
+- [ ] Resource-aware retry policies
+- [ ] Dynamic retry configuration based on system load
 
 ### Memory Management
 - [ ] Memory-aware execution

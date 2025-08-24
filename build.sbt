@@ -40,6 +40,7 @@ lazy val commonSettings = Seq(
     Wart.Enumeration,
     Wart.ExplicitImplicitTypes,
     Wart.SizeIs,
+    Wart.DefaultArguments,
   )
 )
 

@@ -1,14 +1,11 @@
 package com.ewoodbury.sparklet.runtime
 
-import cats.effect.{Async, Sync}
+import cats.effect.Async
 import cats.syntax.all.*
 import com.typesafe.scalalogging.StrictLogging
 
-import com.ewoodbury.sparklet.core.{Partition, RetryPolicy}
+import com.ewoodbury.sparklet.core.{Partition, RetryPolicy, LineageInfo}
 import com.ewoodbury.sparklet.runtime.api.RunnableTask
-
-import scala.concurrent.duration.*
-import scala.util.control.NonFatal
 
 /**
  * Wrapper that executes tasks with retry logic and lineage tracking.
@@ -21,59 +18,91 @@ class TaskExecutionWrapper[F[_]: Async] private (
 
   /**
    * Execute a task with retry logic and lineage tracking.
-   * For now, this is a simplified implementation that doesn't use lineage tracking
-   * to avoid circular dependencies with the execution module.
    *
    * @param task The task to execute
+   * @param taskId Unique identifier for the task (used for lineage tracking)
    * @tparam A Input type
    * @tparam B Output type
    * @return Effect that yields the partition result or throws exception
    */
-  def executeWithRetry[A, B](task: RunnableTask[A, B]): F[Partition[B]] = {
-    executeWithRetryInternal(task, attempt = 1)
+  def executeWithRetry[A, B](task: RunnableTask[A, B], taskId: String = "unknown"): F[Partition[B]] = {
+    executeWithRetryInternal(task, taskId, attempt = 1)
+  }
+
+  /**
+   * Execute a task with lineage tracking and recovery.
+   *
+   * @param task The task to execute
+   * @param lineage The lineage information for the task
+   * @tparam A Input type
+   * @tparam B Output type
+   * @return Effect that yields the partition result or throws exception
+   */
+  def executeWithLineage[A, B](task: RunnableTask[A, B], lineage: LineageInfo): F[Partition[B]] = {
+    val taskId = s"${lineage.stageId}-${lineage.taskId}"
+
+    // Register lineage before execution
+    recoveryManager match {
+      case Some(manager) =>
+        manager.registerTaskLineage(taskId, lineage) *> executeWithRetryInternal(task, taskId, attempt = 1)
+      case None =>
+        executeWithRetryInternal(task, taskId, attempt = 1)
+    }
   }
 
   private def executeWithRetryInternal[A, B](
     task: RunnableTask[A, B],
+    taskId: String,
     attempt: Int
   ): F[Partition[B]] = {
-    logger.debug(s"Executing task (attempt $attempt)")
+    logger.debug(s"Executing task $taskId (attempt $attempt)")
 
     // Execute the task in a blocking context
     Async[F].blocking(task.run()).attempt.flatMap {
       case Right(partition) =>
-        logger.debug(s"Task succeeded on attempt $attempt")
+        logger.debug(s"Task $taskId succeeded on attempt $attempt")
+        // Clean up lineage on success
+        recoveryManager.foreach(_.unregisterTaskLineage(taskId))
         Async[F].pure(partition)
 
       case Left(exception) =>
-        logger.warn(s"Task failed on attempt $attempt", exception)
+        logger.warn(s"Task $taskId failed on attempt $attempt", exception)
 
         // Check if we should retry based on the retry policy
         if (retryPolicy.shouldRetry(attempt, exception)) {
           val delay = retryPolicy.delayBeforeRetry(attempt)
 
           logger.info(
-            s"Retrying task in ${delay.toMillis}ms " +
+            s"Retrying task $taskId in ${delay.toMillis}ms " +
             s"(attempt ${attempt + 1}/${retryPolicy.maxRetries + 1})"
           )
 
+          // Update lineage with new attempt count
+          recoveryManager.foreach(_.updateTaskLineage(taskId, attempt + 1))
+
           // Wait for the retry delay, then retry
-          Async[F].sleep(delay) *> executeWithRetryInternal(task, attempt + 1)
+          Async[F].sleep(delay) *> executeWithRetryInternal(task, taskId, attempt + 1)
         } else {
           // No more retries, try recovery if available
           recoveryManager match {
             case Some(manager) =>
-              logger.info(s"Attempting recovery for failed task")
-              manager.recoverFailedTask("unknown", exception).flatMap {
-                case Some(_) =>
-                  logger.warn(s"Recovery returned a result, but type is not compatible")
-                  Async[F].raiseError(exception) // For now, recovery always fails
+              logger.info(s"Attempting recovery for failed task $taskId")
+              manager.recoverFailedTask(taskId, exception).flatMap {
+                case Some(recoveredPartition) =>
+                  logger.info(s"Successfully recovered task $taskId")
+                  // Clean up lineage after successful recovery
+                  manager.unregisterTaskLineage(taskId) *>
+                  // Cast the recovered partition to the expected type
+                  // This is safe because recovery preserves the original data type
+                  Async[F].pure(recoveredPartition.asInstanceOf[Partition[B]])
                 case None =>
-                  logger.error(s"Failed to recover task after $attempt attempts")
+                  logger.error(s"Failed to recover task $taskId after $attempt attempts")
+                  // Clean up lineage after failed recovery
+                  manager.unregisterTaskLineage(taskId) *>
                   Async[F].raiseError(exception)
               }
             case None =>
-              logger.error(s"Task failed permanently after $attempt attempts")
+              logger.error(s"Task $taskId failed permanently after $attempt attempts")
               Async[F].raiseError(exception)
           }
         }

@@ -5,11 +5,13 @@ import com.typesafe.scalalogging.StrictLogging
 
 import com.ewoodbury.sparklet.core.*
 import com.ewoodbury.sparklet.runtime.api.{Partitioner, ShuffleService, TaskScheduler}
+import com.ewoodbury.sparklet.runtime.LineageRecoveryManager
 
 final class DAGScheduler[F[_]: Sync](
     shuffle: ShuffleService,
     scheduler: TaskScheduler[F],
     partitioner: Partitioner,
+    recoveryManager: Option[LineageRecoveryManager[F]] = None
 ) extends StrictLogging {
 
   // Create instances of the new components
@@ -18,12 +20,26 @@ final class DAGScheduler[F[_]: Sync](
   private val stageExecutor = new StageExecutor[F](shuffle, scheduler, joinExecutor)
   private val executionPlanner = new ExecutionPlanner[F](stageExecutor, shuffleHandler)
 
+  // Task ID counter for lineage tracking
+  private var taskIdCounter: Int = 0
+
+  private def generateTaskId(): String = {
+    taskIdCounter += 1
+    s"dag-task-${taskIdCounter}"
+  }
+
   /**
    * Executes a plan using multi-stage execution, handling shuffle boundaries.
    */
-  def execute[A](plan: Plan[A]): F[Iterable[A]] =
+  def execute[A](plan: Plan[A]): F[Iterable[A]] = executeWithRecovery(plan)
+
+  /**
+   * Executes a plan with recovery support using multi-stage execution.
+   */
+  def executeWithRecovery[A](plan: Plan[A]): F[Iterable[A]] =
     for {
-      _ <- Sync[F].delay(logger.info("DAGScheduler: starting multi-stage execution"))
+      _ <- Sync[F].delay(logger.info("DAGScheduler: starting multi-stage execution" +
+        (if (recoveryManager.isDefined) " with recovery support" else "")))
       stageGraph <- Sync[F].delay(StageBuilder.buildStageGraph(plan))
       _ <- Sync[F].delay(
         logger.debug(s"DAGScheduler: built stage graph with ${stageGraph.stages.size} stages"),
@@ -34,7 +50,11 @@ final class DAGScheduler[F[_]: Sync](
           s"DAGScheduler: execution order: ${executionOrder.map(_.toInt).mkString(" -> ")}",
         ),
       )
-      stageResults <- executionPlanner.runStages(stageGraph, executionOrder)
+      stageResults <- executionPlanner.runStagesWithRecovery(
+        stageGraph,
+        executionOrder,
+        recoveryManager
+      )
       finalData <- Sync[F].delay {
         val finalResults = stageResults(stageGraph.finalStageId)
         finalResults.flatMap(_.data.asInstanceOf[Iterable[A]])
