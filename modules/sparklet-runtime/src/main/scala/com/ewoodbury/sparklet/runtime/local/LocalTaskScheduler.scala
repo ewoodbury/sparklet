@@ -38,7 +38,7 @@ final class LocalTaskScheduler(
     } else {
       TaskExecutionWrapper.withRetryPolicy[IO](retryPolicy)
     }
-  } 
+  }
 
   /**
    * Submits tasks and evaluates them in parallel, respecting the configured parallelism.

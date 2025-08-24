@@ -11,6 +11,7 @@ import com.ewoodbury.sparklet.runtime.api.{RunnableTask, ShuffleService}
  * TaskReconstructor handles the reconstruction of failed tasks based on lineage information. This
  * is in the runtime module to avoid circular dependencies with the execution module.
  */
+@SuppressWarnings(Array("org.wartremover.warts.Any", "org.wartremover.warts.Nothing"))
 class TaskReconstructor[F[_]: Async](
     shuffleService: ShuffleService,
 ) extends StrictLogging {

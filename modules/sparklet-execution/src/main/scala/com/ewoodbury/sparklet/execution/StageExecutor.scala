@@ -10,6 +10,13 @@ import com.ewoodbury.sparklet.runtime.api.{ShuffleService, TaskScheduler}
 /**
  * Executor for handling stage execution.
  */
+@SuppressWarnings(
+  Array(
+    "org.wartremover.warts.Any",
+    "org.wartremover.warts.MutableDataStructures",
+    "org.wartremover.warts.Equals",
+  ),
+)
 final class StageExecutor[F[_]: Sync](
     shuffle: ShuffleService,
     scheduler: TaskScheduler[F],
@@ -63,6 +70,7 @@ final class StageExecutor[F[_]: Sync](
    * Executes a single stage, dispatching to a narrow or shuffle implementation. This function now
    * handles the necessary casting based on the stage type.
    */
+
   def executeStage(
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[_]],
@@ -100,6 +108,7 @@ final class StageExecutor[F[_]: Sync](
    * Executes a shuffle stage by applying the appropriate shuffle operation. This version uses
    * generics to provide type safety for keys (K) and values (V).
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Any"))
   private def executeShuffleStage[K, V](
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[(K, V)]],

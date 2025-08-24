@@ -13,6 +13,7 @@ import com.ewoodbury.sparklet.runtime.api.RunnableTask
 /**
  * Demonstration test showing TaskExecutionWrapper functionality working
  */
+@SuppressWarnings(Array("org.wartremover.warts.Var"))
 class TestTaskExecutionWrapper extends AnyFlatSpec with Matchers {
 
   class FailingTask(var attempts: Int = 0, succeedAfter: Int = 2) extends RunnableTask[String, String]:

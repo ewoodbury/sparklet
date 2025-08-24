@@ -10,8 +10,6 @@ import cats.effect.{Async, Ref}
 import cats.syntax.all.*
 import com.typesafe.scalalogging.StrictLogging
 
-import cats.FlatMap
-
 import com.ewoodbury.sparklet.core.{LineageInfo, Partition}
 import com.ewoodbury.sparklet.runtime.api.RunnableTask
 
