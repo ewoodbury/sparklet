@@ -20,10 +20,6 @@ final class DAGScheduler[F[_]: Sync](
   private val stageExecutor = new StageExecutor[F](shuffle, scheduler, joinExecutor)
   private val executionPlanner = new ExecutionPlanner[F](stageExecutor, shuffleHandler)
 
-  // Task ID counter for lineage tracking
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  private var taskIdCounter: Int = 0
-
   /**
    * Executes a plan using multi-stage execution, handling shuffle boundaries.
    */

@@ -28,7 +28,7 @@ final class LocalTaskScheduler(
 ) extends TaskScheduler[IO]
     with StrictLogging:
 
-  // Lazy initialization of execution wrapper and recovery manager
+  // Lazy initialization of execution wrapper and recovery manager to avoid circular dependency
   private lazy val executionWrapper: TaskExecutionWrapper[IO] = {
     if (enableRecovery) {
       val runtime = SparkletRuntime.get
@@ -38,7 +38,7 @@ final class LocalTaskScheduler(
     } else {
       TaskExecutionWrapper.withRetryPolicy[IO](retryPolicy)
     }
-  }
+  } 
 
   /**
    * Submits tasks and evaluates them in parallel, respecting the configured parallelism.
@@ -65,13 +65,15 @@ final class LocalTaskScheduler(
     )
 
     // Create a temporary execution wrapper with the provided policy
-    val tempWrapper = if (enableRecovery) {
-      val runtime = SparkletRuntime.get
-      val taskReconstructor = TaskReconstructor.default[IO](runtime.shuffle)
-      val recoveryManager = LineageRecoveryManager.default[IO](taskReconstructor)
-      TaskExecutionWrapper.withRecovery[IO](policy, recoveryManager)
-    } else {
-      TaskExecutionWrapper.withRetryPolicy[IO](policy)
+    val tempWrapper = {
+      if (enableRecovery) {
+        val runtime = SparkletRuntime.get
+        val taskReconstructor = TaskReconstructor.default[IO](runtime.shuffle)
+        val recoveryManager = LineageRecoveryManager.default[IO](taskReconstructor)
+        TaskExecutionWrapper.withRecovery[IO](policy, recoveryManager)
+      } else {
+        TaskExecutionWrapper.withRetryPolicy[IO](policy)
+      }
     }
 
     executeWithWrapper(tasks, tempWrapper)
@@ -84,9 +86,8 @@ final class LocalTaskScheduler(
     Semaphore[IO](parallelism.toLong).flatMap { semaphore =>
       tasks.toList.parTraverse { task =>
         semaphore.permit.use { _ =>
-          // Use direct blocking execution for better timing accuracy
-          // This bypasses the retry wrapper which can interfere with timing measurements
-          IO.blocking(task.run())
+          // Use the execution wrapper for proper retry logic and lineage tracking
+          executionWrapper.executeSimple(task)
         }
       }
     }

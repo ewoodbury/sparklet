@@ -4,12 +4,13 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 
 import scala.concurrent.duration.*
-import scala.jdk.CollectionConverters.*
 
 import cats.data.OptionT
 import cats.effect.{Async, Ref}
 import cats.syntax.all.*
 import com.typesafe.scalalogging.StrictLogging
+
+import cats.FlatMap
 
 import com.ewoodbury.sparklet.core.{LineageInfo, Partition}
 import com.ewoodbury.sparklet.runtime.api.RunnableTask
@@ -105,7 +106,7 @@ class LineageRecoveryManager[F[_]: Async](
    */
   def registerTaskLineage(taskId: String, lineage: LineageInfo): F[Unit] = {
     Async[F].delay {
-      val entry = TaskLineageEntry(lineage, 0, Instant.now())
+      val entry = TaskLineageEntry(lineage, lineage.attemptCount, Instant.now())
       lineageCache.put(taskId, entry)
       logger.debug(s"Registered lineage for task $taskId: ${lineage.operation}")
     }
@@ -134,7 +135,9 @@ class LineageRecoveryManager[F[_]: Async](
    *   Effect that yields Option[LineageInfo]
    */
   def getTaskLineage(taskId: String): F[Option[LineageInfo]] = {
-    Async[F].delay(Option(lineageCache.get(taskId)).map(_.lineage))
+    Async[F].delay(Option(lineageCache.get(taskId)).map { entry =>
+      entry.lineage.copy(attemptCount = entry.attemptCount)
+    })
   }
 
   /**
