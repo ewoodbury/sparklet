@@ -100,7 +100,7 @@
 - [x] Deterministic recompute from lineage on task failure
   - [x] Complete implementation of `LineageRecoveryManager.recoverFailedTask`
   - [x] Full integration with execution module for task reconstruction
-  - [x] Recovery of complex operations (joins, aggregations, etc.)
+  - [ ] Recovery of complex operations (joins, aggregations, etc.) (skip for now)
 - [ ] Speculative execution for slow tasks (optional, will skip for now)
 - [ ] Graceful handling of executor crashes
   - [ ] Task reassignment to healthy executors

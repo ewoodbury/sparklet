@@ -31,6 +31,7 @@ A data processing engine inspired by Spark, in pure functional Scala.
 - [x] Local Mode
 - [x] Partitions Support
 - [x] Shuffles
+- [x] Basic task retries using lineage recovery
 - [ ] Simulated Cluster Mode using threads
 - [ ] Basic Cluster Mode
 
