@@ -9,6 +9,41 @@ import com.ewoodbury.sparklet.core.{Partition, Plan}
  */
 sealed trait Operation
 
+/**
+ * Metadata for wide operations (shuffle operations) that require special handling.
+ * This encapsulates all the information needed to execute a wide transformation.
+ */
+final case class WideOpMeta(
+    kind: WideOpKind,
+    numPartitions: Int,
+    keyFunc: Option[Any => Any] = None,
+    reduceFunc: Option[(Any, Any) => Any] = None,
+    joinStrategy: Option[com.ewoodbury.sparklet.core.Plan.JoinStrategy] = None,
+    sides: Seq[com.ewoodbury.sparklet.execution.StageBuilder.Side] = Seq.empty
+)
+
+/**
+ * Enumeration of wide operation types that require shuffle boundaries.
+ */
+enum WideOpKind:
+  case GroupByKey, ReduceByKey, SortBy, PartitionBy, Repartition, Coalesce, Join, CoGroup
+
+/**
+ * Structured representation of wide operations for execution planning.
+ * Replaces the raw Plan[_] storage in StageInfo for better type safety and introspection.
+ */
+sealed trait WideOp
+
+// Concrete wide operation implementations
+final case class GroupByKeyWideOp(meta: WideOpMeta) extends WideOp
+final case class ReduceByKeyWideOp(meta: WideOpMeta) extends WideOp
+final case class SortByWideOp(meta: WideOpMeta) extends WideOp
+final case class PartitionByWideOp(meta: WideOpMeta) extends WideOp
+final case class RepartitionWideOp(meta: WideOpMeta) extends WideOp
+final case class CoalesceWideOp(meta: WideOpMeta) extends WideOp
+final case class JoinWideOp(meta: WideOpMeta) extends WideOp
+final case class CoGroupWideOp(meta: WideOpMeta) extends WideOp
+
 // Narrow transformations
 final case class MapOp[A, B](f: A => B) extends Operation
 final case class FilterOp[A](p: A => Boolean) extends Operation
@@ -44,6 +79,49 @@ object Operation {
          _: PartitionByOp[_, _] | _: RepartitionOp[_] | _: CoalesceOp[_] |
          _: JoinOp[_, _, _] | _: CoGroupOp[_, _, _] => true
     case _ => false
+  }
+
+  /**
+   * Determines if a Plan operation requires a shuffle boundary.
+   * This is the main function for shuffle boundary detection during stage building.
+   */
+  def needsShuffle(plan: Plan[_]): Boolean = plan match {
+    case _: Plan.GroupByKeyOp[_, _] | _: Plan.ReduceByKeyOp[_, _] | _: Plan.SortByOp[_, _] |
+         _: Plan.PartitionByOp[_, _] | _: Plan.RepartitionOp[_] | _: Plan.CoalesceOp[_] |
+         _: Plan.JoinOp[_, _, _] | _: Plan.CoGroupOp[_, _, _] => true
+    case _ => false
+  }
+
+  /**
+   * Optimization hook to determine if a shuffle operation can be bypassed based on
+   * upstream partitioning metadata. This generalizes the current groupByKey/reduceByKey shortcut.
+   */
+  def canBypassShuffle(plan: Plan[_], upstreamPartitioning: Option[com.ewoodbury.sparklet.execution.StageBuilder.Partitioning], conf: com.ewoodbury.sparklet.core.SparkletConf): Boolean = {
+    plan match {
+      case gbk: Plan.GroupByKeyOp[_, _] =>
+        // Can bypass if already partitioned by key with correct partition count
+        upstreamPartitioning.exists(p => p.byKey && p.numPartitions == conf.defaultShufflePartitions)
+
+      case rbk: Plan.ReduceByKeyOp[_, _] =>
+        // Can bypass if already partitioned by key with correct partition count
+        upstreamPartitioning.exists(p => p.byKey && p.numPartitions == conf.defaultShufflePartitions)
+
+      case pby: Plan.PartitionByOp[_, _] =>
+        // Can bypass if already has the desired partitioning
+        upstreamPartitioning.exists(p => p.byKey && p.numPartitions == pby.numPartitions)
+
+      case rep: Plan.RepartitionOp[_] =>
+        // Can bypass if already has the desired partitioning
+        upstreamPartitioning.exists(p => !p.byKey && p.numPartitions == rep.numPartitions)
+
+      case coal: Plan.CoalesceOp[_] =>
+        // Can bypass if already has fewer or equal partitions (coalesce only reduces partitions)
+        upstreamPartitioning.exists(p => !p.byKey && p.numPartitions <= coal.numPartitions)
+
+      case _ =>
+        // Other wide operations cannot bypass shuffle
+        false
+    }
   }
 
   /**

@@ -89,4 +89,116 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     nonKeyedPartitioning.byKey shouldBe false
     nonKeyedPartitioning.numPartitions shouldBe 4
   }
+
+  "Shuffle boundary detection" should "correctly identify wide operations requiring shuffle" in {
+    import Operation.needsShuffle
+
+    // Create test data for shuffle boundary tests
+    val intSourcePlan = Plan.Source(testPartitions)
+    val kvTestData = Seq(("key1", 1), ("key2", 2))
+    val kvPartition = Partition(kvTestData)
+    val kvSourcePlan: Plan[(String, Int)] = Plan.Source(Seq(kvPartition))
+
+    // Narrow operations should not require shuffle
+    needsShuffle(Plan.MapOp(intSourcePlan, (_: Int) + 1)) shouldBe false
+    needsShuffle(Plan.FilterOp(intSourcePlan, (_: Int) > 5)) shouldBe false
+    needsShuffle(Plan.UnionOp(intSourcePlan, intSourcePlan)) shouldBe false
+
+    // Wide operations should require shuffle
+    needsShuffle(Plan.GroupByKeyOp(kvSourcePlan)) shouldBe true
+    needsShuffle(Plan.ReduceByKeyOp(kvSourcePlan, (a: Int, b: Int) => a + b)) shouldBe true
+    needsShuffle(Plan.SortByOp(intSourcePlan, (x: Int) => x, Ordering[Int])) shouldBe true
+    needsShuffle(Plan.PartitionByOp(kvSourcePlan, 16)) shouldBe true
+    needsShuffle(Plan.RepartitionOp(intSourcePlan, 32)) shouldBe true
+    needsShuffle(Plan.CoalesceOp(intSourcePlan, 8)) shouldBe true
+    needsShuffle(Plan.JoinOp(kvSourcePlan, kvSourcePlan, None)) shouldBe true
+    needsShuffle(Plan.CoGroupOp(kvSourcePlan, kvSourcePlan)) shouldBe true
+  }
+
+  it should "determine when shuffle can be bypassed based on partitioning" in {
+    import Operation.canBypassShuffle
+    import StageBuilder.Partitioning
+
+    val conf = SparkletConf.get
+    val defaultN = conf.defaultShufflePartitions
+
+    // Create test data for bypass optimization tests
+    val intSourcePlan = Plan.Source(testPartitions)
+    val kvTestData = Seq(("key1", 1), ("key2", 2))
+    val kvPartition = Partition(kvTestData)
+    val kvSourcePlan: Plan[(String, Int)] = Plan.Source(Seq(kvPartition))
+
+    // Test groupByKey bypass optimization
+    val gbkPlan = Plan.GroupByKeyOp(kvSourcePlan)
+    val alreadyPartitionedByKey = Some(Partitioning(byKey = true, numPartitions = defaultN))
+    val notPartitionedByKey = Some(Partitioning(byKey = false, numPartitions = defaultN))
+    val differentPartitionCount = Some(Partitioning(byKey = true, numPartitions = defaultN + 1))
+
+    canBypassShuffle(gbkPlan, alreadyPartitionedByKey, conf) shouldBe true
+    canBypassShuffle(gbkPlan, notPartitionedByKey, conf) shouldBe false
+    canBypassShuffle(gbkPlan, differentPartitionCount, conf) shouldBe false
+    canBypassShuffle(gbkPlan, None, conf) shouldBe false
+
+    // Test reduceByKey bypass optimization
+    val rbkPlan = Plan.ReduceByKeyOp(kvSourcePlan, (a: Int, b: Int) => a + b)
+    canBypassShuffle(rbkPlan, alreadyPartitionedByKey, conf) shouldBe true
+    canBypassShuffle(rbkPlan, notPartitionedByKey, conf) shouldBe false
+
+    // Test partitionBy bypass optimization
+    val pbyPlan = Plan.PartitionByOp(kvSourcePlan, 16)
+    val alreadyCorrectlyPartitioned = Some(Partitioning(byKey = true, numPartitions = 16))
+    canBypassShuffle(pbyPlan, alreadyCorrectlyPartitioned, conf) shouldBe true
+    canBypassShuffle(pbyPlan, alreadyPartitionedByKey, conf) shouldBe false // Wrong partition count
+
+    // Test repartition bypass optimization
+    val repPlan = Plan.RepartitionOp(intSourcePlan, 32)
+    val alreadyCorrectlyRepartitioned = Some(Partitioning(byKey = false, numPartitions = 32))
+    canBypassShuffle(repPlan, alreadyCorrectlyRepartitioned, conf) shouldBe true
+    canBypassShuffle(repPlan, alreadyPartitionedByKey, conf) shouldBe false // Wrong byKey flag
+
+    // Test coalesce bypass optimization
+    val coalPlan = Plan.CoalesceOp(intSourcePlan, 4)
+    val alreadyFewerPartitions = Some(Partitioning(byKey = false, numPartitions = 4))
+    val morePartitions = Some(Partitioning(byKey = false, numPartitions = 8))
+    canBypassShuffle(coalPlan, alreadyFewerPartitions, conf) shouldBe true
+    canBypassShuffle(coalPlan, morePartitions, conf) shouldBe false // Can't coalesce to more partitions
+
+    // Operations that cannot bypass shuffle
+    val sortPlan = Plan.SortByOp(intSourcePlan, (x: Int) => x, Ordering[Int])
+    canBypassShuffle(sortPlan, alreadyPartitionedByKey, conf) shouldBe false
+
+    val joinPlan = Plan.JoinOp(kvSourcePlan, kvSourcePlan, None)
+    canBypassShuffle(joinPlan, alreadyPartitionedByKey, conf) shouldBe false
+  }
+
+  "WideOp types" should "correctly represent different shuffle operations" in {
+    import WideOpKind.*
+
+    // Test that WideOpKind enum has all expected values
+    WideOpKind.values should contain (GroupByKey)
+    WideOpKind.values should contain (ReduceByKey)
+    WideOpKind.values should contain (SortBy)
+    WideOpKind.values should contain (PartitionBy)
+    WideOpKind.values should contain (Repartition)
+    WideOpKind.values should contain (Coalesce)
+    WideOpKind.values should contain (Join)
+    WideOpKind.values should contain (CoGroup)
+
+    // Test WideOpMeta creation
+    val meta = WideOpMeta(
+      kind = GroupByKey,
+      numPartitions = 16,
+      reduceFunc = Some((a: Any, b: Any) => a),
+      sides = Seq()
+    )
+    meta.kind shouldBe GroupByKey
+    meta.numPartitions shouldBe 16
+    meta.reduceFunc shouldBe defined
+
+    // Test WideOp creation
+    val wideOp = GroupByKeyWideOp(meta)
+    wideOp shouldBe a[GroupByKeyWideOp]
+    wideOp.meta.kind shouldBe meta.kind
+    wideOp.meta.numPartitions shouldBe meta.numPartitions
+  }
 end TestOperationsAndInputSources

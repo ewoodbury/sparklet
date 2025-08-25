@@ -3,7 +3,7 @@ package com.ewoodbury.sparklet.execution
 import scala.collection.mutable
 
 import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
-import com.ewoodbury.sparklet.execution.Operation
+import com.ewoodbury.sparklet.execution.{Operation, WideOp, WideOpMeta, WideOpKind}
 
 @SuppressWarnings(
   Array(
@@ -29,7 +29,7 @@ object StageBuilder:
       stage: Stage[_, _],
       inputSources: Seq[InputSource], // What this stage reads from
       isShuffleStage: Boolean,
-      shuffleOperation: Option[Plan[_]], // The original Plan operation for shuffle stages
+      shuffleOperation: Option[Plan[_]], // The original Plan operation for shuffle stages - will be replaced with WideOp in future
       outputPartitioning: Option[Partitioning],
   )
 
@@ -283,9 +283,8 @@ object StageBuilder:
         val sourceStageId = buildStagesRecursive(ctx, groupByKey.source, stageMap, dependencies)
         val src = stageMap(sourceStageId)
         val defaultN = SparkletConf.get.defaultShufflePartitions
-        val canSkipShuffle =
-          src.outputPartitioning.exists(p => p.byKey && p.numPartitions == defaultN)
-        if (canSkipShuffle) then
+
+        if (Operation.canBypassShuffle(groupByKey, src.outputPartitioning, SparkletConf.get)) then
           extendWithMetadata(
             ctx,
             sourceStageId,
@@ -295,25 +294,18 @@ object StageBuilder:
             preservePartitioning,
           )
         else
-          createShuffleStage(
-            ctx,
-            sourceStageId,
-            "groupByKey",
-            stageMap,
-            dependencies,
-            None,
-            Some(groupByKey),
-            numPartitions = defaultN,
-            resultPartitioning = Some(Partitioning(byKey = true, numPartitions = defaultN)),
+          val opMeta = WideOpMeta(
+            kind = WideOpKind.GroupByKey,
+            numPartitions = defaultN
           )
+          buildWideStage(ctx, Seq(sourceStageId), opMeta, stageMap, dependencies, Some(groupByKey))
 
       case reduceByKey: Plan.ReduceByKeyOp[_, _] =>
         val sourceStageId = buildStagesRecursive(ctx, reduceByKey.source, stageMap, dependencies)
         val src = stageMap(sourceStageId)
         val defaultN = SparkletConf.get.defaultShufflePartitions
-        val canSkipShuffle =
-          src.outputPartitioning.exists(p => p.byKey && p.numPartitions == defaultN)
-        if (canSkipShuffle) then
+
+        if (Operation.canBypassShuffle(reduceByKey, src.outputPartitioning, SparkletConf.get)) then
           extendWithMetadata(
             ctx,
             sourceStageId,
@@ -325,136 +317,109 @@ object StageBuilder:
             preservePartitioning,
           )
         else
-          createShuffleStage(
-            ctx,
-            sourceStageId,
-            "reduceByKey",
-            stageMap,
-            dependencies,
-            Some(reduceByKey.reduceFunc),
-            Some(reduceByKey),
+          val opMeta = WideOpMeta(
+            kind = WideOpKind.ReduceByKey,
             numPartitions = defaultN,
-            resultPartitioning = Some(Partitioning(byKey = true, numPartitions = defaultN)),
+            reduceFunc = Some(reduceByKey.reduceFunc.asInstanceOf[(Any, Any) => Any])
           )
+          buildWideStage(ctx, Seq(sourceStageId), opMeta, stageMap, dependencies, Some(reduceByKey))
 
       case sortBy: Plan.SortByOp[_, _] =>
         val sourceStageId = buildStagesRecursive(ctx, sortBy.source, stageMap, dependencies)
         val n = SparkletConf.get.defaultShufflePartitions
-        createShuffleStage(
-          ctx,
-          sourceStageId,
-          "sortBy",
-          stageMap,
-          dependencies,
-          Some(sortBy.keyFunc),
-          Some(sortBy),
+        val opMeta = WideOpMeta(
+          kind = WideOpKind.SortBy,
           numPartitions = n,
-          resultPartitioning = None,
+          keyFunc = Some(sortBy.keyFunc.asInstanceOf[Any => Any])
         )
+        buildWideStage(ctx, Seq(sourceStageId), opMeta, stageMap, dependencies, Some(sortBy))
 
       case pby: Plan.PartitionByOp[_, _] =>
         val sourceStageId = buildStagesRecursive(ctx, pby.source, stageMap, dependencies)
-        createShuffleStage(
-          ctx,
-          sourceStageId,
-          "partitionBy",
-          stageMap,
-          dependencies,
-          None,
-          Some(pby),
-          numPartitions = pby.numPartitions,
-          resultPartitioning = Some(Partitioning(byKey = true, numPartitions = pby.numPartitions)),
-        )
+        val src = stageMap(sourceStageId)
+
+        if (Operation.canBypassShuffle(pby, src.outputPartitioning, SparkletConf.get)) then
+          extendWithMetadata(
+            ctx,
+            sourceStageId,
+            Stage.SingleOpStage[Any, Any](identity), // No-op since already correctly partitioned
+            stageMap,
+            dependencies,
+            preservePartitioning,
+          )
+        else
+          val opMeta = WideOpMeta(
+            kind = WideOpKind.PartitionBy,
+            numPartitions = pby.numPartitions
+          )
+          buildWideStage(ctx, Seq(sourceStageId), opMeta, stageMap, dependencies, Some(pby))
 
       case rep: Plan.RepartitionOp[_] =>
         val sourceStageId = buildStagesRecursive(ctx, rep.source, stageMap, dependencies)
-        createShuffleStage(
-          ctx,
-          sourceStageId,
-          "repartition",
-          stageMap,
-          dependencies,
-          None,
-          Some(rep),
-          numPartitions = rep.numPartitions,
-          resultPartitioning = Some(Partitioning(byKey = false, numPartitions = rep.numPartitions)),
-        )
+        val src = stageMap(sourceStageId)
+
+        if (Operation.canBypassShuffle(rep, src.outputPartitioning, SparkletConf.get)) then
+          extendWithMetadata(
+            ctx,
+            sourceStageId,
+            Stage.SingleOpStage[Any, Any](identity), // No-op since already correctly partitioned
+            stageMap,
+            dependencies,
+            preservePartitioning,
+          )
+        else
+          val opMeta = WideOpMeta(
+            kind = WideOpKind.Repartition,
+            numPartitions = rep.numPartitions
+          )
+          buildWideStage(ctx, Seq(sourceStageId), opMeta, stageMap, dependencies, Some(rep))
 
       case coal: Plan.CoalesceOp[_] =>
         val sourceStageId = buildStagesRecursive(ctx, coal.source, stageMap, dependencies)
-        createShuffleStage(
-          ctx,
-          sourceStageId,
-          "coalesce",
-          stageMap,
-          dependencies,
-          None,
-          Some(coal),
-          numPartitions = coal.numPartitions,
-          resultPartitioning =
-            Some(Partitioning(byKey = false, numPartitions = coal.numPartitions)),
-        )
+        val src = stageMap(sourceStageId)
+
+        if (Operation.canBypassShuffle(coal, src.outputPartitioning, SparkletConf.get)) then
+          extendWithMetadata(
+            ctx,
+            sourceStageId,
+            Stage.SingleOpStage[Any, Any](identity), // No-op since already correctly partitioned
+            stageMap,
+            dependencies,
+            preservePartitioning,
+          )
+        else
+          val opMeta = WideOpMeta(
+            kind = WideOpKind.Coalesce,
+            numPartitions = coal.numPartitions
+          )
+          buildWideStage(ctx, Seq(sourceStageId), opMeta, stageMap, dependencies, Some(coal))
 
       case joinOp: Plan.JoinOp[_, _, _] =>
         val leftStageId = buildStagesRecursive(ctx, joinOp.left, stageMap, dependencies)
         val rightStageId = buildStagesRecursive(ctx, joinOp.right, stageMap, dependencies)
 
-        // Join requires both inputs to be shuffled - create shuffle stage that reads from both
-        val joinStageId = ctx.freshId()
-        val joinStage =
-          Stage.SingleOpStage[Any, Any](identity) // Placeholder for actual join logic
-
-        // The join stage reads from the shuffle outputs of both left and right producing stages.
-        // Record explicit upstream stage IDs with side tags to avoid heuristic lookups later.
         val numPartitions = SparkletConf.get.defaultShufflePartitions
-        val shuffleInputSources = Seq(
-          ShuffleInput(leftStageId, Some(Side.Left), numPartitions),
-          ShuffleInput(rightStageId, Some(Side.Right), numPartitions),
+        val opMeta = WideOpMeta(
+          kind = WideOpKind.Join,
+          numPartitions = numPartitions,
+          joinStrategy = joinOp.joinStrategy,
+          sides = Seq(Side.Left, Side.Right)
         )
 
-        stageMap(joinStageId) = StageInfo(
-          id = joinStageId,
-          stage = joinStage,
-          inputSources = shuffleInputSources,
-          isShuffleStage = true,
-          shuffleOperation = Some(joinOp), // Store the join operation for execution
-          outputPartitioning = Some(Partitioning(byKey = true, numPartitions = numPartitions)),
-        )
-
-        dependencies.getOrElseUpdate(joinStageId, mutable.Set.empty) += leftStageId
-        dependencies.getOrElseUpdate(joinStageId, mutable.Set.empty) += rightStageId
-        joinStageId
+        buildWideStage(ctx, Seq(leftStageId, rightStageId), opMeta, stageMap, dependencies, Some(joinOp))
 
       case cogroupOp: Plan.CoGroupOp[_, _, _] =>
         val leftStageId = buildStagesRecursive(ctx, cogroupOp.left, stageMap, dependencies)
         val rightStageId = buildStagesRecursive(ctx, cogroupOp.right, stageMap, dependencies)
 
-        // CoGroup requires both inputs to be shuffled - create shuffle stage that reads from both
-        val cogroupStageId = ctx.freshId()
-        val cogroupStage =
-          Stage.SingleOpStage[Any, Any](identity) // Placeholder for actual cogroup logic
-
-        /* The cogroup stage reads from the shuffle outputs of both left and right producing
-         * stages. */
-        // Record explicit upstream stage IDs with side tags to avoid heuristic lookups later.
         val numPartitions = SparkletConf.get.defaultShufflePartitions
-        val shuffleInputSources = Seq(
-          ShuffleInput(leftStageId, Some(Side.Left), numPartitions),
-          ShuffleInput(rightStageId, Some(Side.Right), numPartitions),
+        val opMeta = WideOpMeta(
+          kind = WideOpKind.CoGroup,
+          numPartitions = numPartitions,
+          sides = Seq(Side.Left, Side.Right)
         )
 
-        stageMap(cogroupStageId) = StageInfo(
-          id = cogroupStageId,
-          stage = cogroupStage,
-          inputSources = shuffleInputSources,
-          isShuffleStage = true,
-          shuffleOperation = Some(cogroupOp), // Store the cogroup operation for execution
-          outputPartitioning = Some(Partitioning(byKey = true, numPartitions = numPartitions)),
-        )
-
-        dependencies.getOrElseUpdate(cogroupStageId, mutable.Set.empty) += leftStageId
-        dependencies.getOrElseUpdate(cogroupStageId, mutable.Set.empty) += rightStageId
-        cogroupStageId
+        buildWideStage(ctx, Seq(leftStageId, rightStageId), opMeta, stageMap, dependencies, Some(cogroupOp))
     }
   }
 
@@ -590,9 +555,81 @@ object StageBuilder:
 
   @SuppressWarnings(Array("org.wartremover.warts.DefaultArguments"))
   /**
+   * Encapsulates wide operation handling by creating a shuffle stage with proper metadata.
+   * This is the main entry point for creating shuffle stages in the new architecture.
+   */
+  private def buildWideStage(
+      ctx: BuildContext,
+      upstreamIds: Seq[StageId],
+      opMeta: WideOpMeta,
+      stageMap: mutable.Map[StageId, StageInfo],
+      dependencies: mutable.Map[StageId, mutable.Set[StageId]],
+      shuffleOperation: Option[Plan[_]] = None, // For backward compatibility
+  ): StageId = {
+    val shuffleStageId = ctx.freshId()
+
+    // Create a placeholder stage for shuffle operations
+    val shuffleStage =
+      Stage.SingleOpStage[Any, Any](identity) // Will be replaced with actual shuffle logic
+
+    // Set up shuffle input sources based on operation type and upstream stages
+    val shuffleInputSources = opMeta.kind match {
+      case WideOpKind.Join | WideOpKind.CoGroup =>
+        // Multi-input operations need sides
+        require(upstreamIds.length == 2, s"${opMeta.kind} requires exactly 2 upstream stages")
+        require(opMeta.sides.length == 2, s"${opMeta.kind} requires exactly 2 sides")
+        Seq(
+          ShuffleInput(upstreamIds(0), Some(opMeta.sides(0)), opMeta.numPartitions),
+          ShuffleInput(upstreamIds(1), Some(opMeta.sides(1)), opMeta.numPartitions)
+        )
+      case _ =>
+        // Single-input operations
+        require(upstreamIds.length == 1, s"${opMeta.kind} requires exactly 1 upstream stage")
+        Seq(ShuffleInput(upstreamIds.head, None, opMeta.numPartitions))
+    }
+
+    // Create the appropriate WideOp instance
+    val wideOp: WideOp = opMeta.kind match {
+      case WideOpKind.GroupByKey => GroupByKeyWideOp(opMeta)
+      case WideOpKind.ReduceByKey => ReduceByKeyWideOp(opMeta)
+      case WideOpKind.SortBy => SortByWideOp(opMeta)
+      case WideOpKind.PartitionBy => PartitionByWideOp(opMeta)
+      case WideOpKind.Repartition => RepartitionWideOp(opMeta)
+      case WideOpKind.Coalesce => CoalesceWideOp(opMeta)
+      case WideOpKind.Join => JoinWideOp(opMeta)
+      case WideOpKind.CoGroup => CoGroupWideOp(opMeta)
+    }
+
+    // Determine output partitioning based on operation type
+    val outputPartitioning = opMeta.kind match {
+      case WideOpKind.GroupByKey | WideOpKind.ReduceByKey | WideOpKind.PartitionBy | WideOpKind.Join | WideOpKind.CoGroup =>
+        Some(Partitioning(byKey = true, numPartitions = opMeta.numPartitions))
+      case WideOpKind.SortBy =>
+        Some(Partitioning(byKey = false, numPartitions = opMeta.numPartitions))
+      case WideOpKind.Repartition | WideOpKind.Coalesce =>
+        Some(Partitioning(byKey = false, numPartitions = opMeta.numPartitions))
+    }
+
+    stageMap(shuffleStageId) = StageInfo(
+      id = shuffleStageId,
+      stage = shuffleStage,
+      inputSources = shuffleInputSources,
+      isShuffleStage = true,
+      shuffleOperation = shuffleOperation, // Keep original Plan for backward compatibility
+      outputPartitioning = outputPartitioning,
+    )
+
+    // Add dependencies for all upstream stages
+    upstreamIds.foreach { upstreamId =>
+      dependencies.getOrElseUpdate(shuffleStageId, mutable.Set.empty) += upstreamId
+    }
+
+    shuffleStageId
+  }
+
+  /**
    * Creates a new shuffle stage that depends on the source stage.
-   *
-   * TODO: Add actual shuffle logic, which will use the args operationType and operation.
+   * @deprecated Use buildWideStage instead - this is kept for backward compatibility during transition.
    */
   private def createShuffleStage(
       ctx: BuildContext,
@@ -605,27 +642,28 @@ object StageBuilder:
       numPartitions: Int = SparkletConf.get.defaultShufflePartitions,
       resultPartitioning: Option[Partitioning] = None,
   ): StageId = {
-    val shuffleStageId = ctx.freshId()
-
-    // Create a placeholder stage for shuffle operations
-    val shuffleStage =
-      Stage.SingleOpStage[Any, Any](identity) // Will be replaced with actual shuffle logic
-
-    /* Set up shuffle input source - the shuffle stage reads from the shuffle data produced by the
-     * source stage */
-    val shuffleInputSources = Seq(ShuffleInput(sourceStageId, None, numPartitions))
-
-    stageMap(shuffleStageId) = StageInfo(
-      id = shuffleStageId,
-      stage = shuffleStage,
-      inputSources = shuffleInputSources,
-      isShuffleStage = true,
-      shuffleOperation = shuffleOperation,
-      outputPartitioning = resultPartitioning,
+    // Create a temporary WideOpMeta for backward compatibility
+    val tempMeta = WideOpMeta(
+      kind = WideOpKind.GroupByKey, // Default fallback
+      numPartitions = numPartitions
     )
 
-    dependencies.getOrElseUpdate(shuffleStageId, mutable.Set.empty) += sourceStageId
-    shuffleStageId
+    // Convert Plan to WideOp for new architecture
+    val wideOp = shuffleOperation.flatMap { plan =>
+      plan match {
+        case gbk: Plan.GroupByKeyOp[_, _] => Some(GroupByKeyWideOp(tempMeta.copy(kind = WideOpKind.GroupByKey)))
+        case rbk: Plan.ReduceByKeyOp[_, _] => Some(ReduceByKeyWideOp(tempMeta.copy(kind = WideOpKind.ReduceByKey, reduceFunc = Some(rbk.reduceFunc.asInstanceOf[(Any, Any) => Any]))))
+        case sb: Plan.SortByOp[_, _] => Some(SortByWideOp(tempMeta.copy(kind = WideOpKind.SortBy, keyFunc = Some(sb.keyFunc.asInstanceOf[Any => Any]))))
+        case pby: Plan.PartitionByOp[_, _] => Some(PartitionByWideOp(tempMeta.copy(kind = WideOpKind.PartitionBy)))
+        case rep: Plan.RepartitionOp[_] => Some(RepartitionWideOp(tempMeta.copy(kind = WideOpKind.Repartition)))
+        case coal: Plan.CoalesceOp[_] => Some(CoalesceWideOp(tempMeta.copy(kind = WideOpKind.Coalesce)))
+        case join: Plan.JoinOp[_, _, _] => Some(JoinWideOp(tempMeta.copy(kind = WideOpKind.Join, joinStrategy = join.joinStrategy)))
+        case cogroup: Plan.CoGroupOp[_, _, _] => Some(CoGroupWideOp(tempMeta.copy(kind = WideOpKind.CoGroup)))
+        case _ => None
+      }
+    }
+
+    buildWideStage(ctx, Seq(sourceStageId), tempMeta, stageMap, dependencies)
   }
 
   /**
