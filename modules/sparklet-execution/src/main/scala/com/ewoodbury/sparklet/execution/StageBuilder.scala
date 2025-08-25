@@ -3,6 +3,7 @@ package com.ewoodbury.sparklet.execution
 import scala.collection.mutable
 
 import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
+import com.ewoodbury.sparklet.execution.Operation
 
 @SuppressWarnings(
   Array(
@@ -37,7 +38,6 @@ object StageBuilder:
    */
   sealed trait InputSource
   case class SourceInput(partitions: Seq[Partition[_]]) extends InputSource
-  case class ShuffleFrom(stageId: StageId, numPartitions: Int) extends InputSource
 
   /**
    * Side tag to disambiguate multi-input wide operations (e.g., join/cogroup).
@@ -46,10 +46,10 @@ object StageBuilder:
     case Left, Right
 
   /**
-   * Explicitly reference the upstream producing stage and which side it feeds for multi-input
-   * shuffle operations. This avoids relying on heuristics to infer left/right shuffles.
+   * Unified shuffle input that can handle both single-input and multi-input shuffle operations.
+   * The optional side parameter disambiguates multi-input operations (e.g., join/cogroup).
    */
-  case class TaggedShuffleFrom(stageId: StageId, side: Side, numPartitions: Int)
+  case class ShuffleInput(stageId: StageId, side: Option[Side], numPartitions: Int)
       extends InputSource
 
   /**
@@ -65,6 +65,20 @@ object StageBuilder:
       stages: Map[StageId, StageInfo],
       dependencies: Map[StageId, Set[StageId]], // stage ID -> dependent stage IDs
       finalStageId: StageId,
+  )
+
+  /**
+   * Mutable builder for accumulating operations during stage construction.
+   * This will replace the current recursive approach with a more structured
+   * accumulation of operations that can later be optimized and materialized.
+   */
+  private case class MutableStageBuilder(
+      id: StageId,
+      ops: Vector[Operation],
+      inputSources: Seq[InputSource],
+      isShuffle: Boolean,
+      shuffleMeta: Option[Plan[_]], // The original Plan operation for shuffle stages
+      outputPartitioning: Option[Partitioning],
   )
 
   // Per-build context to generate monotonically increasing stage IDs without global/shared state
@@ -394,8 +408,8 @@ object StageBuilder:
         // Record explicit upstream stage IDs with side tags to avoid heuristic lookups later.
         val numPartitions = SparkletConf.get.defaultShufflePartitions
         val shuffleInputSources = Seq(
-          TaggedShuffleFrom(leftStageId, Side.Left, numPartitions),
-          TaggedShuffleFrom(rightStageId, Side.Right, numPartitions),
+          ShuffleInput(leftStageId, Some(Side.Left), numPartitions),
+          ShuffleInput(rightStageId, Some(Side.Right), numPartitions),
         )
 
         stageMap(joinStageId) = StageInfo(
@@ -425,8 +439,8 @@ object StageBuilder:
         // Record explicit upstream stage IDs with side tags to avoid heuristic lookups later.
         val numPartitions = SparkletConf.get.defaultShufflePartitions
         val shuffleInputSources = Seq(
-          TaggedShuffleFrom(leftStageId, Side.Left, numPartitions),
-          TaggedShuffleFrom(rightStageId, Side.Right, numPartitions),
+          ShuffleInput(leftStageId, Some(Side.Left), numPartitions),
+          ShuffleInput(rightStageId, Some(Side.Right), numPartitions),
         )
 
         stageMap(cogroupStageId) = StageInfo(
@@ -489,6 +503,67 @@ object StageBuilder:
   }
 
   // --- Metadata helpers ---
+
+  /**
+   * Centralized function for propagating partitioning metadata based on operation semantics.
+   * Rules:
+   * - Map/Filter/FlatMap/MapPartitions: preserve existing partitioning
+   * - Keys/Values/MapValues/FilterKeys/FilterValues/FlatMapValues: preserve numPartitions but may clear byKey
+   * - Distinct: clears byKey (unless previous was byKey - define explicitly)
+   * - Wide operations: set byKey and numPartitions based on operation type
+   */
+  private def updatePartitioning(prev: Option[Partitioning], op: Operation): Option[Partitioning] = {
+    op match {
+      // Narrow operations that preserve partitioning completely
+      case _: MapOp[_, _] | _: FilterOp[_] | _: FlatMapOp[_, _] | _: MapPartitionsOp[_, _] =>
+        prev
+
+      // Operations that preserve partition count but may affect key awareness
+      case _: KeysOp[_, _] =>
+        // Keys keeps byKey=false because output is key-only set
+        prev.map(p => p.copy(byKey = false))
+
+      case _: ValuesOp[_, _] =>
+        // Values clears byKey because output is value-only
+        prev.map(p => p.copy(byKey = false))
+
+      case _: MapValuesOp[_, _, _] | _: FilterKeysOp[_, _] | _: FilterValuesOp[_, _] | _: FlatMapValuesOp[_, _, _] =>
+        // These preserve the partitioning structure
+        prev
+
+      case _: DistinctOp =>
+        // Distinct clears byKey unless previous was byKey (preserves key-based partitioning for key-value data)
+        prev.map(p => if (p.byKey) p else p.copy(byKey = false))
+
+      // Wide operations that create new partitioning
+      case gbk: GroupByKeyOp[_, _] =>
+        Some(Partitioning(byKey = true, numPartitions = gbk.numPartitions))
+
+      case rbk: ReduceByKeyOp[_, _] =>
+        Some(Partitioning(byKey = true, numPartitions = rbk.numPartitions))
+
+      case sb: SortByOp[_, _] =>
+        // SortBy creates key-based partitioning but doesn't guarantee byKey for output
+        Some(Partitioning(byKey = false, numPartitions = sb.numPartitions))
+
+      case pby: PartitionByOp[_, _] =>
+        Some(Partitioning(byKey = true, numPartitions = pby.numPartitions))
+
+      case rep: RepartitionOp[_] =>
+        Some(Partitioning(byKey = false, numPartitions = rep.numPartitions))
+
+      case coal: CoalesceOp[_] =>
+        Some(Partitioning(byKey = false, numPartitions = coal.numPartitions))
+
+      case join: JoinOp[_, _, _] =>
+        Some(Partitioning(byKey = true, numPartitions = join.numPartitions))
+
+      case cogroup: CoGroupOp[_, _, _] =>
+        Some(Partitioning(byKey = true, numPartitions = cogroup.numPartitions))
+    }
+  }
+
+  // Legacy helper functions - kept for backward compatibility during transition
   private def preservePartitioning(prev: Option[Partitioning]): Option[Partitioning] = prev
 
   private def clearKeyedPreserveCount(prev: Option[Partitioning]): Option[Partitioning] =
@@ -538,7 +613,7 @@ object StageBuilder:
 
     /* Set up shuffle input source - the shuffle stage reads from the shuffle data produced by the
      * source stage */
-    val shuffleInputSources = Seq(ShuffleFrom(sourceStageId, numPartitions))
+    val shuffleInputSources = Seq(ShuffleInput(sourceStageId, None, numPartitions))
 
     stageMap(shuffleStageId) = StageInfo(
       id = shuffleStageId,

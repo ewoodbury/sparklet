@@ -83,8 +83,7 @@ final class ShuffleHandler[F[_]: Sync](
       .stages(dependentSortByStageId)
       .inputSources
       .collectFirst {
-        case StageBuilder.ShuffleFrom(_, n) => n
-        case StageBuilder.TaggedShuffleFrom(_, _, n) => n
+        case StageBuilder.ShuffleInput(_, _, n) => n
       }
       .getOrElse(SparkletConf.get.defaultShufflePartitions)
 

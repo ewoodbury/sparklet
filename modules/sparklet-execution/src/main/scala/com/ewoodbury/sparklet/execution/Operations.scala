@@ -1,0 +1,83 @@
+package com.ewoodbury.sparklet.execution
+
+import com.ewoodbury.sparklet.core.{Partition, Plan}
+
+/**
+ * Internal representation of operations that can be applied to data in a stage.
+ * This ADT replaces the nested Stage.ChainedStage approach for better introspection,
+ * optimization, and future code generation.
+ */
+sealed trait Operation
+
+// Narrow transformations
+final case class MapOp[A, B](f: A => B) extends Operation
+final case class FilterOp[A](p: A => Boolean) extends Operation
+final case class FlatMapOp[A, B](f: A => IterableOnce[B]) extends Operation
+final case class DistinctOp() extends Operation
+final case class KeysOp[K, V]() extends Operation
+final case class ValuesOp[K, V]() extends Operation
+final case class MapValuesOp[K, V, V2](f: V => V2) extends Operation
+final case class FilterKeysOp[K, V](p: K => Boolean) extends Operation
+final case class FilterValuesOp[K, V](p: V => Boolean) extends Operation
+final case class FlatMapValuesOp[K, V, V2](f: V => IterableOnce[V2]) extends Operation
+final case class MapPartitionsOp[A, B](f: Iterator[A] => Iterator[B]) extends Operation
+
+// Wide transformations (shuffle operations) - simplified for now, will be filled in by builder
+final case class GroupByKeyOp[K, V](numPartitions: Int) extends Operation
+final case class ReduceByKeyOp[K, V](reduceFunc: (V, V) => V, numPartitions: Int) extends Operation
+final case class SortByOp[K, V](keyFunc: V => K, numPartitions: Int) extends Operation
+final case class PartitionByOp[K, V](numPartitions: Int) extends Operation
+final case class RepartitionOp[A](numPartitions: Int) extends Operation
+final case class CoalesceOp[A](numPartitions: Int) extends Operation
+final case class JoinOp[K, V, W](numPartitions: Int) extends Operation
+final case class CoGroupOp[K, V, W](numPartitions: Int) extends Operation
+
+/**
+ * Companion object with helper methods for working with operations.
+ */
+object Operation {
+  /**
+   * Determines if an operation requires a shuffle boundary.
+   */
+  def needsShuffle(op: Operation): Boolean = op match {
+    case _: GroupByKeyOp[_, _] | _: ReduceByKeyOp[_, _] | _: SortByOp[_, _] |
+         _: PartitionByOp[_, _] | _: RepartitionOp[_] | _: CoalesceOp[_] |
+         _: JoinOp[_, _, _] | _: CoGroupOp[_, _, _] => true
+    case _ => false
+  }
+
+  /**
+   * Helper method to extract partitions from a Plan by recursively finding the Source.
+   */
+  private def extractPartitions(plan: Plan[_]): Seq[Partition[_]] = plan match {
+    case source: Plan.Source[_] => source.partitions
+    case _ => throw new UnsupportedOperationException("Cannot extract partitions from non-Source plan")
+  }
+
+  /**
+   * Creates an Operation from a Plan node.
+   * Note: This is a temporary adapter - eventually Plan nodes will be converted to Operations directly.
+   */
+  def fromPlan(plan: Plan[_]): Operation = plan match {
+    case Plan.MapOp(_, f) => MapOp(f)
+    case Plan.FilterOp(_, p) => FilterOp(p)
+    case Plan.FlatMapOp(_, f) => FlatMapOp(f)
+    case Plan.DistinctOp(_) => DistinctOp()
+    case Plan.KeysOp(_) => KeysOp()
+    case Plan.ValuesOp(_) => ValuesOp()
+    case Plan.MapValuesOp(_, f) => MapValuesOp(f)
+    case Plan.FilterKeysOp(_, p) => FilterKeysOp(p)
+    case Plan.FilterValuesOp(_, p) => FilterValuesOp(p)
+    case Plan.FlatMapValuesOp(_, f) => FlatMapValuesOp(f)
+    case Plan.MapPartitionsOp(_, f) => MapPartitionsOp(f)
+    case Plan.GroupByKeyOp(_) => GroupByKeyOp(0) // Will be filled in by builder
+    case Plan.ReduceByKeyOp(_, reduceFunc) => ReduceByKeyOp(reduceFunc, 0)
+    case Plan.SortByOp(_, keyFunc, _) => SortByOp(keyFunc, 0)
+    case Plan.PartitionByOp(_, numPartitions) => PartitionByOp(numPartitions)
+    case Plan.RepartitionOp(_, numPartitions) => RepartitionOp(numPartitions)
+    case Plan.CoalesceOp(_, numPartitions) => CoalesceOp(numPartitions)
+    case Plan.JoinOp(_, _, _) => JoinOp(0)
+    case Plan.CoGroupOp(_, _) => CoGroupOp(0)
+    case _ => throw new UnsupportedOperationException(s"Cannot convert $plan to Operation")
+  }
+}
