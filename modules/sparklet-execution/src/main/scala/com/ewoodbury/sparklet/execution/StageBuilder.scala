@@ -134,19 +134,38 @@ object StageBuilder:
   /**
    * Materializes a vector of operations into a concrete Stage form.
    * This builds a left fold producing existing Stage.* operations for minimal churn.
+   * Optimized to reduce unnecessary nesting and improve execution efficiency.
    */
-  private def materialize(ops: Vector[Operation]): Stage[Any, Any] = {
+  private[execution] def materialize(ops: Vector[Operation]): Stage[Any, Any] = {
     require(ops.nonEmpty, "Cannot materialize empty operation vector")
 
-    // Start with identity stage and fold operations from left to right
-    val startStage: Stage[Any, Any] = Stage.SingleOpStage[Any, Any](identity)
+    // For single operations, return the operation directly without chaining
+    if (ops.length == 1) {
+      return ops.headOption.get match {
+        case MapOp(f) => Stage.map(f.asInstanceOf[Any => Any])
+        case FilterOp(p) => Stage.filter(p.asInstanceOf[Any => Boolean])
+        case FlatMapOp(f) => Stage.flatMap(f.asInstanceOf[Any => IterableOnce[Any]])
+        case DistinctOp() => Stage.distinct
+        case KeysOp() => Stage.keys.asInstanceOf[Stage[Any, Any]]
+        case ValuesOp() => Stage.values.asInstanceOf[Stage[Any, Any]]
+        case MapValuesOp(f) => Stage.mapValues(f.asInstanceOf[Any => Any]).asInstanceOf[Stage[Any, Any]]
+        case FilterKeysOp(p) => Stage.filterKeys(p.asInstanceOf[Any => Boolean]).asInstanceOf[Stage[Any, Any]]
+        case FilterValuesOp(p) => Stage.filterValues(p.asInstanceOf[Any => Boolean]).asInstanceOf[Stage[Any, Any]]
+        case FlatMapValuesOp(f) => Stage.flatMapValues(f.asInstanceOf[Any => IterableOnce[Any]]).asInstanceOf[Stage[Any, Any]]
+        case MapPartitionsOp(f) => Stage.mapPartitions(f.asInstanceOf[Iterator[Any] => Iterator[Any]])
+        case GroupByKeyLocalOp() => Stage.groupByKeyLocal.asInstanceOf[Stage[Any, Any]]
+        case ReduceByKeyLocalOp(reduceFunc) => Stage.reduceByKeyLocal(reduceFunc.asInstanceOf[(Any, Any) => Any]).asInstanceOf[Stage[Any, Any]]
+        case _ => throw new UnsupportedOperationException(s"Cannot materialize wide operation: ${ops.headOption.get}")
+      }
+    }
 
-    ops.foldLeft(startStage) { (stage, op) =>
+    // For multiple operations, build the chain efficiently
+    ops.drop(1).foldLeft(createStageFromOp(ops.headOption.get)) { (stage, op) =>
       op match {
         case MapOp(f) => Stage.ChainedStage(stage, Stage.map(f.asInstanceOf[Any => Any]))
         case FilterOp(p) => Stage.ChainedStage(stage, Stage.filter(p.asInstanceOf[Any => Boolean]))
         case FlatMapOp(f) => Stage.ChainedStage(stage, Stage.flatMap(f.asInstanceOf[Any => IterableOnce[Any]]))
-        case DistinctOp() => Stage.ChainedStage(stage, Stage.distinct.asInstanceOf[Stage[Any, Any]])
+        case DistinctOp() => Stage.ChainedStage(stage, Stage.distinct)
         case KeysOp() => Stage.ChainedStage(stage, Stage.keys.asInstanceOf[Stage[Any, Any]])
         case ValuesOp() => Stage.ChainedStage(stage, Stage.values.asInstanceOf[Stage[Any, Any]])
         case MapValuesOp(f) => Stage.ChainedStage(stage, Stage.mapValues(f.asInstanceOf[Any => Any]).asInstanceOf[Stage[Any, Any]])
@@ -158,6 +177,29 @@ object StageBuilder:
         case ReduceByKeyLocalOp(reduceFunc) => Stage.ChainedStage(stage, Stage.reduceByKeyLocal(reduceFunc.asInstanceOf[(Any, Any) => Any]).asInstanceOf[Stage[Any, Any]])
         case _ => throw new UnsupportedOperationException(s"Cannot materialize wide operation: $op")
       }
+    }
+  }
+
+  /**
+   * Creates a Stage from a single operation without wrapping in ChainedStage.
+   * This is more efficient for the first operation in a chain.
+   */
+  private def createStageFromOp(op: Operation): Stage[Any, Any] = {
+    op match {
+      case MapOp(f) => Stage.map(f.asInstanceOf[Any => Any])
+      case FilterOp(p) => Stage.filter(p.asInstanceOf[Any => Boolean])
+      case FlatMapOp(f) => Stage.flatMap(f.asInstanceOf[Any => IterableOnce[Any]])
+      case DistinctOp() => Stage.distinct
+      case KeysOp() => Stage.keys.asInstanceOf[Stage[Any, Any]]
+      case ValuesOp() => Stage.values.asInstanceOf[Stage[Any, Any]]
+      case MapValuesOp(f) => Stage.mapValues(f.asInstanceOf[Any => Any]).asInstanceOf[Stage[Any, Any]]
+      case FilterKeysOp(p) => Stage.filterKeys(p.asInstanceOf[Any => Boolean]).asInstanceOf[Stage[Any, Any]]
+      case FilterValuesOp(p) => Stage.filterValues(p.asInstanceOf[Any => Boolean]).asInstanceOf[Stage[Any, Any]]
+      case FlatMapValuesOp(f) => Stage.flatMapValues(f.asInstanceOf[Any => IterableOnce[Any]]).asInstanceOf[Stage[Any, Any]]
+      case MapPartitionsOp(f) => Stage.mapPartitions(f.asInstanceOf[Iterator[Any] => Iterator[Any]])
+      case GroupByKeyLocalOp() => Stage.groupByKeyLocal.asInstanceOf[Stage[Any, Any]]
+      case ReduceByKeyLocalOp(reduceFunc) => Stage.reduceByKeyLocal(reduceFunc.asInstanceOf[(Any, Any) => Any]).asInstanceOf[Stage[Any, Any]]
+      case _ => throw new UnsupportedOperationException(s"Cannot create stage from operation: $op")
     }
   }
 

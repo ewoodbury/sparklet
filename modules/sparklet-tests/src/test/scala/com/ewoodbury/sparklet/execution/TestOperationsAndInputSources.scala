@@ -3,7 +3,7 @@ package com.ewoodbury.sparklet.execution
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
-import com.ewoodbury.sparklet.execution.{Operation, WideOp, WideOpMeta, WideOpKind}
+import com.ewoodbury.sparklet.execution.{Operation, WideOp, WideOpMeta, WideOpKind, Stage}
 
 /**
  * Tests for the new Operation ADT and normalized InputSource modeling.
@@ -520,6 +520,108 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     }).toSet
 
     sourceInputs.size shouldBe 2 // Two different partition sets
+  }
+
+  // --- Stage.ChainedStage Nesting Tests ---
+
+  behavior of "Stage.ChainedStage Nesting"
+
+
+
+  it should "create single operation stages without chaining for efficiency" in {
+    val plan = Plan.MapOp(createSource(), (_: Int) * 2)
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    // Should have 1 stage with the operation directly (no ChainedStage)
+    stageGraph.stages.size shouldBe 1
+    val stage = stageGraph.stages(stageGraph.finalStageId)
+
+    // The stage should contain the map operation directly, not wrapped in ChainedStage
+    stage.stage match {
+      case Stage.SingleOpStage(_) => // This is what we want for single operations
+      case _ => fail("Single operation should create SingleOpStage, not ChainedStage")
+    }
+  }
+
+  it should "create optimized chaining for multiple operations" in {
+    val plan = Plan.DistinctOp(
+      Plan.FilterOp(
+        Plan.MapOp(createSource(), (_: Int) * 2),
+        (_: Int) > 0
+      )
+    )
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    // Should have 1 stage with chained operations
+    stageGraph.stages.size shouldBe 1
+    val stage = stageGraph.stages(stageGraph.finalStageId)
+
+    // The stage should be a ChainedStage for multiple operations
+    stage.stage match {
+      case Stage.ChainedStage(_, _) => // This is expected for multiple operations
+      case Stage.SingleOpStage(_) => fail("Multiple operations should create ChainedStage")
+      case _ => fail("Unexpected stage type")
+    }
+  }
+
+  it should "verify stage construction efficiency metrics" in {
+    // Test that single operations create SingleOpStage
+    val singleOpPlan = Plan.MapOp(createSource(), (_: Int) * 2)
+    val singleStageGraph = StageBuilder.buildStageGraph(singleOpPlan)
+
+    singleStageGraph.stages.size shouldBe 1
+    val singleStage = singleStageGraph.stages(singleStageGraph.finalStageId)
+
+    // Single operation should create a direct stage, not chained
+    singleStage.stage match {
+      case Stage.SingleOpStage(_) => // Expected for single operations
+      case Stage.ChainedStage(Stage.SingleOpStage(_), _) => // Also acceptable but less efficient
+      case _ => fail("Single operation should not create deeply nested ChainedStage")
+    }
+
+    // Test that multiple operations create reasonable chaining
+    val multiOpPlan = Plan.DistinctOp(
+      Plan.FilterOp(
+        Plan.MapOp(createSource(), (_: Int) * 2),
+        (_: Int) > 0
+      )
+    )
+    val multiStageGraph = StageBuilder.buildStageGraph(multiOpPlan)
+
+    multiStageGraph.stages.size shouldBe 1
+    val multiStage = multiStageGraph.stages(multiStageGraph.finalStageId)
+
+    // Multiple operations should create ChainedStage but not excessive nesting
+    multiStage.stage match {
+      case Stage.ChainedStage(_, _) => // Expected for multiple operations
+      case _ => fail("Multiple operations should create ChainedStage")
+    }
+  }
+
+  it should "verify stage execution correctness with different chaining strategies" in {
+    val source = createSource()
+    val plan1 = Plan.MapOp(source, (_: Int) * 2)  // Single operation
+    val plan2 = Plan.FilterOp(Plan.MapOp(source, (_: Int) * 2), (_: Int) > 0)  // Two operations
+
+    val stageGraph1 = StageBuilder.buildStageGraph(plan1)
+    val stageGraph2 = StageBuilder.buildStageGraph(plan2)
+
+    // Both should produce correct results
+    val stage1 = stageGraph1.stages(stageGraph1.finalStageId)
+    val stage2 = stageGraph2.stages(stageGraph2.finalStageId)
+
+    // Test execution with sample data
+    val testPartition = Partition(Seq(1, 2, 3))
+
+    // Execute stages and handle type casting
+    val result1 = stage1.stage.asInstanceOf[Stage[Any, Any]].execute(testPartition.asInstanceOf[Partition[Any]])
+    val result2 = stage2.stage.asInstanceOf[Stage[Any, Any]].execute(testPartition.asInstanceOf[Partition[Any]])
+
+    // Results should be equivalent to manual computation
+    result1.data.toSeq shouldBe Seq(2, 4, 6)  // Map only
+    result2.data.toSeq shouldBe Seq(2, 4, 6)  // Map + Filter (all elements > 0)
   }
 
 end TestOperationsAndInputSources
