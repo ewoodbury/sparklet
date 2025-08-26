@@ -1,6 +1,6 @@
 package com.ewoodbury.sparklet.execution
 
-import com.ewoodbury.sparklet.core.{Partition, Plan}
+import com.ewoodbury.sparklet.core.Plan
 
 /**
  * Internal representation of operations that can be applied to data in a stage.
@@ -78,7 +78,7 @@ object Operation {
   /**
    * Determines if an operation requires a shuffle boundary.
    */
-  def needsShuffle(op: Operation): Boolean = op match {
+  private[execution] def needsShuffle(op: Operation): Boolean = op match {
     case _: GroupByKeyOp[_, _] | _: ReduceByKeyOp[_, _] | _: SortByOp[_, _] |
          _: PartitionByOp[_, _] | _: RepartitionOp[_] | _: CoalesceOp[_] |
          _: JoinOp[_, _, _] | _: CoGroupOp[_, _, _] => true
@@ -89,7 +89,7 @@ object Operation {
    * Determines if a Plan operation requires a shuffle boundary.
    * This is the main function for shuffle boundary detection during stage building.
    */
-  def needsShuffle(plan: Plan[_]): Boolean = plan match {
+  private[execution] def needsShuffle(plan: Plan[_]): Boolean = plan match {
     case _: Plan.GroupByKeyOp[_, _] | _: Plan.ReduceByKeyOp[_, _] | _: Plan.SortByOp[_, _] |
          _: Plan.PartitionByOp[_, _] | _: Plan.RepartitionOp[_] | _: Plan.CoalesceOp[_] |
          _: Plan.JoinOp[_, _, _] | _: Plan.CoGroupOp[_, _, _] => true
@@ -100,7 +100,7 @@ object Operation {
    * Optimization hook to determine if a shuffle operation can be bypassed based on
    * upstream partitioning metadata. This generalizes the current groupByKey/reduceByKey shortcut.
    */
-  def canBypassShuffle(plan: Plan[_], upstreamPartitioning: Option[com.ewoodbury.sparklet.execution.StageBuilder.Partitioning], conf: com.ewoodbury.sparklet.core.SparkletConf): Boolean = {
+  private[execution] def canBypassShuffle(plan: Plan[_], upstreamPartitioning: Option[com.ewoodbury.sparklet.execution.StageBuilder.Partitioning], conf: com.ewoodbury.sparklet.core.SparkletConf): Boolean = {
     plan match {
       case gbk: Plan.GroupByKeyOp[_, _] =>
         // Can bypass if already partitioned by key with correct partition count
@@ -128,19 +128,13 @@ object Operation {
     }
   }
 
-  /**
-   * Helper method to extract partitions from a Plan by recursively finding the Source.
-   */
-  private def extractPartitions(plan: Plan[_]): Seq[Partition[_]] = plan match {
-    case source: Plan.Source[_] => source.partitions
-    case _ => throw new UnsupportedOperationException("Cannot extract partitions from non-Source plan")
-  }
+
 
   /**
    * Creates an Operation from a Plan node.
    * Note: This is a temporary adapter - eventually Plan nodes will be converted to Operations directly.
    */
-  def fromPlan(plan: Plan[_]): Operation = plan match {
+  private[execution] def fromPlan(plan: Plan[_]): Operation = plan match {
     case Plan.MapOp(_, f) => MapOp(f)
     case Plan.FilterOp(_, p) => FilterOp(p)
     case Plan.FlatMapOp(_, f) => FlatMapOp(f)

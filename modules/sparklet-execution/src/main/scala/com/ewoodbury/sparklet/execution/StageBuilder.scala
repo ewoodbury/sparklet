@@ -653,7 +653,7 @@ object StageBuilder:
    * Traverses from sources to finalStageId collecting only linear narrow chains with no shuffles.
    * Fails fast if any shuffle stage encountered (enforces caller migration).
    */
-  def legacyAdapter(graph: StageGraph): Seq[(Plan.Source[_], Stage[_, _])] = {
+  private def legacyAdapter(graph: StageGraph): Seq[(Plan.Source[_], Stage[_, _])] = {
     // Find all source stages (stages that read from SourceInput)
     val sourceStages = graph.stages.filter { case (_, stageInfo) =>
       stageInfo.inputSources.exists(_.isInstanceOf[SourceInput])
