@@ -154,6 +154,8 @@ object StageBuilder:
         case FilterValuesOp(p) => Stage.ChainedStage(stage, Stage.filterValues(p.asInstanceOf[Any => Boolean]).asInstanceOf[Stage[Any, Any]])
         case FlatMapValuesOp(f) => Stage.ChainedStage(stage, Stage.flatMapValues(f.asInstanceOf[Any => IterableOnce[Any]]).asInstanceOf[Stage[Any, Any]])
         case MapPartitionsOp(f) => Stage.ChainedStage(stage, Stage.mapPartitions(f.asInstanceOf[Iterator[Any] => Iterator[Any]]))
+        case GroupByKeyLocalOp() => Stage.ChainedStage(stage, Stage.groupByKeyLocal.asInstanceOf[Stage[Any, Any]])
+        case ReduceByKeyLocalOp(reduceFunc) => Stage.ChainedStage(stage, Stage.reduceByKeyLocal(reduceFunc.asInstanceOf[(Any, Any) => Any]).asInstanceOf[Stage[Any, Any]])
         case _ => throw new UnsupportedOperationException(s"Cannot materialize wide operation: $op")
       }
     }
@@ -171,12 +173,12 @@ object StageBuilder:
       dependencies: mutable.Map[StageId, mutable.Set[StageId]],
   ): (StageId, Option[Plan[_]]) = {
     plan match {
-      // Base case: data source
+      // Base case: data source - don't create a stage yet, let operations chain to it
       case source: Plan.Source[_] =>
         val stageId = ctx.freshId()
         builderMap(stageId) = MutableStageBuilder(
           id = stageId,
-          ops = Vector.empty[Operation], // No operations for source
+          ops = Vector.empty[Operation], // No operations for source - operations will be chained here
           inputSources = Seq(SourceInput(source.partitions)),
           isShuffle = false,
           shuffleMeta = None,
@@ -268,7 +270,7 @@ object StageBuilder:
         val defaultN = SparkletConf.get.defaultShufflePartitions
 
         if (Operation.canBypassShuffle(groupByKey, src.outputPartitioning, SparkletConf.get)) {
-          val resultId = appendOperation(ctx, sourceStageId, GroupByKeyOp[Any, Any](defaultN), builderMap, dependencies)
+          val resultId = appendOperation(ctx, sourceStageId, GroupByKeyLocalOp[Any, Any](), builderMap, dependencies)
           (resultId, Some(groupByKey))
         } else {
           val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), GroupByKeyWideOp(WideOpMeta(
@@ -284,7 +286,7 @@ object StageBuilder:
         val defaultN = SparkletConf.get.defaultShufflePartitions
 
         if (Operation.canBypassShuffle(reduceByKey, src.outputPartitioning, SparkletConf.get)) {
-          val resultId = appendOperation(ctx, sourceStageId, ReduceByKeyOp[Any, Any](reduceByKey.reduceFunc.asInstanceOf[(Any, Any) => Any], defaultN), builderMap, dependencies)
+          val resultId = appendOperation(ctx, sourceStageId, ReduceByKeyLocalOp[Any, Any](reduceByKey.reduceFunc.asInstanceOf[(Any, Any) => Any]), builderMap, dependencies)
           (resultId, Some(reduceByKey))
         } else {
           val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), ReduceByKeyWideOp(WideOpMeta(
@@ -417,7 +419,7 @@ object StageBuilder:
         case _: ShuffleInput => false
       }
 
-      if (canChain && sourceBuilder.ops.nonEmpty) {
+      if (canChain && (!sourceBuilder.isShuffle || sourceBuilder.ops.nonEmpty)) {
         // Extend the existing stage by appending the operation
         val updatedOps = sourceBuilder.ops :+ op
         val updatedBuilder = sourceBuilder.copy(
@@ -561,6 +563,10 @@ object StageBuilder:
 
       case rbk: ReduceByKeyOp[_, _] =>
         Some(Partitioning(byKey = true, numPartitions = rbk.numPartitions))
+
+      // Local operations preserve existing partitioning
+      case _: GroupByKeyLocalOp[_, _] | _: ReduceByKeyLocalOp[_, _] =>
+        prev
 
       case sb: SortByOp[_, _] =>
         // SortBy creates key-based partitioning but doesn't guarantee byKey for output

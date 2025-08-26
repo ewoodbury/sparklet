@@ -60,6 +60,10 @@ final case class MapPartitionsOp[A, B](f: Iterator[A] => Iterator[B]) extends Op
 // Wide transformations (shuffle operations) - simplified for now, will be filled in by builder
 final case class GroupByKeyOp[K, V](numPartitions: Int) extends Operation
 final case class ReduceByKeyOp[K, V](reduceFunc: (V, V) => V, numPartitions: Int) extends Operation
+
+// Local operations for bypassed shuffles (narrow operations that work on already-partitioned data)
+final case class GroupByKeyLocalOp[K, V]() extends Operation
+final case class ReduceByKeyLocalOp[K, V](reduceFunc: (V, V) => V) extends Operation
 final case class SortByOp[K, V](keyFunc: V => K, numPartitions: Int) extends Operation
 final case class PartitionByOp[K, V](numPartitions: Int) extends Operation
 final case class RepartitionOp[A](numPartitions: Int) extends Operation
