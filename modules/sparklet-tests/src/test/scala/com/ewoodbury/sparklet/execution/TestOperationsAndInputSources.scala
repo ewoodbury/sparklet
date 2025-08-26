@@ -2,9 +2,8 @@ package com.ewoodbury.sparklet.execution
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-
 import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
-import com.ewoodbury.sparklet.execution.Operation
+import com.ewoodbury.sparklet.execution.{Operation, WideOp, WideOpMeta, WideOpKind}
 
 /**
  * Tests for the new Operation ADT and normalized InputSource modeling.
@@ -201,4 +200,226 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     wideOp.meta.kind shouldBe meta.kind
     wideOp.meta.numPartitions shouldBe meta.numPartitions
   }
+
+  // --- Unified Builder Tests ---
+
+  behavior of "Unified Builder"
+
+  private def createSource(): Plan.Source[Int] =
+    Plan.Source(Seq(Partition(Seq(1, 2, 3))))
+
+  private def createPartitionedSource(numPartitions: Int): Plan.Source[Int] =
+    Plan.Source((0 until numPartitions).map(i => Partition(Seq(i * 10, i * 10 + 1))))
+
+  it should "build pure narrow chain (map -> filter -> distinct)" in {
+    val plan = Plan.DistinctOp(
+      Plan.FilterOp(
+        Plan.MapOp(createSource(), (_: Int) * 2),
+        (_: Int) > 0
+      )
+    )
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    // Should have only one stage (all operations chained)
+    stageGraph.stages.size shouldBe 1
+    val stage = stageGraph.stages(stageGraph.finalStageId)
+    stage.isShuffleStage shouldBe false
+    stage.inputSources shouldBe Seq(StageBuilder.SourceInput(createSource().partitions))
+    stage.outputPartitioning.map(_.byKey) shouldBe Some(false)
+  }
+
+  it should "build narrow chain with partitioning metadata carry-over" in {
+    val source = createPartitionedSource(4)
+    val plan = Plan.MapOp(source, (_: Int).toString)
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    stageGraph.stages.size shouldBe 1
+    val stage = stageGraph.stages(stageGraph.finalStageId)
+    stage.isShuffleStage shouldBe false
+    stage.outputPartitioning.map(_.numPartitions) shouldBe Some(4)
+  }
+
+  it should "build groupByKey without bypass shuffle optimization" in {
+    val source = createSource()
+    // Create key-value pairs for groupByKey
+    val kvSource = Plan.MapOp(source, (x: Int) => (x % 3, x)) // Group by x mod 3
+    val plan = Plan.GroupByKeyOp(kvSource)
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    // Should create a shuffle stage
+    stageGraph.stages.size shouldBe 2 // source stage + shuffle stage
+    val finalStage = stageGraph.stages(stageGraph.finalStageId)
+    finalStage.isShuffleStage shouldBe true
+    finalStage.outputPartitioning.map(_.byKey) shouldBe Some(true)
+    finalStage.shuffleOperation.isDefined shouldBe true
+  }
+
+  it should "build groupByKey with bypass shuffle optimization when already partitioned" in {
+    // Create a source that's already partitioned by key
+    val source = createPartitionedSource(SparkletConf.get.defaultShufflePartitions)
+    // Simulate key-value data by creating a plan that produces key-value pairs
+    val kvSource = Plan.MapOp(source, (x: Int) => (x, x * 2))
+    val plan = Plan.GroupByKeyOp(kvSource)
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    // Should bypass shuffle and create local operation
+    stageGraph.stages.size shouldBe 1 // Only one stage with local operation
+    val stage = stageGraph.stages(stageGraph.finalStageId)
+    stage.isShuffleStage shouldBe false
+  }
+
+  it should "build reduceByKey after groupByKey with bypass" in {
+    val source = createPartitionedSource(SparkletConf.get.defaultShufflePartitions)
+    val kvSource = Plan.MapOp(source, (x: Int) => (x, x * 2))
+    val plan = Plan.ReduceByKeyOp(
+      kvSource,
+      (a: Int, b: Int) => a + b
+    )
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    // Should bypass shuffle for reduceByKey if already properly partitioned
+    stageGraph.stages.size shouldBe 1
+    val stage = stageGraph.stages(stageGraph.finalStageId)
+    stage.isShuffleStage shouldBe false
+  }
+
+  it should "build repartition followed by map (new stage after shuffle)" in {
+    val plan = Plan.MapOp(
+      Plan.RepartitionOp(createSource(), 3),
+      (_: Int) * 2
+    )
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    // Should have two stages: shuffle stage + narrow stage
+    stageGraph.stages.size shouldBe 2
+    val finalStage = stageGraph.stages(stageGraph.finalStageId)
+    finalStage.isShuffleStage shouldBe false
+    finalStage.inputSources.collect { case StageBuilder.StageOutput(_) => true } should not be empty
+  }
+
+  it should "build union of two independent narrow chains" in {
+    val left = Plan.MapOp(createSource(), (_: Int) * 2)
+    val right = Plan.FilterOp(createSource(), (_: Int) > 0)
+    val plan = Plan.UnionOp(left, right)
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    // Should have 3 stages: left chain, right chain, and union stage
+    stageGraph.stages.size shouldBe 3
+    val finalStage = stageGraph.stages(stageGraph.finalStageId)
+    finalStage.isShuffleStage shouldBe false
+    finalStage.inputSources.length shouldBe 2
+    finalStage.inputSources.forall(_.isInstanceOf[StageBuilder.StageOutput]) shouldBe true
+  }
+
+  it should "build join with two ShuffleInputs with sides" in {
+    val left = Plan.MapOp(createSource(), (x: Int) => (x, x * 2))
+    val right = Plan.MapOp(createSource(), (x: Int) => (x, x * 3))
+    val plan = Plan.JoinOp(left, right, Some(Plan.JoinStrategy.ShuffleHash))
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    // Should have 3 stages: left, right, and join shuffle stage
+    stageGraph.stages.size shouldBe 3
+    val finalStage = stageGraph.stages(stageGraph.finalStageId)
+    finalStage.isShuffleStage shouldBe true
+    finalStage.inputSources.length shouldBe 2
+    finalStage.inputSources.forall(_.isInstanceOf[StageBuilder.ShuffleInput]) shouldBe true
+    val shuffleInputs = finalStage.inputSources.collect { case si: StageBuilder.ShuffleInput => si }
+    shuffleInputs.map(_.side) shouldBe Seq(Some(StageBuilder.Side.Left), Some(StageBuilder.Side.Right))
+  }
+
+  it should "build cogroup with two ShuffleInputs with sides" in {
+    val left = Plan.MapOp(createSource(), (x: Int) => (x, x * 2))
+    val right = Plan.MapOp(createSource(), (x: Int) => (x, x * 3))
+    val plan = Plan.CoGroupOp(left, right)
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    stageGraph.stages.size shouldBe 3
+    val finalStage = stageGraph.stages(stageGraph.finalStageId)
+    finalStage.isShuffleStage shouldBe true
+    finalStage.inputSources.length shouldBe 2
+    finalStage.inputSources.forall(_.isInstanceOf[StageBuilder.ShuffleInput]) shouldBe true
+  }
+
+  it should "build nested wide operations (map -> repartition -> reduceByKey)" in {
+    val source = createSource()
+    val plan = Plan.ReduceByKeyOp(
+      Plan.RepartitionOp(
+        Plan.MapOp(source, (x: Int) => (x % 10, x)),
+        5
+      ),
+      (a: Int, b: Int) => a + b
+    )
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    // Should have 3 stages: source, repartition shuffle, reduceByKey shuffle
+    stageGraph.stages.size shouldBe 3
+    val finalStage = stageGraph.stages(stageGraph.finalStageId)
+    finalStage.isShuffleStage shouldBe true
+    finalStage.outputPartitioning.map(_.byKey) shouldBe Some(true)
+  }
+
+  it should "handle coalesce vs repartition difference" in {
+    val source = createPartitionedSource(10)
+
+    // Coalesce should potentially bypass if reducing partitions
+    val coalescePlan = Plan.CoalesceOp(source, 5)
+    val coalesceGraph = StageBuilder.buildStageGraph(coalescePlan)
+
+    // Repartition should always create shuffle
+    val repartitionPlan = Plan.RepartitionOp(source, 5)
+    val repartitionGraph = StageBuilder.buildStageGraph(repartitionPlan)
+
+    // Both should create shuffle stages in this case
+    coalesceGraph.stages(coalesceGraph.finalStageId).isShuffleStage shouldBe true
+    repartitionGraph.stages(repartitionGraph.finalStageId).isShuffleStage shouldBe true
+  }
+
+  it should "handle partitionBy setting byKey true and correct partition count" in {
+    val source = Plan.MapOp(createSource(), (x: Int) => (x, x * 2))
+    val plan = Plan.PartitionByOp(source, 3)
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    val finalStage = stageGraph.stages(stageGraph.finalStageId)
+    finalStage.isShuffleStage shouldBe true
+    finalStage.outputPartitioning.map(_.byKey) shouldBe Some(true)
+    finalStage.outputPartitioning.map(_.numPartitions) shouldBe Some(3)
+  }
+
+  it should "correctly handle dependencies between stages" in {
+    val left = Plan.MapOp(createSource(), (_: Int) * 2)
+    val right = Plan.MapOp(createSource(), (_: Int) * 3)
+    val plan = Plan.UnionOp(left, right)
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    // Check that dependencies are correctly established
+    val unionStageId = stageGraph.finalStageId
+    stageGraph.dependencies(unionStageId).size shouldBe 2
+
+    // Find the left and right stage IDs
+    val leftStageId = stageGraph.stages.find(_._2.inputSources.exists {
+      case StageBuilder.SourceInput(parts) => parts == createSource().partitions
+      case _ => false
+    }).get._1
+
+    val rightStageId = stageGraph.stages.find(_._2.inputSources.exists {
+      case StageBuilder.SourceInput(parts) => parts == createSource().partitions
+      case _ => false
+    }).get._1
+
+    stageGraph.dependencies(unionStageId) should contain (leftStageId)
+    stageGraph.dependencies(unionStageId) should contain (rightStageId)
+  }
+
 end TestOperationsAndInputSources
