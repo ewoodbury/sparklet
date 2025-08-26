@@ -643,8 +643,98 @@ object StageBuilder:
       )
     }
 
-    // For narrow-only plans, use the old logic
-    buildStagesRecursiveOld(plan)
+    // For narrow-only plans, use the unified builder and convert to legacy format
+    val stageGraph = buildStageGraph(plan)
+    legacyAdapter(stageGraph).asInstanceOf[Seq[(Plan.Source[_], Stage[_, A])]]
+  }
+
+  /**
+   * Temporary adapter to convert StageGraph back to legacy format for backward compatibility.
+   * Traverses from sources to finalStageId collecting only linear narrow chains with no shuffles.
+   * Fails fast if any shuffle stage encountered (enforces caller migration).
+   */
+  def legacyAdapter(graph: StageGraph): Seq[(Plan.Source[_], Stage[_, _])] = {
+    // Find all source stages (stages that read from SourceInput)
+    val sourceStages = graph.stages.filter { case (_, stageInfo) =>
+      stageInfo.inputSources.exists(_.isInstanceOf[SourceInput])
+    }
+
+    if (sourceStages.isEmpty) {
+      throw new IllegalStateException("No source stages found in StageGraph")
+    }
+
+    sourceStages.toSeq.map { case (stageId, stageInfo) =>
+      // Extract the original source plan from the shuffleOperation field
+      val sourcePlan = stageInfo.shuffleOperation.collect {
+        case source: Plan.Source[_] => source
+      }.getOrElse {
+        throw new IllegalStateException(s"Source stage ${stageId} has no original Plan.Source stored")
+      }
+
+      // For each source stage, traverse to find the linear path to final stage
+      val path = findLinearPathToFinal(graph, stageId, graph.finalStageId)
+
+      // Verify the path contains no shuffle stages
+      path.foreach { pathStageId =>
+        val pathStage = graph.stages(pathStageId)
+        if (pathStage.isShuffleStage) {
+          throw new UnsupportedOperationException(
+            s"Legacy adapter encountered shuffle stage ${pathStageId} in path from ${stageId} to ${graph.finalStageId}. " +
+            "Cannot use legacy buildStages with shuffle operations - use DAGScheduler instead."
+          )
+        }
+      }
+
+      // Build the final stage by combining all operations in the path
+      val finalStage = buildStageFromPath(graph, path)
+
+      (sourcePlan, finalStage)
+    }
+  }
+
+  /**
+   * Finds the linear path from startStageId to endStageId in the dependency graph.
+   * Assumes a linear chain exists (no branching for narrow-only plans).
+   */
+  private def findLinearPathToFinal(graph: StageGraph, startStageId: StageId, endStageId: StageId): Seq[StageId] = {
+    def traverse(currentId: StageId, path: List[StageId]): Seq[StageId] = {
+      if (currentId == endStageId) {
+        (currentId :: path).reverse
+      } else {
+        // Find the next stage that depends on currentId
+        val nextStages = graph.dependencies.filter(_._2.contains(currentId)).keys
+        if (nextStages.size != 1) {
+          throw new UnsupportedOperationException(
+            s"Legacy adapter expects linear chain but found ${nextStages.size} stages depending on ${currentId}"
+          )
+        }
+        traverse(nextStages.head, currentId :: path)
+      }
+    }
+
+    traverse(startStageId, Nil)
+  }
+
+  /**
+   * Builds a single Stage by combining all operations from the stages in the path.
+   * For the legacy adapter, we need to create a stage that represents the entire chain from source to end.
+   */
+  private def buildStageFromPath(graph: StageGraph, path: Seq[StageId]): Stage[_, _] = {
+    // The path contains stage IDs from source to final stage
+    // Each stage already contains the operations accumulated up to that point
+    // We need to chain them together to create the complete transformation
+
+    if (path.length == 1) {
+      // Single stage - just return it
+      graph.stages(path.headOption.get).stage
+    } else {
+      // Multiple stages - chain them together
+      // Start with the first stage and chain each subsequent stage
+      val stages = path.map(graph.stages(_).stage)
+      stages.drop(1).foldLeft(stages.headOption.get) { (chained, nextStage) =>
+        Stage.ChainedStage(chained.asInstanceOf[Stage[Any, Any]], nextStage.asInstanceOf[Stage[Any, Any]])
+      }
+    }
   }
 
   private def containsShuffleOperations(plan: Plan[_]): Boolean = plan match {
@@ -666,91 +756,4 @@ object StageBuilder:
     case _ => false
   }
 
-  // Legacy implementation for narrow transformations only
-  private def buildStagesRecursiveOld[A](plan: Plan[A]): Seq[(Plan.Source[_], Stage[_, A])] = {
-    plan match {
-      case source: Plan.Source[A] =>
-        Seq((source, Stage.SingleOpStage[A, A](identity)))
 
-      case Plan.MapOp(sourcePlan, f) =>
-        val stages = buildStagesRecursiveOld(sourcePlan)
-        extendLastStage(stages, Stage.map(f))
-
-      case Plan.FilterOp(sourcePlan, p) =>
-        val stages = buildStagesRecursiveOld(sourcePlan)
-        extendLastStage(stages, Stage.filter(p))
-
-      case Plan.FlatMapOp(sourcePlan, f) =>
-        val stages = buildStagesRecursiveOld(sourcePlan)
-        extendLastStage(stages, Stage.flatMap(f))
-
-      case Plan.DistinctOp(sourcePlan) =>
-        val stages = buildStagesRecursiveOld(sourcePlan)
-        extendLastStage(stages, Stage.distinct)
-
-      case Plan.KeysOp(sourcePlan) =>
-        val stages = buildStagesRecursiveOld(sourcePlan)
-        extendLastStage(stages, Stage.keys)
-
-      case Plan.ValuesOp(sourcePlan) =>
-        val stages = buildStagesRecursiveOld(sourcePlan)
-        extendLastStage(stages, Stage.values)
-
-      case Plan.MapValuesOp(sourcePlan, f) =>
-        val stages = buildStagesRecursiveOld(sourcePlan)
-        extendLastStage(
-          stages.asInstanceOf[Seq[(Plan.Source[_], Stage[_, Any])]],
-          Stage.mapValues(f).asInstanceOf[Stage[Any, A]],
-        )
-
-      case Plan.FilterKeysOp(sourcePlan, p) =>
-        val stages = buildStagesRecursiveOld(sourcePlan)
-        extendLastStage(
-          stages.asInstanceOf[Seq[(Plan.Source[_], Stage[_, Any])]],
-          Stage.filterKeys(p).asInstanceOf[Stage[Any, A]],
-        )
-
-      case Plan.FilterValuesOp(sourcePlan, p) =>
-        val stages = buildStagesRecursiveOld(sourcePlan)
-        extendLastStage(
-          stages.asInstanceOf[Seq[(Plan.Source[_], Stage[_, Any])]],
-          Stage.filterValues(p).asInstanceOf[Stage[Any, A]],
-        )
-
-      case Plan.FlatMapValuesOp(sourcePlan, f) =>
-        val stages = buildStagesRecursiveOld(sourcePlan)
-        extendLastStage(
-          stages.asInstanceOf[Seq[(Plan.Source[_], Stage[_, Any])]],
-          Stage.flatMapValues(f).asInstanceOf[Stage[Any, A]],
-        )
-
-      case Plan.MapPartitionsOp(sourcePlan, f) =>
-        val stages = buildStagesRecursiveOld(sourcePlan)
-        extendLastStage(
-          stages.asInstanceOf[Seq[(Plan.Source[_], Stage[_, Any])]],
-          Stage.mapPartitions(f).asInstanceOf[Stage[Any, A]],
-        )
-
-      case Plan.UnionOp(left, right) =>
-        buildStagesRecursiveOld(left) ++ buildStagesRecursiveOld(right)
-
-      case _ =>
-        throw new UnsupportedOperationException(s"Legacy stage building for $plan not supported")
-    }
-  }
-
-  private def extendLastStage[A, B, C](
-      stages: Seq[(Plan.Source[_], Stage[_, B])],
-      newStage: Stage[B, C],
-  ): Seq[(Plan.Source[_], Stage[_, C])] = {
-    val initStages = stages.dropRight(1).asInstanceOf[Seq[(Plan.Source[_], Stage[_, C])]]
-    val (source, lastStage) =
-      stages.lastOption.getOrElse(throw new IllegalStateException("No stages to extend"))
-
-    initStages :+ (
-      source,
-      Stage
-        .ChainedStage(lastStage.asInstanceOf[Stage[Any, B]], newStage)
-        .asInstanceOf[Stage[Any, C]],
-    )
-  }

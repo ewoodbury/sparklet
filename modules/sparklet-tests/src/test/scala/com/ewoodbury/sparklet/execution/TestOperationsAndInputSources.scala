@@ -624,4 +624,113 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     result2.data.toSeq shouldBe Seq(2, 4, 6)  // Map + Filter (all elements > 0)
   }
 
+  // --- Legacy Adapter Tests ---
+
+  behavior of "Legacy Adapter"
+
+  it should "convert simple narrow chain to legacy format" in {
+    val plan = Plan.MapOp(createSource(), (_: Int) * 2)
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+    val legacyStages = StageBuilder.legacyAdapter(stageGraph)
+
+    // Should have exactly one (source, stage) pair
+    legacyStages should have length 1
+
+    val (source, stage) = legacyStages.head
+    source shouldBe createSource()
+    stage shouldBe a[Stage[_, _]]
+  }
+
+  it should "convert multi-operation narrow chain to legacy format" in {
+    val plan = Plan.DistinctOp(
+      Plan.FilterOp(
+        Plan.MapOp(createSource(), (_: Int) * 2),
+        (_: Int) > 0
+      )
+    )
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+    val legacyStages = StageBuilder.legacyAdapter(stageGraph)
+
+    // Should have exactly one (source, stage) pair
+    legacyStages should have length 1
+
+    val (source, stage) = legacyStages.headOption.get
+    source shouldBe createSource()
+    stage shouldBe a[Stage[_, _]]
+  }
+
+  it should "fail when encountering shuffle stages" in {
+    // Create a plan that would result in shuffle stages
+    val source = createSource()
+    val kvSource = Plan.MapOp(source, (x: Int) => (x % 3, x))
+    val plan = Plan.GroupByKeyOp(kvSource)
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    // The legacy adapter should fail because the graph contains shuffle stages
+    assertThrows[UnsupportedOperationException] {
+      StageBuilder.legacyAdapter(stageGraph)
+    }
+  }
+
+  it should "handle union operations correctly" in {
+    val left = Plan.MapOp(createSource(), (_: Int) * 2)
+    val right = Plan.FilterOp(createSource(), (_: Int) > 0)
+    val plan = Plan.UnionOp(left, right)
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+    val legacyStages = StageBuilder.legacyAdapter(stageGraph)
+
+    // Union should result in multiple (source, stage) pairs
+    legacyStages should have length 2
+
+    // Each pair should have the correct source and a valid stage
+    legacyStages.foreach { case (source, stage) =>
+      source shouldBe a[Plan.Source[_]]
+      stage shouldBe a[Stage[_, _]]
+    }
+  }
+
+  it should "preserve original Plan.Source in legacy adapter" in {
+    val source = createSource()
+    val plan = Plan.MapOp(source, (_: Int) * 2)
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+    val legacyStages = StageBuilder.legacyAdapter(stageGraph)
+
+    // The source should be the same as the original
+    legacyStages.head._1 shouldBe source
+  }
+
+  // --- Integration Tests with buildStages ---
+
+  behavior of "buildStages Integration"
+
+  it should "work with legacy buildStages method for narrow plans" in {
+    val plan = Plan.MapOp(createSource(), (_: Int) * 2)
+
+    // This should work without throwing an exception
+    val legacyStages = StageBuilder.buildStages(plan)
+
+    // Should have exactly one (source, stage) pair
+    legacyStages should have length 1
+
+    val (source, stage) = legacyStages.headOption.get
+    source shouldBe createSource()
+    stage shouldBe a[Stage[_, _]]
+  }
+
+  it should "fail with buildStages method for wide plans" in {
+    val source = createSource()
+    val kvSource = Plan.MapOp(source, (x: Int) => (x % 3, x))
+    val plan = Plan.GroupByKeyOp(kvSource)
+
+    // buildStages should fail for plans with shuffle operations
+    assertThrows[UnsupportedOperationException] {
+      StageBuilder.buildStages(plan)
+    }
+  }
+
 end TestOperationsAndInputSources
