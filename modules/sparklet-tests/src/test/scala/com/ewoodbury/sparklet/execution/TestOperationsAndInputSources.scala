@@ -3,7 +3,7 @@ package com.ewoodbury.sparklet.execution
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
-import com.ewoodbury.sparklet.execution.{Operation, WideOp, WideOpMeta, WideOpKind, Stage}
+import com.ewoodbury.sparklet.execution.{Operation, WideOp, WideOpMeta, SimpleWideOpMeta, SortWideOpMeta, ReduceWideOpMeta, WideOpKind, Stage}
 
 /**
  * Tests for the new Operation ADT and normalized InputSource modeling.
@@ -141,16 +141,14 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     WideOpKind.values should contain (Join)
     WideOpKind.values should contain (CoGroup)
 
-    // Test WideOpMeta creation
-    val meta = WideOpMeta(
+    // Test WideOpMeta creation - GroupByKey doesn't need functions
+    val meta = SimpleWideOpMeta(
       kind = GroupByKey,
       numPartitions = 16,
-      reduceFunc = Some((a: Any, b: Any) => a),
       sides = Seq.empty[StageBuilder.Side]
     )
     meta.kind shouldBe GroupByKey
     meta.numPartitions shouldBe 16
-    meta.reduceFunc shouldBe defined
 
     // Test WideOp creation
     val wideOp = GroupByKeyWideOp(meta)

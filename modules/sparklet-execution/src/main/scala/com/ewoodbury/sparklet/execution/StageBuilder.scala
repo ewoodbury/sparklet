@@ -197,8 +197,25 @@ object StageBuilder:
 
   /**
    * Materializes a vector of operations into a concrete Stage form.
-   * This builds a left fold producing existing Stage.* operations for minimal churn.
-   * Optimized to reduce unnecessary nesting and improve execution efficiency.
+   *
+   * This function converts a sequence of Operation ADT instances into executable Stage objects.
+   * It employs several optimization strategies:
+   *
+   * 1. **Single Operation Optimization**: For single operations, returns the operation directly
+   *    without unnecessary chaining to minimize overhead.
+   *
+   * 2. **Efficient Chaining**: For multiple operations, uses a left fold to build the chain,
+   *    creating ChainedStage instances that compose operations efficiently.
+   *
+   * 3. **Type Safety**: Uses type casting to Any for generic operations while maintaining
+   *    runtime type safety through the Stage abstraction.
+   *
+   * @param ops Non-empty vector of operations to materialize
+   * @return A concrete Stage that can be executed
+   * @throws UnsupportedOperationException if the operation vector contains wide operations
+   *         (shuffle operations) that cannot be materialized as narrow stages
+   * @note This function only handles narrow operations. Wide operations should be processed
+   *       through separate shuffle stages before materialization.
    */
   private[execution] def materialize(ops: Vector[Operation]): Stage[Any, Any] = {
     require(ops.nonEmpty, "Cannot materialize empty operation vector")
@@ -247,8 +264,26 @@ object StageBuilder:
   }
 
   /**
-   * Creates a Stage from a single operation without wrapping in ChainedStage.
-   * This is more efficient for the first operation in a chain.
+   * Creates a concrete Stage object from a single Operation ADT instance.
+   *
+   * This method serves as the bridge between the high-level Operation ADT and the concrete
+   * Stage implementations that can be executed by the runtime. It pattern matches on the
+   * operation type and delegates to the appropriate Stage constructor.
+   *
+   * The method handles all narrow transformation operations including:
+   * - Basic transformations: MapOp, FilterOp, FlatMapOp, DistinctOp
+   * - Key-value operations: KeysOp, ValuesOp, MapValuesOp, FilterKeysOp, FilterValuesOp, FlatMapValuesOp
+   * - Partition operations: MapPartitionsOp
+   * - Local/bypass operations: GroupByKeyLocalOp, ReduceByKeyLocalOp, PartitionByLocalOp
+   *
+   * This method is optimized for creating individual stages and is more efficient than
+   * materialize() when dealing with single operations, as it avoids unnecessary ChainedStage wrapping.
+   *
+   * @param op The Operation to convert into a Stage
+   * @return A concrete Stage[Any, Any] that can be executed
+   * @throws UnsupportedOperationException if the operation is a wide operation that requires shuffle boundaries
+   * @note This method only supports narrow operations. Wide operations should be handled
+   *       through shuffle stages created by createShuffleStageUnified().
    */
   private def createStageFromOp(op: Operation): Stage[Any, Any] = {
     op match {
@@ -271,9 +306,51 @@ object StageBuilder:
   }
 
   /**
-   * Unified recursive builder that accumulates operations in MutableStageBuilder instances.
-   * This replaces the old recursive approach with operation accumulation for better optimization.
-   * Returns a tuple of (stageId, originalPlan) to preserve shuffle operation info.
+   * Core recursive method that traverses a Plan tree and builds stage graphs with operation accumulation.
+   *
+   * This method implements the unified stage building algorithm that processes Plan nodes recursively,
+   * accumulating narrow operations into stages and creating shuffle boundaries for wide operations.
+   * It replaces the old recursive approach with a more structured operation accumulation strategy
+   * for better optimization and clearer stage boundaries.
+   *
+   * The method handles three main categories of Plan nodes:
+   *
+   * 1. **Data Sources (Plan.Source)**:
+   *    - Base case that creates initial stage builders for data partitions
+   *    - Sets up source partitioning metadata based on partition count
+   *    - Returns the stage ID and original Plan for dependency tracking
+   *
+   * 2. **Narrow Transformations**:
+   *    - Accumulates operations using appendOperation() when possible
+   *    - Creates new stages when chaining is not feasible
+   *    - Handles: MapOp, FilterOp, FlatMapOp, DistinctOp, KeysOp, ValuesOp,
+   *      MapValuesOp, FilterKeysOp, FilterValuesOp, FlatMapValuesOp, MapPartitionsOp
+   *
+   * 3. **Multi-input Operations**:
+   *    - UnionOp: Creates a new stage that reads from both input stages
+   *    - Preserves no partitioning metadata due to input consolidation
+   *
+   * 4. **Wide Transformations (Shuffle Operations)**:
+   *    - GroupByKeyOp, ReduceByKeyOp: Supports shuffle bypass optimization when already partitioned correctly
+   *    - SortByOp, PartitionByOp, RepartitionOp, CoalesceOp: Always creates shuffle boundaries
+   *    - JoinOp, CoGroupOp: Multi-input wide operations with side tagging for disambiguation
+   *    - Uses WideOp metadata structures for shuffle execution planning
+   *
+   * **Optimization Strategies**:
+   * - Shuffle Bypass: For operations like groupByKey/reduceByKey, checks if upstream partitioning
+   *   matches requirements and bypasses shuffle when possible
+   * - Operation Chaining: Accumulates multiple narrow operations into single stages to reduce overhead
+   * - Dependency Tracking: Builds comprehensive dependency graph for execution ordering
+   *
+   * @param ctx BuildContext for generating unique stage IDs
+   * @param plan The Plan node to process recursively
+   * @param builderMap Mutable map accumulating stage builders (modified in place)
+   * @param dependencies Mutable map tracking stage dependencies (modified in place)
+   * @tparam A Type parameter of the Plan (preserved for type safety)
+   * @return Tuple of (StageId, Option[Plan]) where StageId is the resulting stage identifier,
+   *         and Option[Plan] contains the original Plan for shuffle operation metadata
+   * @note This method modifies builderMap and dependencies in place for efficiency
+   * @note The return Plan is crucial for shuffle stages to preserve original operation metadata
    */
   private def buildStagesFromPlan[A](
       ctx: BuildContext,
@@ -383,7 +460,7 @@ object StageBuilder:
           val resultId = appendOperation(ctx, sourceStageId, GroupByKeyLocalOp[Any, Any](), builderMap, dependencies)
           (resultId, Some(groupByKey))
         } else {
-          val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), GroupByKeyWideOp(WideOpMeta(
+          val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), GroupByKeyWideOp(SimpleWideOpMeta(
             kind = WideOpKind.GroupByKey,
             numPartitions = defaultN
           )), builderMap, dependencies, Some(groupByKey))
@@ -400,10 +477,9 @@ object StageBuilder:
           val resultId = appendOperation(ctx, sourceStageId, ReduceByKeyLocalOp[Any, Any](reduceByKey.reduceFunc.asInstanceOf[(Any, Any) => Any]), builderMap, dependencies)
           (resultId, Some(reduceByKey))
         } else {
-          val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), ReduceByKeyWideOp(WideOpMeta(
-            kind = WideOpKind.ReduceByKey,
+          val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), ReduceByKeyWideOp(ReduceWideOpMeta(
             numPartitions = defaultN,
-            reduceFunc = Some(reduceByKey.reduceFunc.asInstanceOf[(Any, Any) => Any])
+            reduceFunc = reduceByKey.reduceFunc
           )), builderMap, dependencies, Some(reduceByKey))
           (shuffleId, Some(reduceByKey))
         }
@@ -411,10 +487,9 @@ object StageBuilder:
       case sortBy: Plan.SortByOp[_, _] =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sortBy.source, builderMap, dependencies)
         val n = SparkletConf.get.defaultShufflePartitions
-        val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), SortByWideOp(WideOpMeta(
-          kind = WideOpKind.SortBy,
+        val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), SortByWideOp(SortWideOpMeta(
           numPartitions = n,
-          keyFunc = Some(sortBy.keyFunc.asInstanceOf[Any => Any])
+          keyFunc = sortBy.keyFunc
         )), builderMap, dependencies, Some(sortBy))
         (shuffleId, Some(sortBy))
 
@@ -426,7 +501,7 @@ object StageBuilder:
           val resultId = appendOperation(ctx, sourceStageId, PartitionByLocalOp[Any, Any](pby.numPartitions), builderMap, dependencies)
           (resultId, Some(pby))
         } else {
-          val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), PartitionByWideOp(WideOpMeta(
+          val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), PartitionByWideOp(SimpleWideOpMeta(
             kind = WideOpKind.PartitionBy,
             numPartitions = pby.numPartitions
           )), builderMap, dependencies, Some(pby))
@@ -441,7 +516,7 @@ object StageBuilder:
           val resultId = appendOperation(ctx, sourceStageId, RepartitionOp[Any](rep.numPartitions), builderMap, dependencies)
           (resultId, Some(rep))
         } else {
-          val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), RepartitionWideOp(WideOpMeta(
+          val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), RepartitionWideOp(SimpleWideOpMeta(
             kind = WideOpKind.Repartition,
             numPartitions = rep.numPartitions
           )), builderMap, dependencies, Some(rep))
@@ -456,7 +531,7 @@ object StageBuilder:
           val resultId = appendOperation(ctx, sourceStageId, CoalesceOp[Any](coal.numPartitions), builderMap, dependencies)
           (resultId, Some(coal))
         } else {
-          val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), CoalesceWideOp(WideOpMeta(
+          val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), CoalesceWideOp(SimpleWideOpMeta(
             kind = WideOpKind.Coalesce,
             numPartitions = coal.numPartitions
           )), builderMap, dependencies, Some(coal))
@@ -468,7 +543,7 @@ object StageBuilder:
         val (rightStageId, _) = buildStagesFromPlan(ctx, joinOp.right, builderMap, dependencies)
 
         val numPartitions = SparkletConf.get.defaultShufflePartitions
-        val shuffleId = createShuffleStageUnified(ctx, Seq(leftStageId, rightStageId), JoinWideOp(WideOpMeta(
+        val shuffleId = createShuffleStageUnified(ctx, Seq(leftStageId, rightStageId), JoinWideOp(SimpleWideOpMeta(
           kind = WideOpKind.Join,
           numPartitions = numPartitions,
           joinStrategy = joinOp.joinStrategy,
@@ -481,7 +556,7 @@ object StageBuilder:
         val (rightStageId, _) = buildStagesFromPlan(ctx, cogroupOp.right, builderMap, dependencies)
 
         val numPartitions = SparkletConf.get.defaultShufflePartitions
-        val shuffleId = createShuffleStageUnified(ctx, Seq(leftStageId, rightStageId), CoGroupWideOp(WideOpMeta(
+        val shuffleId = createShuffleStageUnified(ctx, Seq(leftStageId, rightStageId), CoGroupWideOp(SimpleWideOpMeta(
           kind = WideOpKind.CoGroup,
           numPartitions = numPartitions,
           sides = Seq(Side.Left, Side.Right)
@@ -809,6 +884,16 @@ object StageBuilder:
     }
   }
 
+  /**
+   * Recursively checks if a Plan tree contains any wide (shuffle) operations.
+   *
+   * This method traverses the Plan tree to detect operations that require shuffle boundaries,
+   * which are incompatible with the legacy buildStages method. It's used to enforce
+   * migration to the DAGScheduler for plans containing wide transformations.
+   *
+   * @param plan The Plan node to check
+   * @return true if the plan contains any shuffle operations, false otherwise
+   */
   private def containsShuffleOperations(plan: Plan[_]): Boolean = plan match {
     case _: Plan.GroupByKeyOp[_, _] | _: Plan.ReduceByKeyOp[_, _] | _: Plan.SortByOp[_, _] |
         _: Plan.JoinOp[_, _, _] | _: Plan.CoGroupOp[_, _, _] =>

@@ -10,17 +10,43 @@ import com.ewoodbury.sparklet.core.Plan
 sealed trait Operation
 
 /**
- * Metadata for wide operations (shuffle operations) that require special handling.
- * This encapsulates all the information needed to execute a wide transformation.
+ * Type-safe metadata for wide operations using sealed trait hierarchy.
  */
-final case class WideOpMeta(
+sealed trait WideOpMeta {
+  def kind: WideOpKind
+  def numPartitions: Int
+  def sides: Seq[StageBuilder.Side]
+}
+
+/**
+ * Metadata for simple wide operations that don't require functions.
+ */
+final case class SimpleWideOpMeta(
     kind: WideOpKind,
     numPartitions: Int,
-    keyFunc: Option[Any => Any] = None,
-    reduceFunc: Option[(Any, Any) => Any] = None,
     joinStrategy: Option[com.ewoodbury.sparklet.core.Plan.JoinStrategy] = None,
-    sides: Seq[com.ewoodbury.sparklet.execution.StageBuilder.Side] = Seq.empty
-)
+    sides: Seq[StageBuilder.Side] = Seq.empty
+) extends WideOpMeta
+
+/**
+ * Metadata for sort operations with typed key function.
+ */
+final case class SortWideOpMeta[A, B](
+    kind: WideOpKind = WideOpKind.SortBy,
+    numPartitions: Int,
+    keyFunc: A => B,
+    sides: Seq[StageBuilder.Side] = Seq.empty
+) extends WideOpMeta
+
+/**
+ * Metadata for reduce operations with typed reduce function.
+ */
+final case class ReduceWideOpMeta[V](
+    kind: WideOpKind = WideOpKind.ReduceByKey,
+    numPartitions: Int,
+    reduceFunc: (V, V) => V,
+    sides: Seq[StageBuilder.Side] = Seq.empty
+) extends WideOpMeta
 
 /**
  * Enumeration of wide operation types that require shuffle boundaries.
@@ -35,14 +61,14 @@ enum WideOpKind:
 sealed trait WideOp
 
 // Concrete wide operation implementations
-final case class GroupByKeyWideOp(meta: WideOpMeta) extends WideOp
-final case class ReduceByKeyWideOp(meta: WideOpMeta) extends WideOp
-final case class SortByWideOp(meta: WideOpMeta) extends WideOp
-final case class PartitionByWideOp(meta: WideOpMeta) extends WideOp
-final case class RepartitionWideOp(meta: WideOpMeta) extends WideOp
-final case class CoalesceWideOp(meta: WideOpMeta) extends WideOp
-final case class JoinWideOp(meta: WideOpMeta) extends WideOp
-final case class CoGroupWideOp(meta: WideOpMeta) extends WideOp
+final case class GroupByKeyWideOp(meta: SimpleWideOpMeta) extends WideOp
+final case class ReduceByKeyWideOp[V](meta: ReduceWideOpMeta[V]) extends WideOp
+final case class SortByWideOp[A, B](meta: SortWideOpMeta[A, B]) extends WideOp
+final case class PartitionByWideOp(meta: SimpleWideOpMeta) extends WideOp
+final case class RepartitionWideOp(meta: SimpleWideOpMeta) extends WideOp
+final case class CoalesceWideOp(meta: SimpleWideOpMeta) extends WideOp
+final case class JoinWideOp(meta: SimpleWideOpMeta) extends WideOp
+final case class CoGroupWideOp(meta: SimpleWideOpMeta) extends WideOp
 
 // Narrow transformations
 final case class MapOp[A, B](f: A => B) extends Operation
