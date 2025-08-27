@@ -219,6 +219,7 @@ object StageBuilder:
         case MapPartitionsOp(f) => Stage.mapPartitions(f.asInstanceOf[Iterator[Any] => Iterator[Any]])
         case GroupByKeyLocalOp() => Stage.groupByKeyLocal.asInstanceOf[Stage[Any, Any]]
         case ReduceByKeyLocalOp(reduceFunc) => Stage.reduceByKeyLocal(reduceFunc.asInstanceOf[(Any, Any) => Any]).asInstanceOf[Stage[Any, Any]]
+        case PartitionByLocalOp(_) => Stage.identity[Any].asInstanceOf[Stage[Any, Any]] // Bypassed partition is identity
         case _ => throw new UnsupportedOperationException(s"Cannot materialize wide operation: ${ops.headOption.get}")
       }
     }
@@ -239,6 +240,7 @@ object StageBuilder:
         case MapPartitionsOp(f) => Stage.ChainedStage(stage, Stage.mapPartitions(f.asInstanceOf[Iterator[Any] => Iterator[Any]]))
         case GroupByKeyLocalOp() => Stage.ChainedStage(stage, Stage.groupByKeyLocal.asInstanceOf[Stage[Any, Any]])
         case ReduceByKeyLocalOp(reduceFunc) => Stage.ChainedStage(stage, Stage.reduceByKeyLocal(reduceFunc.asInstanceOf[(Any, Any) => Any]).asInstanceOf[Stage[Any, Any]])
+        case PartitionByLocalOp(_) => Stage.ChainedStage(stage, Stage.identity[Any].asInstanceOf[Stage[Any, Any]]) // Bypassed partition is identity
         case _ => throw new UnsupportedOperationException(s"Cannot materialize wide operation: $op")
       }
     }
@@ -263,6 +265,7 @@ object StageBuilder:
       case MapPartitionsOp(f) => Stage.mapPartitions(f.asInstanceOf[Iterator[Any] => Iterator[Any]])
       case GroupByKeyLocalOp() => Stage.groupByKeyLocal.asInstanceOf[Stage[Any, Any]]
       case ReduceByKeyLocalOp(reduceFunc) => Stage.reduceByKeyLocal(reduceFunc.asInstanceOf[(Any, Any) => Any]).asInstanceOf[Stage[Any, Any]]
+      case PartitionByLocalOp(_) => Stage.identity[Any].asInstanceOf[Stage[Any, Any]] // Bypassed partition is identity
       case _ => throw new UnsupportedOperationException(s"Cannot create stage from operation: $op")
     }
   }
@@ -376,8 +379,9 @@ object StageBuilder:
         val defaultN = SparkletConf.get.defaultShufflePartitions
 
         if (Operation.canBypassShuffle(groupByKey, src.outputPartitioning, SparkletConf.get)) {
-          val resultId = appendOperation(ctx, sourceStageId, GroupByKeyLocalOp[Any, Any](), builderMap, dependencies)
-          (resultId, Some(groupByKey))
+          // If upstream is already a shuffle stage with correct partitioning, just return it
+          // No need to create a separate stage for the local operation
+          (sourceStageId, Some(groupByKey))
         } else {
           val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), GroupByKeyWideOp(WideOpMeta(
             kind = WideOpKind.GroupByKey,
@@ -392,8 +396,9 @@ object StageBuilder:
         val defaultN = SparkletConf.get.defaultShufflePartitions
 
         if (Operation.canBypassShuffle(reduceByKey, src.outputPartitioning, SparkletConf.get)) {
-          val resultId = appendOperation(ctx, sourceStageId, ReduceByKeyLocalOp[Any, Any](reduceByKey.reduceFunc.asInstanceOf[(Any, Any) => Any]), builderMap, dependencies)
-          (resultId, Some(reduceByKey))
+          // If upstream is already a shuffle stage with correct partitioning, just return it
+          // No need to create a separate stage for the local operation
+          (sourceStageId, Some(reduceByKey))
         } else {
           val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), ReduceByKeyWideOp(WideOpMeta(
             kind = WideOpKind.ReduceByKey,
@@ -418,7 +423,7 @@ object StageBuilder:
         val src = builderMap(sourceStageId)
 
         if (Operation.canBypassShuffle(pby, src.outputPartitioning, SparkletConf.get)) {
-          val resultId = appendOperation(ctx, sourceStageId, PartitionByOp[Any, Any](pby.numPartitions), builderMap, dependencies)
+          val resultId = appendOperation(ctx, sourceStageId, PartitionByLocalOp[Any, Any](pby.numPartitions), builderMap, dependencies)
           (resultId, Some(pby))
         } else {
           val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), PartitionByWideOp(WideOpMeta(
@@ -680,6 +685,9 @@ object StageBuilder:
 
       case pby: PartitionByOp[_, _] =>
         Some(Partitioning(byKey = true, numPartitions = pby.numPartitions))
+
+      case pbl: PartitionByLocalOp[_, _] =>
+        Some(Partitioning(byKey = true, numPartitions = pbl.numPartitions))
 
       case rep: RepartitionOp[_] =>
         Some(Partitioning(byKey = false, numPartitions = rep.numPartitions))

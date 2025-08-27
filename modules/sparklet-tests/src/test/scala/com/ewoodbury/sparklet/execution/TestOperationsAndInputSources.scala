@@ -233,7 +233,7 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     stage.isShuffleStage shouldBe false
   }
 
-  it should "build reduceByKey after groupByKey with bypass" in {
+  it should "build reduceByKey after groupByKey with shuffle bypassed" in {
     val source = createSource()
     val kvSource = Plan.MapOp(source, (x: Int) => (x % 3, x))
     val partitionedSource = Plan.PartitionByOp(kvSource, SparkletConf.get.defaultShufflePartitions)

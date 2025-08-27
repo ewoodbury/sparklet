@@ -64,6 +64,7 @@ final case class ReduceByKeyOp[K, V](reduceFunc: (V, V) => V, numPartitions: Int
 // Local operations for bypassed shuffles (narrow operations that work on already-partitioned data)
 final case class GroupByKeyLocalOp[K, V]() extends Operation
 final case class ReduceByKeyLocalOp[K, V](reduceFunc: (V, V) => V) extends Operation
+final case class PartitionByLocalOp[K, V](numPartitions: Int) extends Operation
 final case class SortByOp[K, V](keyFunc: V => K, numPartitions: Int) extends Operation
 final case class PartitionByOp[K, V](numPartitions: Int) extends Operation
 final case class RepartitionOp[A](numPartitions: Int) extends Operation
@@ -111,7 +112,8 @@ object Operation {
         upstreamPartitioning.exists(p => p.byKey && p.numPartitions == conf.defaultShufflePartitions)
 
       case pby: Plan.PartitionByOp[_, _] =>
-        // Can bypass if already has the desired partitioning
+        // Can bypass PartitionBy if upstream is already partitioned by key with correct partition count
+        // This enables chaining: partitionBy -> groupByKey to be optimized to a single stage
         upstreamPartitioning.exists(p => p.byKey && p.numPartitions == pby.numPartitions)
 
       case rep: Plan.RepartitionOp[_] =>
@@ -119,8 +121,9 @@ object Operation {
         upstreamPartitioning.exists(p => !p.byKey && p.numPartitions == rep.numPartitions)
 
       case coal: Plan.CoalesceOp[_] =>
-        // Can bypass if already has fewer or equal partitions (coalesce only reduces partitions)
-        upstreamPartitioning.exists(p => !p.byKey && p.numPartitions <= coal.numPartitions)
+        // Coalesce always requires shuffle - cannot bypass even if partition count is already correct
+        // because it may need to redistribute data across partitions
+        false
 
       case _ =>
         // Other wide operations cannot bypass shuffle
