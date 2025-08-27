@@ -96,7 +96,7 @@ object StageBuilder:
     val builderMap = mutable.Map[StageId, MutableStageBuilder]()
     val dependencies = mutable.Map[StageId, mutable.Set[StageId]]()
 
-    val (finalStageId, _) = buildUnified(ctx, plan, builderMap, dependencies)
+    val (finalStageId, _) = buildStagesFromPlan(ctx, plan, builderMap, dependencies)
 
     // Convert MutableStageBuilder instances to StageInfo instances
     val stageMap = mutable.Map[StageId, StageInfo]()
@@ -275,7 +275,7 @@ object StageBuilder:
    * This replaces the old recursive approach with operation accumulation for better optimization.
    * Returns a tuple of (stageId, originalPlan) to preserve shuffle operation info.
    */
-  private def buildUnified[A](
+  private def buildStagesFromPlan[A](
       ctx: BuildContext,
       plan: Plan[A],
       builderMap: mutable.Map[StageId, MutableStageBuilder],
@@ -298,63 +298,63 @@ object StageBuilder:
 
       // Narrow transformations - accumulate operations or create new stages
       case Plan.MapOp(sourcePlan, f) =>
-        val (sourceStageId, _) = buildUnified(ctx, sourcePlan, builderMap, dependencies)
+        val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
         val resultId = appendOperation(ctx, sourceStageId, MapOp(f), builderMap, dependencies)
         (resultId, Some(plan))
 
       case Plan.FilterOp(sourcePlan, p) =>
-        val (sourceStageId, _) = buildUnified(ctx, sourcePlan, builderMap, dependencies)
+        val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
         val resultId = appendOperation(ctx, sourceStageId, FilterOp(p), builderMap, dependencies)
         (resultId, Some(plan))
 
       case Plan.FlatMapOp(sourcePlan, f) =>
-        val (sourceStageId, _) = buildUnified(ctx, sourcePlan, builderMap, dependencies)
+        val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
         val resultId = appendOperation(ctx, sourceStageId, FlatMapOp(f), builderMap, dependencies)
         (resultId, Some(plan))
 
       case Plan.DistinctOp(sourcePlan) =>
-        val (sourceStageId, _) = buildUnified(ctx, sourcePlan, builderMap, dependencies)
+        val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
         val resultId = appendOperation(ctx, sourceStageId, DistinctOp(), builderMap, dependencies)
         (resultId, Some(plan))
 
       case Plan.KeysOp(sourcePlan) =>
-        val (sourceStageId, _) = buildUnified(ctx, sourcePlan, builderMap, dependencies)
+        val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
         val resultId = appendOperation(ctx, sourceStageId, KeysOp(), builderMap, dependencies)
         (resultId, Some(plan))
 
       case Plan.ValuesOp(sourcePlan) =>
-        val (sourceStageId, _) = buildUnified(ctx, sourcePlan, builderMap, dependencies)
+        val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
         val resultId = appendOperation(ctx, sourceStageId, ValuesOp(), builderMap, dependencies)
         (resultId, Some(plan))
 
       case Plan.MapValuesOp(sourcePlan, f) =>
-        val (sourceStageId, _) = buildUnified(ctx, sourcePlan, builderMap, dependencies)
+        val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
         val resultId = appendOperation(ctx, sourceStageId, MapValuesOp(f), builderMap, dependencies)
         (resultId, Some(plan))
 
       case Plan.FilterKeysOp(sourcePlan, p) =>
-        val (sourceStageId, _) = buildUnified(ctx, sourcePlan, builderMap, dependencies)
+        val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
         val resultId = appendOperation(ctx, sourceStageId, FilterKeysOp(p), builderMap, dependencies)
         (resultId, Some(plan))
 
       case Plan.FilterValuesOp(sourcePlan, p) =>
-        val (sourceStageId, _) = buildUnified(ctx, sourcePlan, builderMap, dependencies)
+        val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
         val resultId = appendOperation(ctx, sourceStageId, FilterValuesOp(p), builderMap, dependencies)
         (resultId, Some(plan))
 
       case Plan.FlatMapValuesOp(sourcePlan, f) =>
-        val (sourceStageId, _) = buildUnified(ctx, sourcePlan, builderMap, dependencies)
+        val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
         val resultId = appendOperation(ctx, sourceStageId, FlatMapValuesOp(f), builderMap, dependencies)
         (resultId, Some(plan))
 
       case Plan.MapPartitionsOp(sourcePlan, f) =>
-        val (sourceStageId, _) = buildUnified(ctx, sourcePlan, builderMap, dependencies)
+        val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
         val resultId = appendOperation(ctx, sourceStageId, MapPartitionsOp(f), builderMap, dependencies)
         (resultId, Some(plan))
 
       case Plan.UnionOp(left, right) =>
-        val (leftStageId, _) = buildUnified(ctx, left, builderMap, dependencies)
-        val (rightStageId, _) = buildUnified(ctx, right, builderMap, dependencies)
+        val (leftStageId, _) = buildStagesFromPlan(ctx, left, builderMap, dependencies)
+        val (rightStageId, _) = buildStagesFromPlan(ctx, right, builderMap, dependencies)
 
         // Union creates a new narrow stage that reads outputs from both input stages
         val unionStageId = ctx.freshId()
@@ -374,7 +374,7 @@ object StageBuilder:
 
       // Wide transformations (create shuffle boundaries)
       case groupByKey: Plan.GroupByKeyOp[_, _] =>
-        val (sourceStageId, _) = buildUnified(ctx, groupByKey.source, builderMap, dependencies)
+        val (sourceStageId, _) = buildStagesFromPlan(ctx, groupByKey.source, builderMap, dependencies)
         val src = builderMap(sourceStageId)
         val defaultN = SparkletConf.get.defaultShufflePartitions
 
@@ -391,7 +391,7 @@ object StageBuilder:
         }
 
       case reduceByKey: Plan.ReduceByKeyOp[_, _] =>
-        val (sourceStageId, _) = buildUnified(ctx, reduceByKey.source, builderMap, dependencies)
+        val (sourceStageId, _) = buildStagesFromPlan(ctx, reduceByKey.source, builderMap, dependencies)
         val src = builderMap(sourceStageId)
         val defaultN = SparkletConf.get.defaultShufflePartitions
 
@@ -409,7 +409,7 @@ object StageBuilder:
         }
 
       case sortBy: Plan.SortByOp[_, _] =>
-        val (sourceStageId, _) = buildUnified(ctx, sortBy.source, builderMap, dependencies)
+        val (sourceStageId, _) = buildStagesFromPlan(ctx, sortBy.source, builderMap, dependencies)
         val n = SparkletConf.get.defaultShufflePartitions
         val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), SortByWideOp(WideOpMeta(
           kind = WideOpKind.SortBy,
@@ -419,7 +419,7 @@ object StageBuilder:
         (shuffleId, Some(sortBy))
 
       case pby: Plan.PartitionByOp[_, _] =>
-        val (sourceStageId, _) = buildUnified(ctx, pby.source, builderMap, dependencies)
+        val (sourceStageId, _) = buildStagesFromPlan(ctx, pby.source, builderMap, dependencies)
         val src = builderMap(sourceStageId)
 
         if (Operation.canBypassShuffle(pby, src.outputPartitioning, SparkletConf.get)) {
@@ -434,7 +434,7 @@ object StageBuilder:
         }
 
       case rep: Plan.RepartitionOp[_] =>
-        val (sourceStageId, _) = buildUnified(ctx, rep.source, builderMap, dependencies)
+        val (sourceStageId, _) = buildStagesFromPlan(ctx, rep.source, builderMap, dependencies)
         val src = builderMap(sourceStageId)
 
         if (Operation.canBypassShuffle(rep, src.outputPartitioning, SparkletConf.get)) {
@@ -449,7 +449,7 @@ object StageBuilder:
         }
 
       case coal: Plan.CoalesceOp[_] =>
-        val (sourceStageId, _) = buildUnified(ctx, coal.source, builderMap, dependencies)
+        val (sourceStageId, _) = buildStagesFromPlan(ctx, coal.source, builderMap, dependencies)
         val src = builderMap(sourceStageId)
 
         if (Operation.canBypassShuffle(coal, src.outputPartitioning, SparkletConf.get)) {
@@ -464,8 +464,8 @@ object StageBuilder:
         }
 
       case joinOp: Plan.JoinOp[_, _, _] =>
-        val (leftStageId, _) = buildUnified(ctx, joinOp.left, builderMap, dependencies)
-        val (rightStageId, _) = buildUnified(ctx, joinOp.right, builderMap, dependencies)
+        val (leftStageId, _) = buildStagesFromPlan(ctx, joinOp.left, builderMap, dependencies)
+        val (rightStageId, _) = buildStagesFromPlan(ctx, joinOp.right, builderMap, dependencies)
 
         val numPartitions = SparkletConf.get.defaultShufflePartitions
         val shuffleId = createShuffleStageUnified(ctx, Seq(leftStageId, rightStageId), JoinWideOp(WideOpMeta(
@@ -477,8 +477,8 @@ object StageBuilder:
         (shuffleId, Some(joinOp))
 
       case cogroupOp: Plan.CoGroupOp[_, _, _] =>
-        val (leftStageId, _) = buildUnified(ctx, cogroupOp.left, builderMap, dependencies)
-        val (rightStageId, _) = buildUnified(ctx, cogroupOp.right, builderMap, dependencies)
+        val (leftStageId, _) = buildStagesFromPlan(ctx, cogroupOp.left, builderMap, dependencies)
+        val (rightStageId, _) = buildStagesFromPlan(ctx, cogroupOp.right, builderMap, dependencies)
 
         val numPartitions = SparkletConf.get.defaultShufflePartitions
         val shuffleId = createShuffleStageUnified(ctx, Seq(leftStageId, rightStageId), CoGroupWideOp(WideOpMeta(
