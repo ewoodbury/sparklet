@@ -39,8 +39,15 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     filterOp shouldBe a[FilterOp[_]]
     flatMapOp shouldBe a[FlatMapOp[_, _]]
     distinctOp shouldBe a[DistinctOp]
+    mapPartitionsOp shouldBe a[MapPartitionsOp[_, _]]
     gbkOp shouldBe a[GroupByKeyOp[_, _]]
     rbkOp shouldBe a[ReduceByKeyOp[_, _]]
+    sortOp shouldBe a[SortByOp[_, _]]
+    partitionOp shouldBe a[PartitionByOp[_, _]]
+    repartitionOp shouldBe a[RepartitionOp[_]]
+    coalesceOp shouldBe a[CoalesceOp[_]]
+    joinOp shouldBe a[JoinOp[_, _, _]]
+    cogroupOp shouldBe a[CoGroupOp[_, _, _]]
   }
 
   "InputSource normalization" should "unify shuffle inputs with optional sides" in {
@@ -140,7 +147,7 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
       kind = GroupByKey,
       numPartitions = 16,
       reduceFunc = Some((a: Any, b: Any) => a),
-      sides = Seq()
+      sides = Seq.empty[StageBuilder.Side]
     )
     meta.kind shouldBe GroupByKey
     meta.numPartitions shouldBe 16
@@ -658,7 +665,7 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     // Should have exactly one (source, stage) pair
     legacyStages should have length 1
 
-    val (source, stage) = legacyStages.head
+    val (source, stage) = legacyStages.headOption.get
     source shouldBe createSource()
     stage shouldBe a[Stage[_, _]]
   }
@@ -677,7 +684,7 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     // Should have exactly one (source, stage) pair
     legacyStages should have length 1
 
-    val (source, stage) = legacyStages.head
+    val (source, stage) = legacyStages.headOption.get
     source shouldBe createSource()
     stage shouldBe a[Stage[_, _]]
   }
@@ -750,6 +757,54 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     assertThrows[UnsupportedOperationException] {
       StageBuilder.buildStages(plan)
     }
+  }
+
+  // --- StageGraph Validation Tests ---
+
+  behavior of "StageGraph Validation"
+
+  it should "pass validation for valid stage graphs" in {
+    // Test that normal valid plans pass validation
+    val plan = Plan.MapOp(createSource(), (_: Int) * 2)
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    // Should not throw any exceptions - validation passes
+    stageGraph.stages.size shouldBe 1
+    stageGraph.stages.contains(stageGraph.finalStageId) shouldBe true
+  }
+
+  it should "validate partitioning metadata consistency" in {
+    // Test that partitioning validation works by creating an invalid scenario
+    // This is a bit tricky to test directly since the builder should always create valid graphs
+    // We'll test through the public API and ensure valid graphs are created
+    val source = createSource()
+    val kvSource = Plan.MapOp(source, (x: Int) => (x % 3, x))
+    val plan = Plan.GroupByKeyOp(kvSource)
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    // The final stage should have valid partitioning (byKey=true, numPartitions>0)
+    val finalStage = stageGraph.stages(stageGraph.finalStageId)
+    finalStage.outputPartitioning.foreach { p =>
+      p.byKey shouldBe true
+      p.numPartitions should be > 0
+    }
+  }
+
+  it should "validate multi-input shuffle stages have proper side markers" in {
+    val left = Plan.MapOp(createSource(), (x: Int) => (x, x * 2))
+    val right = Plan.MapOp(createSource(), (x: Int) => (x, x * 3))
+    val plan = Plan.JoinOp(left, right, Some(Plan.JoinStrategy.ShuffleHash))
+
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+    val finalStage = stageGraph.stages(stageGraph.finalStageId)
+
+    // Validation should ensure multi-input shuffle stages have proper side markers
+    finalStage.inputSources.length shouldBe 2
+    val shuffleInputs = finalStage.inputSources.collect { case si: StageBuilder.ShuffleInput => si }
+    shuffleInputs.length shouldBe 2
+    shuffleInputs.forall(_.side.nonEmpty) shouldBe true
+    shuffleInputs.map(_.side.get).toSet shouldBe Set(StageBuilder.Side.Left, StageBuilder.Side.Right)
   }
 
 end TestOperationsAndInputSources

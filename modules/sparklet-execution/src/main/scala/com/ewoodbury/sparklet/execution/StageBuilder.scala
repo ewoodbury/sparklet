@@ -124,11 +124,75 @@ object StageBuilder:
       )
     }
 
-    StageGraph(
+    val stageGraph = StageGraph(
       stageMap.toMap,
       dependencies.map { case (k, v) => k -> v.toSet }.toMap,
       finalStageId,
     )
+
+    // Post-build validation
+    validateStageGraph(stageGraph)
+
+    stageGraph
+  }
+
+  /**
+   * Validates StageGraph invariants to catch errors early.
+   * Checks for consistency issues that could cause runtime failures.
+   */
+  private def validateStageGraph(graph: StageGraph): Unit = {
+    // 1. finalStageId exists in stages map
+    if (!graph.stages.contains(graph.finalStageId)) {
+      throw new IllegalStateException(s"finalStageId ${graph.finalStageId} not found in stages map")
+    }
+
+    // 2. Every dependency target exists
+    graph.dependencies.foreach { case (stageId, deps) =>
+      if (!graph.stages.contains(stageId)) {
+        throw new IllegalStateException(s"Stage $stageId has dependencies but is not in stages map")
+      }
+      deps.foreach { depId =>
+        if (!graph.stages.contains(depId)) {
+          throw new IllegalStateException(s"Stage $stageId depends on $depId which doesn't exist")
+        }
+      }
+    }
+
+    // 3. No stage lists itself as dependency (prevents infinite loops)
+    graph.dependencies.foreach { case (stageId, deps) =>
+      if (deps.contains(stageId)) {
+        throw new IllegalStateException(s"Stage $stageId lists itself as a dependency")
+      }
+    }
+
+    // 4. Partitioning metadata consistency
+    graph.stages.values.foreach { stageInfo =>
+      stageInfo.outputPartitioning.foreach { partitioning =>
+        // byKey implies numPartitions > 0
+        if (partitioning.byKey && partitioning.numPartitions <= 0) {
+          throw new IllegalStateException(s"Stage ${stageInfo.id} has byKey=true but numPartitions=${partitioning.numPartitions} <= 0")
+        }
+        // numPartitions should be reasonable (not excessively large)
+        if (partitioning.numPartitions > 1000000) {
+          throw new IllegalStateException(s"Stage ${stageInfo.id} has excessively large numPartitions=${partitioning.numPartitions}")
+        }
+      }
+
+      // 5. Shuffle stages should have shuffle operation metadata
+      if (stageInfo.isShuffleStage && stageInfo.shuffleOperation.isEmpty) {
+        throw new IllegalStateException(s"Shuffle stage ${stageInfo.id} has no shuffle operation metadata")
+      }
+
+      // 6. Multi-input shuffle stages should have side markers
+      if (stageInfo.isShuffleStage && stageInfo.inputSources.length == 2) {
+        val shuffleInputs = stageInfo.inputSources.collect { case si: ShuffleInput => si }
+        if (shuffleInputs.length != 2 ||
+            shuffleInputs.exists(_.side.isEmpty) ||
+            shuffleInputs.map(_.side).toSet.size != 2) {
+          throw new IllegalStateException(s"Multi-input shuffle stage ${stageInfo.id} has invalid side markers: ${shuffleInputs.map(_.side)}")
+        }
+      }
+    }
   }
 
   /**
