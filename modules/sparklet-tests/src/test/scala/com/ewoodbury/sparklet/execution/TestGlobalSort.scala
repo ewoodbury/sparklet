@@ -23,7 +23,7 @@ class TestGlobalSort extends AnyFlatSpec with Matchers {
     sortStageInfo.isShuffleStage shouldBe true
     // The sort stage should read from a shuffle of the prior stage with configured partition count
     val expectedN = SparkletConf.get.defaultShufflePartitions
-    val inputN: Seq[Int] = sortStageInfo.inputSources.collect { case StageBuilder.ShuffleFrom(_, n) => n }
+    val inputN: Seq[Int] = sortStageInfo.inputSources.collect { case StageBuilder.ShuffleInput(_, _, n) => n }
     assert(inputN.nonEmpty)
     inputN.headOption shouldBe Some(expectedN)
   }

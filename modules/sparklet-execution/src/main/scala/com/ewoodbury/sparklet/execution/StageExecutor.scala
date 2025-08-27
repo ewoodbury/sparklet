@@ -40,20 +40,8 @@ final class StageExecutor[F[_]: Sync](
         // Read the already computed output of the dependent stage
         stageResults.getOrElse(depStageId, Seq.empty[Partition[_]])
 
-      case StageBuilder.ShuffleFrom(upstreamStageId, numPartitions) =>
-        val actualShuffleId = stageToShuffleId.getOrElse(
-          upstreamStageId,
-          throw new IllegalStateException(
-            s"Missing shuffle id for upstream stage ${upstreamStageId.toInt} feeding stage ${stageInfo.id.toInt}",
-          ),
-        )
-        (0 until numPartitions).map { partitionIdx =>
-          shuffle.readPartition[Any, Any](actualShuffleId, PartitionId(partitionIdx))
-        }
-
-      case StageBuilder.TaggedShuffleFrom(upstreamStageId, _side, numPartitions) =>
-        // Explicitly resolve upstream shuffle ID and read exactly those partitions.
-        // Used for join and cogroup operations.
+      case StageBuilder.ShuffleInput(upstreamStageId, _side, numPartitions) =>
+        // Handle both single-input and multi-input shuffle operations uniformly
         val actualShuffleId = stageToShuffleId.getOrElse(
           upstreamStageId,
           throw new IllegalStateException(
@@ -117,34 +105,34 @@ final class StageExecutor[F[_]: Sync](
     // Join is the only shuffle op that currently requires effectful scheduling work here
     stageInfo.shuffleOperation match {
       case Some(joinOp: Plan.JoinOp[_, _, _]) =>
-        val tagged = stageInfo.inputSources.collect { case t: StageBuilder.TaggedShuffleFrom => t }
-        val leftTagged = tagged
-          .find(_.side == StageBuilder.Side.Left)
+        val shuffleInputs = stageInfo.inputSources.collect { case s: StageBuilder.ShuffleInput => s }
+        val leftInput = shuffleInputs
+          .find(_.side.contains(StageBuilder.Side.Left))
           .getOrElse(
             throw new IllegalStateException(
               s"Join missing Left input for stage ${stageInfo.id.toInt}",
             ),
           )
-        val rightTagged = tagged
-          .find(_.side == StageBuilder.Side.Right)
+        val rightInput = shuffleInputs
+          .find(_.side.contains(StageBuilder.Side.Right))
           .getOrElse(
             throw new IllegalStateException(
               s"Join missing Right input for stage ${stageInfo.id.toInt}",
             ),
           )
         val leftShuffleId = stageToShuffleId.getOrElse(
-          leftTagged.stageId,
+          leftInput.stageId,
           throw new IllegalStateException(
-            s"Missing shuffle id for Left upstream stage ${leftTagged.stageId.toInt}",
+            s"Missing shuffle id for Left upstream stage ${leftInput.stageId.toInt}",
           ),
         )
         val rightShuffleId = stageToShuffleId.getOrElse(
-          rightTagged.stageId,
+          rightInput.stageId,
           throw new IllegalStateException(
-            s"Missing shuffle id for Right upstream stage ${rightTagged.stageId.toInt}",
+            s"Missing shuffle id for Right upstream stage ${rightInput.stageId.toInt}",
           ),
         )
-        val numPartitions = leftTagged.numPartitions // assume both sides same for now
+        val numPartitions = leftInput.numPartitions // assume both sides same for now
 
         // Determine join strategy: use hint if available, otherwise auto-select
         val strategy =
@@ -222,37 +210,37 @@ final class StageExecutor[F[_]: Sync](
                 Seq(Partition(reducedData.toSeq))
 
               case Some(_: Plan.CoGroupOp[_, _, _]) =>
-                val tagged = stageInfo.inputSources.collect {
-                  case t: StageBuilder.TaggedShuffleFrom =>
-                    t
+                val shuffleInputs = stageInfo.inputSources.collect {
+                  case s: StageBuilder.ShuffleInput =>
+                    s
                 }
-                val leftTagged = tagged
-                  .find(_.side == StageBuilder.Side.Left)
+                val leftInput = shuffleInputs
+                  .find(_.side.contains(StageBuilder.Side.Left))
                   .getOrElse(
                     throw new IllegalStateException(
                       s"Cogroup missing Left input for stage ${stageInfo.id.toInt}",
                     ),
                   )
-                val rightTagged = tagged
-                  .find(_.side == StageBuilder.Side.Right)
+                val rightInput = shuffleInputs
+                  .find(_.side.contains(StageBuilder.Side.Right))
                   .getOrElse(
                     throw new IllegalStateException(
                       s"Cogroup missing Right input for stage ${stageInfo.id.toInt}",
                     ),
                   )
                 val leftShuffleId = stageToShuffleId.getOrElse(
-                  leftTagged.stageId,
+                  leftInput.stageId,
                   throw new IllegalStateException(
-                    s"Missing shuffle id for Left upstream stage ${leftTagged.stageId.toInt}",
+                    s"Missing shuffle id for Left upstream stage ${leftInput.stageId.toInt}",
                   ),
                 )
                 val rightShuffleId = stageToShuffleId.getOrElse(
-                  rightTagged.stageId,
+                  rightInput.stageId,
                   throw new IllegalStateException(
-                    s"Missing shuffle id for Right upstream stage ${rightTagged.stageId.toInt}",
+                    s"Missing shuffle id for Right upstream stage ${rightInput.stageId.toInt}",
                   ),
                 )
-                val numPartitions = leftTagged.numPartitions
+                val numPartitions = leftInput.numPartitions
                 val leftData = (0 until numPartitions).flatMap { partitionId =>
                   shuffle.readPartition[Any, Any](leftShuffleId, PartitionId(partitionId)).data
                 }
