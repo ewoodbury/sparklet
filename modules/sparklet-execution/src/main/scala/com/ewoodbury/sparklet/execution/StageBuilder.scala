@@ -379,9 +379,9 @@ object StageBuilder:
         val defaultN = SparkletConf.get.defaultShufflePartitions
 
         if (Operation.canBypassShuffle(groupByKey, src.outputPartitioning, SparkletConf.get)) {
-          // If upstream is already a shuffle stage with correct partitioning, just return it
-          // No need to create a separate stage for the local operation
-          (sourceStageId, Some(groupByKey))
+          // Add local groupByKey operation to existing stage since shuffle can be bypassed
+          val resultId = appendOperation(ctx, sourceStageId, GroupByKeyLocalOp[Any, Any](), builderMap, dependencies)
+          (resultId, Some(groupByKey))
         } else {
           val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), GroupByKeyWideOp(WideOpMeta(
             kind = WideOpKind.GroupByKey,
@@ -396,9 +396,9 @@ object StageBuilder:
         val defaultN = SparkletConf.get.defaultShufflePartitions
 
         if (Operation.canBypassShuffle(reduceByKey, src.outputPartitioning, SparkletConf.get)) {
-          // If upstream is already a shuffle stage with correct partitioning, just return it
-          // No need to create a separate stage for the local operation
-          (sourceStageId, Some(reduceByKey))
+          // Add local reduceByKey operation to existing stage since shuffle can be bypassed
+          val resultId = appendOperation(ctx, sourceStageId, ReduceByKeyLocalOp[Any, Any](reduceByKey.reduceFunc.asInstanceOf[(Any, Any) => Any]), builderMap, dependencies)
+          (resultId, Some(reduceByKey))
         } else {
           val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), ReduceByKeyWideOp(WideOpMeta(
             kind = WideOpKind.ReduceByKey,

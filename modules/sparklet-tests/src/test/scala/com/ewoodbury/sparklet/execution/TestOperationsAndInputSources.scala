@@ -106,7 +106,6 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
   }
 
   it should "handle shuffle bypass optimization through unified builder" in {
-    import StageBuilder.Partitioning
 
     // Test that bypass optimization works through the public API
     // Create a scenario where groupByKey should bypass shuffle
@@ -225,12 +224,11 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
 
     val stageGraph = StageBuilder.buildStageGraph(plan)
 
-    // Should bypass shuffle because data is already partitioned by key
-    // Expected stages: source + map + partitionBy + local groupByKey all chained together
-    // The unified builder chains operations efficiently, so we get fewer stages than traditional approach
-    stageGraph.stages.size shouldBe 1
+    // Should bypass shuffle for groupByKey because data is partitioned by key after partitionByOp
+    // Expected stages: source+map (1) + partitionBy shuffle (2) + local groupByKey (3)
+    stageGraph.stages.size shouldBe 3
     val stage = stageGraph.stages(stageGraph.finalStageId)
-    stage.isShuffleStage shouldBe false
+    stage.isShuffleStage shouldBe false  // Final stage should be narrow (bypass worked)
   }
 
   it should "build reduceByKey after groupByKey with shuffle bypassed" in {
@@ -244,10 +242,11 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
 
     val stageGraph = StageBuilder.buildStageGraph(plan)
 
-    // Should bypass shuffle because data is already partitioned by key
-    stageGraph.stages.size shouldBe 1
+    // Should bypass shuffle for reduceByKey because data is partitioned by key after partitionByOp
+    // Expected stages: source+map (1) + partitionBy shuffle (2) + local reduceByKey (3)
+    stageGraph.stages.size shouldBe 3
     val stage = stageGraph.stages(stageGraph.finalStageId)
-    stage.isShuffleStage shouldBe false
+    stage.isShuffleStage shouldBe false  // Final stage should be narrow (bypass worked)
   }
 
   it should "build repartition followed by map (new stage after shuffle)" in {
