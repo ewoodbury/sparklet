@@ -9,6 +9,8 @@ import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
     "org.wartremover.warts.Any",
     "org.wartremover.warts.AsInstanceOf",
     "org.wartremover.warts.MutableDataStructures",
+    "org.wartremover.warts.Equals",
+    "org.wartremover.warts.RedundantAsInstanceOf",
   ),
 )
 
@@ -113,7 +115,7 @@ object StageBuilder:
       child: StageId,
       parent: StageId
   ): Unit = {
-    require(!(child == parent), s"Stage $child cannot depend on itself")
+    require(child != parent, s"Stage $child cannot depend on itself")
     dependencies.getOrElseUpdate(child, mutable.Set.empty) += parent
   }
 
@@ -173,17 +175,32 @@ object StageBuilder:
   private def validateStageGraph(graph: StageGraph): Unit = {
     // 1. finalStageId exists in stages map
     if (!graph.stages.contains(graph.finalStageId)) {
-      throw new IllegalStateException(s"finalStageId ${graph.finalStageId} not found in stages map")
+      val availableStages = graph.stages.keys.toSeq.sorted.mkString(", ")
+      throw new IllegalStateException(
+        s"Final stage ID ${graph.finalStageId} not found in stages map. " +
+        s"Available stage IDs: [$availableStages]. " +
+        s"This indicates a stage graph construction error."
+      )
     }
 
     // 2. Every dependency target exists
     graph.dependencies.foreachEntry { (stageId, deps) =>
       if (!graph.stages.contains(stageId)) {
-        throw new IllegalStateException(s"Stage $stageId has dependencies but is not in stages map")
+        val availableStages = graph.stages.keys.toSeq.sorted.mkString(", ")
+        throw new IllegalStateException(
+          s"Stage $stageId has dependencies but is not in stages map. " +
+          s"Available stage IDs: [$availableStages]. " +
+          s"Dependencies: [${deps.mkString(", ")}]"
+        )
       }
       deps.foreach { depId =>
         if (!graph.stages.contains(depId)) {
-          throw new IllegalStateException(s"Stage $stageId depends on $depId which doesn't exist")
+          val availableStages = graph.stages.keys.toSeq.sorted.mkString(", ")
+          throw new IllegalStateException(
+            s"Stage $stageId depends on missing stage $depId. " +
+            s"Available stage IDs: [$availableStages]. " +
+            s"Check stage construction order."
+          )
         }
       }
     }
@@ -191,7 +208,11 @@ object StageBuilder:
     // 3. No stage lists itself as dependency (prevents infinite loops)
     graph.dependencies.foreachEntry { (stageId, deps) =>
       if (deps.contains(stageId)) {
-        throw new IllegalStateException(s"Stage $stageId lists itself as a dependency")
+        throw new IllegalStateException(
+          s"Stage $stageId lists itself as a dependency, creating a self-cycle. " +
+          s"All dependencies: [${deps.mkString(", ")}]. " +
+          s"This would cause infinite recursion during execution."
+        )
       }
     }
 
@@ -234,7 +255,12 @@ object StageBuilder:
 
     def dfsVisit(stageId: StageId): Unit = {
       if (visiting.contains(stageId)) {
-        throw new IllegalStateException(s"Cycle detected in stage graph involving stage $stageId")
+        val cyclePath = visiting.toSeq :+ stageId
+        throw new IllegalStateException(
+          s"Cycle detected in stage graph involving stage $stageId. " +
+          s"Cycle path: ${cyclePath.mkString(" -> ")}. " +
+          s"This indicates a circular dependency that would prevent execution."
+        )
       }
       if (visited.contains(stageId)) {
         return
@@ -278,7 +304,12 @@ object StageBuilder:
     val allStageIds = graph.stages.keySet
     val orphaned = allStageIds -- reachable
     if (orphaned.nonEmpty) {
-      throw new IllegalStateException(s"Orphaned stages not reachable from finalStageId ${graph.finalStageId}: ${orphaned.toSeq.sorted}")
+      val reachableStages = reachable.toSeq.sorted.mkString(", ")
+      throw new IllegalStateException(
+        s"Orphaned stages not reachable from finalStageId ${graph.finalStageId}: [${orphaned.toSeq.sorted.mkString(", ")}]. " +
+        s"Reachable stages: [$reachableStages]. " +
+        s"Check for disconnected stage subgraphs or missing dependencies."
+      )
     }
   }
 
@@ -289,8 +320,13 @@ object StageBuilder:
     val stageIds = graph.stages.keys.toSeq.sorted
     if (stageIds.nonEmpty) {
       // Check starts from 0
-      if (stageIds.headOption.get.toInt != 0) {
-        throw new IllegalStateException(s"Stage IDs should start from 0, but found minimum ID: ${stageIds.head.toInt}")
+      stageIds.headOption match {
+        case Some(firstId) if firstId.toInt != 0 =>
+          throw new IllegalStateException(s"Stage IDs should start from 0, but found minimum ID: ${firstId.toInt}")
+        case None =>
+          // This case shouldn't happen since we check nonEmpty above, but handle defensively
+          throw new IllegalStateException("Stage ID sequence is unexpectedly empty")
+        case Some(_) => // firstId.toInt == 0, which is correct
       }
 
       // Check for gaps (warn only to future-proof ID reuse scenarios)
@@ -402,43 +438,43 @@ object StageBuilder:
 
     // For single operations, return the operation directly without chaining
     if (ops.length == 1) {
-      return ops.headOption.get match {
-        case MapOp(f) => Stage.map(f.asInstanceOf[Any => Any])
-        case FilterOp(p) => Stage.filter(p.asInstanceOf[Any => Boolean])
-        case FlatMapOp(f) => Stage.flatMap(f.asInstanceOf[Any => IterableOnce[Any]])
-        case DistinctOp() => Stage.distinct
-        case KeysOp() => Stage.keys.asInstanceOf[Stage[Any, Any]]
-        case ValuesOp() => Stage.values.asInstanceOf[Stage[Any, Any]]
-        case MapValuesOp(f) => Stage.mapValues(f.asInstanceOf[Any => Any]).asInstanceOf[Stage[Any, Any]]
-        case FilterKeysOp(p) => Stage.filterKeys(p.asInstanceOf[Any => Boolean]).asInstanceOf[Stage[Any, Any]]
-        case FilterValuesOp(p) => Stage.filterValues(p.asInstanceOf[Any => Boolean]).asInstanceOf[Stage[Any, Any]]
-        case FlatMapValuesOp(f) => Stage.flatMapValues(f.asInstanceOf[Any => IterableOnce[Any]]).asInstanceOf[Stage[Any, Any]]
-        case MapPartitionsOp(f) => Stage.mapPartitions(f.asInstanceOf[Iterator[Any] => Iterator[Any]])
-        case GroupByKeyLocalOp() => Stage.groupByKeyLocal.asInstanceOf[Stage[Any, Any]]
-        case ReduceByKeyLocalOp(reduceFunc) => Stage.reduceByKeyLocal(reduceFunc.asInstanceOf[(Any, Any) => Any]).asInstanceOf[Stage[Any, Any]]
-        case PartitionByLocalOp(_) => Stage.identity[Any].asInstanceOf[Stage[Any, Any]] // Bypassed partition is identity
-        case _ => throw new UnsupportedOperationException(s"Cannot materialize wide operation: ${ops.headOption.get}")
+      ops.headOption match {
+        case Some(op) => createStageFromOp(op)
+        case None => 
+          throw new IllegalStateException(
+            "Single operation vector unexpectedly empty after length check. " +
+            "This indicates a concurrent modification or internal error."
+          )
       }
-    }
-
-    // For multiple operations, build the chain efficiently
-    ops.drop(1).foldLeft(createStageFromOp(ops.head)) { (stage, op) =>
-      op match {
-        case MapOp(f) => Stage.ChainedStage(stage, Stage.map(f.asInstanceOf[Any => Any]))
-        case FilterOp(p) => Stage.ChainedStage(stage, Stage.filter(p.asInstanceOf[Any => Boolean]))
-        case FlatMapOp(f) => Stage.ChainedStage(stage, Stage.flatMap(f.asInstanceOf[Any => IterableOnce[Any]]))
-        case DistinctOp() => Stage.ChainedStage(stage, Stage.distinct)
-        case KeysOp() => Stage.ChainedStage(stage, Stage.keys.asInstanceOf[Stage[Any, Any]])
-        case ValuesOp() => Stage.ChainedStage(stage, Stage.values.asInstanceOf[Stage[Any, Any]])
-        case MapValuesOp(f) => Stage.ChainedStage(stage, Stage.mapValues(f.asInstanceOf[Any => Any]).asInstanceOf[Stage[Any, Any]])
-        case FilterKeysOp(p) => Stage.ChainedStage(stage, Stage.filterKeys(p.asInstanceOf[Any => Boolean]).asInstanceOf[Stage[Any, Any]])
-        case FilterValuesOp(p) => Stage.ChainedStage(stage, Stage.filterValues(p.asInstanceOf[Any => Boolean]).asInstanceOf[Stage[Any, Any]])
-        case FlatMapValuesOp(f) => Stage.ChainedStage(stage, Stage.flatMapValues(f.asInstanceOf[Any => IterableOnce[Any]]).asInstanceOf[Stage[Any, Any]])
-        case MapPartitionsOp(f) => Stage.ChainedStage(stage, Stage.mapPartitions(f.asInstanceOf[Iterator[Any] => Iterator[Any]]))
-        case GroupByKeyLocalOp() => Stage.ChainedStage(stage, Stage.groupByKeyLocal.asInstanceOf[Stage[Any, Any]])
-        case ReduceByKeyLocalOp(reduceFunc) => Stage.ChainedStage(stage, Stage.reduceByKeyLocal(reduceFunc.asInstanceOf[(Any, Any) => Any]).asInstanceOf[Stage[Any, Any]])
-        case PartitionByLocalOp(_) => Stage.ChainedStage(stage, Stage.identity[Any].asInstanceOf[Stage[Any, Any]]) // Bypassed partition is identity
-        case _ => throw new UnsupportedOperationException(s"Cannot materialize wide operation: $op")
+    } else {
+      // For multiple operations, build the chain efficiently
+      ops.headOption match {
+        case Some(firstOp) =>
+          ops.drop(1).foldLeft(createStageFromOp(firstOp)) { (stage, op) =>
+            op match {
+              case MapOp(f) => Stage.ChainedStage(stage, Stage.map(f.asInstanceOf[Any => Any]))
+              case FilterOp(p) => Stage.ChainedStage(stage, Stage.filter(p.asInstanceOf[Any => Boolean]))
+              case FlatMapOp(f) => Stage.ChainedStage(stage, Stage.flatMap(f.asInstanceOf[Any => IterableOnce[Any]]))
+              case DistinctOp() => Stage.ChainedStage(stage, Stage.distinct)
+              case KeysOp() => Stage.ChainedStage(stage, Stage.keys.asInstanceOf[Stage[Any, Any]])
+              case ValuesOp() => Stage.ChainedStage(stage, Stage.values.asInstanceOf[Stage[Any, Any]])
+              case MapValuesOp(f) => Stage.ChainedStage(stage, Stage.mapValues(f.asInstanceOf[Any => Any]).asInstanceOf[Stage[Any, Any]])
+              case FilterKeysOp(p) => Stage.ChainedStage(stage, Stage.filterKeys(p.asInstanceOf[Any => Boolean]).asInstanceOf[Stage[Any, Any]])
+              case FilterValuesOp(p) => Stage.ChainedStage(stage, Stage.filterValues(p.asInstanceOf[Any => Boolean]).asInstanceOf[Stage[Any, Any]])
+              case FlatMapValuesOp(f) => Stage.ChainedStage(stage, Stage.flatMapValues(f.asInstanceOf[Any => IterableOnce[Any]]).asInstanceOf[Stage[Any, Any]])
+              case MapPartitionsOp(f) => Stage.ChainedStage(stage, Stage.mapPartitions(f.asInstanceOf[Iterator[Any] => Iterator[Any]]))
+              case GroupByKeyLocalOp() => Stage.ChainedStage(stage, Stage.groupByKeyLocal.asInstanceOf[Stage[Any, Any]])
+              case ReduceByKeyLocalOp(reduceFunc) => Stage.ChainedStage(stage, Stage.reduceByKeyLocal(reduceFunc.asInstanceOf[(Any, Any) => Any]).asInstanceOf[Stage[Any, Any]])
+              case PartitionByLocalOp(_) => Stage.ChainedStage(stage, Stage.identity[Any].asInstanceOf[Stage[Any, Any]]) // Bypassed partition is identity
+              case _ => throw new UnsupportedOperationException(s"Cannot materialize wide operation: $op")
+            }
+          }
+        case None =>
+          throw new IllegalStateException(
+            "Multiple operation vector unexpectedly empty after validation. " +
+            s"Original vector length: ${ops.length}. " +
+            "This indicates a concurrent modification or internal error."
+          )
       }
     }
   }
@@ -859,7 +895,10 @@ object StageBuilder:
       case _ =>
         // Single-input operations
         require(upstreamIds.length == 1, s"${meta.kind} requires exactly 1 upstream stage")
-        Seq(ShuffleInput(upstreamIds.head, None, meta.numPartitions))
+        upstreamIds.headOption match {
+          case Some(upstreamId) => Seq(ShuffleInput(upstreamId, None, meta.numPartitions))
+          case None => throw new IllegalStateException(s"${meta.kind} operation missing required upstream stage")
+        }
     }
 
     // Determine output partitioning based on operation type
@@ -893,15 +932,41 @@ object StageBuilder:
   // --- Metadata helpers ---
 
   /**
-   * Centralized function for propagating partitioning metadata based on operation semantics.
-   * Rules:
-   * - Map/Filter/FlatMap/MapPartitions: preserve existing partitioning
-   * - Keys/Values/MapValues/FilterKeys/FilterValues/FlatMapValues: preserve numPartitions but may clear byKey
-   * - Distinct: clears byKey (unless previous was byKey - define explicitly)
-   * - Wide operations: set byKey and numPartitions based on operation type
+   * Updates output partitioning based on a narrow operation's transformation semantics.
+   * 
+   * This function centralizes the logic for how each operation type affects partitioning metadata,
+   * ensuring consistent behavior across the stage building process.
+   * 
+   * **Operation Categories and Effects:**
+   * 
+   * 1. **Preserve completely**: MapOp, FilterOp, FlatMapOp, MapPartitionsOp
+   *    - Maintains both `byKey` status and `numPartitions`
+   * 
+   * 2. **Preserve count, modify key awareness**:
+   *    - KeysOp: Sets `byKey = false` (output is key-only, not key-value pairs)
+   *    - ValuesOp: Sets `byKey = false` (output is value-only)
+   *    - MapValuesOp, FilterKeysOp, FilterValuesOp, FlatMapValuesOp: Preserve both
+   * 
+   * 3. **Key awareness conditional**: DistinctOp
+   *    - Preserves `byKey = true` if input was key-partitioned
+   *    - Sets `byKey = false` otherwise
+   * 
+   * 4. **Local bypass operations**: GroupByKeyLocalOp, ReduceByKeyLocalOp
+   *    - Preserve existing partitioning (no shuffle occurred)
+   * 
+   * 5. **Wide operations**: Create new partitioning based on operation semantics
+   *    - Key-grouping ops (GroupByKey, ReduceByKey, PartitionBy, Join, CoGroup): `byKey = true`
+   *    - Rebalancing ops (SortBy, Repartition, Coalesce): `byKey = false`
+   * 
+   * @param prev Previous partitioning metadata from the upstream stage
+   * @param op The operation being applied to transform the data
+   * @return Updated partitioning metadata reflecting the operation's effect
+   * 
+   * @note This method should handle ALL Operation case classes. If a new operation is added
+   *       to the Operation ADT, this method must be updated to handle it explicitly.
    */
   private def updatePartitioning(prev: Option[Partitioning], op: Operation): Option[Partitioning] = {
-    op match {
+    val result = op match {
       // Narrow operations that preserve partitioning completely
       case _: MapOp[_, _] | _: FilterOp[_] | _: FlatMapOp[_, _] | _: MapPartitionsOp[_, _] =>
         prev
@@ -955,7 +1020,18 @@ object StageBuilder:
 
       case cogroup: CoGroupOp[_, _, _] =>
         Some(Partitioning(byKey = true, numPartitions = cogroup.numPartitions))
+      
+      // This case should be unreachable if Operation ADT is properly sealed and all cases are handled above
+      // If this case is reached, it indicates a new operation was added without updating this method
     }
+    
+    // Validation: ensure result is sensible
+    result.foreach { partitioning =>
+      require(partitioning.numPartitions > 0, s"Invalid partitioning from operation $op: numPartitions must be > 0, got ${partitioning.numPartitions}")
+      require(partitioning.numPartitions <= 1000000, s"Invalid partitioning from operation $op: numPartitions ${partitioning.numPartitions} exceeds reasonable limit")
+    }
+    
+    result
   }
 
   /**
@@ -1035,7 +1111,10 @@ object StageBuilder:
             s"Legacy adapter expects linear chain but found ${nextStages.size} stages depending on ${currentId}"
           )
         }
-        traverse(nextStages.head, currentId :: path)
+        nextStages.headOption match {
+          case Some(nextStage) => traverse(nextStage, currentId :: path)
+          case None => throw new IllegalStateException(s"Expected exactly one next stage but found none for ${currentId}")
+        }
       }
     }
 
@@ -1053,13 +1132,20 @@ object StageBuilder:
 
     if (path.length == 1) {
       // Single stage - just return it
-      graph.stages(path.headOption.get).stage
+      path.headOption match {
+        case Some(stageId) => graph.stages(stageId).stage
+        case None => throw new IllegalStateException("Path unexpectedly empty for single stage")
+      }
     } else {
       // Multiple stages - chain them together
       // Start with the first stage and chain each subsequent stage
       val stages = path.map(graph.stages(_).stage)
-      stages.drop(1).foldLeft(stages.headOption.get) { (chained, nextStage) =>
-        Stage.ChainedStage(chained.asInstanceOf[Stage[Any, Any]], nextStage.asInstanceOf[Stage[Any, Any]])
+      stages.headOption match {
+        case Some(firstStage) =>
+          stages.drop(1).foldLeft(firstStage) { (chained, nextStage) =>
+            Stage.ChainedStage(chained.asInstanceOf[Stage[Any, Any]], nextStage.asInstanceOf[Stage[Any, Any]])
+          }
+        case None => throw new IllegalStateException("Stage sequence unexpectedly empty")
       }
     }
   }
