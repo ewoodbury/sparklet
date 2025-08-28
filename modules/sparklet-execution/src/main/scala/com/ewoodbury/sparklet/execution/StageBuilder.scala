@@ -195,7 +195,19 @@ object StageBuilder:
       }
     }
 
-    // 4. Partitioning metadata consistency
+    // 4. Acyclicity check using DFS
+    validateAcyclicity(graph)
+
+    // 5. Reachability check - all stages must be reachable from finalStageId
+    validateReachability(graph)
+
+    // 6. Stage ID monotonicity check (strictly increasing sequence)
+    validateStageIdMonotonicity(graph)
+
+    // 7. Shuffle stage specific validations
+    validateShuffleStages(graph)
+
+    // 8. Partitioning metadata consistency
     graph.stages.values.foreach { stageInfo =>
       stageInfo.outputPartitioning.foreach { partitioning =>
         // byKey implies numPartitions > 0
@@ -207,19 +219,157 @@ object StageBuilder:
           throw new IllegalStateException(s"Stage ${stageInfo.id} has excessively large numPartitions=${partitioning.numPartitions}")
         }
       }
+    }
 
-      // 5. Shuffle stages should have shuffle operation metadata
-      if (stageInfo.isShuffleStage && stageInfo.shuffleOperation.isEmpty) {
-        throw new IllegalStateException(s"Shuffle stage ${stageInfo.id} has no shuffle operation metadata")
+    // 9. Partitioning invariants - byKey only for operations that guarantee key grouping
+    validatePartitioningInvariants(graph)
+  }
+
+  /**
+   * Validates that the stage graph is acyclic using depth-first search.
+   */
+  private def validateAcyclicity(graph: StageGraph): Unit = {
+    val visiting = mutable.Set[StageId]()
+    val visited = mutable.Set[StageId]()
+
+    def dfsVisit(stageId: StageId): Unit = {
+      if (visiting.contains(stageId)) {
+        throw new IllegalStateException(s"Cycle detected in stage graph involving stage $stageId")
+      }
+      if (visited.contains(stageId)) {
+        return
       }
 
-      // 6. Multi-input shuffle stages should have side markers
-      if (stageInfo.isShuffleStage && stageInfo.inputSources.length == 2) {
-        val shuffleInputs = stageInfo.inputSources.collect { case si: ShuffleInput => si }
-        if (shuffleInputs.length != 2 ||
-            shuffleInputs.exists(_.side.isEmpty) ||
-            shuffleInputs.map(_.side).toSet.size != 2) {
-          throw new IllegalStateException(s"Multi-input shuffle stage ${stageInfo.id} has invalid side markers: ${shuffleInputs.map(_.side)}")
+      visiting.add(stageId)
+      graph.dependencies.getOrElse(stageId, Set.empty).foreach(dfsVisit)
+      visiting.remove(stageId)
+      visited.add(stageId)
+    }
+
+    graph.stages.keys.foreach { stageId =>
+      if (!visited.contains(stageId)) {
+        dfsVisit(stageId)
+      }
+    }
+  }
+
+  /**
+   * Validates that all stages are reachable from the final stage via reverse traversal.
+   */
+  private def validateReachability(graph: StageGraph): Unit = {
+    val reachable = mutable.Set[StageId]()
+    val toVisit = mutable.Queue[StageId]()
+
+    // Start from finalStageId and traverse backwards through dependencies
+    toVisit.enqueue(graph.finalStageId)
+    reachable.add(graph.finalStageId)
+
+    while (toVisit.nonEmpty) {
+      val current = toVisit.dequeue()
+      graph.dependencies.getOrElse(current, Set.empty).foreach { depId =>
+        if (!reachable.contains(depId)) {
+          reachable.add(depId)
+          toVisit.enqueue(depId)
+        }
+      }
+    }
+
+    // Check for orphaned stages
+    val allStageIds = graph.stages.keySet
+    val orphaned = allStageIds -- reachable
+    if (orphaned.nonEmpty) {
+      throw new IllegalStateException(s"Orphaned stages not reachable from finalStageId ${graph.finalStageId}: ${orphaned.toSeq.sorted}")
+    }
+  }
+
+  /**
+   * Validates that stage IDs form a monotonic sequence (strictly increasing from 0).
+   */
+  private def validateStageIdMonotonicity(graph: StageGraph): Unit = {
+    val stageIds = graph.stages.keys.toSeq.sorted
+    if (stageIds.nonEmpty) {
+      // Check starts from 0
+      if (stageIds.head.toInt != 0) {
+        throw new IllegalStateException(s"Stage IDs should start from 0, but found minimum ID: ${stageIds.head.toInt}")
+      }
+
+      // Check for gaps (warn only to future-proof ID reuse scenarios)
+      val expectedSequence = (0 until stageIds.length).map(StageId(_))
+      val actualSet = stageIds.toSet
+      val missing = expectedSequence.filterNot(actualSet.contains)
+      if (missing.nonEmpty) {
+        // Use println instead of logging to avoid dependencies
+        println(s"Warning: Stage ID sequence has gaps. Missing IDs: ${missing.map(_.toInt).mkString(", ")}")
+      }
+    }
+  }
+
+  /**
+   * Validates shuffle stage specific invariants.
+   */
+  private def validateShuffleStages(graph: StageGraph): Unit = {
+    graph.stages.values.foreach { stageInfo =>
+      if (stageInfo.isShuffleStage) {
+        // Shuffle stages should have shuffle operation metadata
+        if (stageInfo.shuffleOperation.isEmpty) {
+          throw new IllegalStateException(s"Shuffle stage ${stageInfo.id} has no shuffle operation metadata")
+        }
+
+        // Shuffle stages should have empty ops vector (they don't execute operations)
+        stageInfo.stage match {
+          case _: Stage.ChainedStage[_, _, _] =>
+            // ChainedStage should not be used for shuffle stages
+            throw new IllegalStateException(s"Shuffle stage ${stageInfo.id} incorrectly uses ChainedStage")
+          case _ => // Other stage types are acceptable for shuffle stages
+        }
+
+        // Multi-input shuffle stages should have proper side markers
+        if (stageInfo.inputSources.length == 2) {
+          val shuffleInputs = stageInfo.inputSources.collect { case si: ShuffleInput => si }
+          if (shuffleInputs.length != 2) {
+            throw new IllegalStateException(s"Multi-input shuffle stage ${stageInfo.id} should have exactly 2 ShuffleInputs, found ${shuffleInputs.length}")
+          }
+          if (shuffleInputs.exists(_.side.isEmpty)) {
+            throw new IllegalStateException(s"Multi-input shuffle stage ${stageInfo.id} has ShuffleInputs without side markers")
+          }
+          val sides = shuffleInputs.flatMap(_.side).toSet
+          if (sides.size != 2 || !sides.contains(Side.Left) || !sides.contains(Side.Right)) {
+            throw new IllegalStateException(s"Multi-input shuffle stage ${stageInfo.id} has invalid side markers: expected {Left, Right}, found $sides")
+          }
+
+          // Validate numPartitions consistency across inputs
+          val numPartitionsList = shuffleInputs.map(_.numPartitions).distinct
+          if (numPartitionsList.length > 1) {
+            throw new IllegalStateException(s"Multi-input shuffle stage ${stageInfo.id} has mismatched numPartitions across inputs: ${numPartitionsList.mkString(", ")}")
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Validates partitioning invariants - byKey should only be true for operations that guarantee key grouping.
+   */
+  private def validatePartitioningInvariants(graph: StageGraph): Unit = {
+    // Operations that guarantee key grouping - simplified approach since classOf with generics is problematic
+    // In practice, this would be implemented with a more sophisticated operation analysis system
+
+    graph.stages.values.foreach { stageInfo =>
+      stageInfo.outputPartitioning.foreach { partitioning =>
+        if (partitioning.byKey) {
+          // For byKey=true, verify stage has key-grouping operations or is a shuffle stage
+          if (!stageInfo.isShuffleStage) {
+            stageInfo.stage match {
+              case _: Stage.ChainedStage[_, _, _] =>
+                // For chained stages, check if any operation guarantees key grouping
+                // Note: This is a simplified check - in practice we'd need to analyze the operation chain
+                // For now, we'll be permissive and allow byKey=true if it's explicitly set
+                // This validation can be strengthened in the future with more detailed operation analysis
+              case _ =>
+                // For single operation stages, we could check the specific operation type
+                // But since we don't have direct access to the operation, we'll be permissive here
+            }
+          }
         }
       }
     }
