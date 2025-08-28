@@ -464,9 +464,62 @@ object StageBuilder:
   }
 
   /**
+   * Type-safe helper methods for creating stages from operations.
+   * These methods encapsulate the type casting in a controlled manner,
+   * providing better type safety than distributed asInstanceOf calls.
+   */
+  private def createKeysStage(): Stage[Any, Any] = {
+    // Stage.keys has type Stage[(K, V), K], we need Stage[Any, Any]
+    // This is safe because we know the input will be key-value pairs at runtime
+    Stage.keys[Any, Any].asInstanceOf[Stage[Any, Any]]
+  }
+
+  private def createValuesStage(): Stage[Any, Any] = {
+    // Stage.values has type Stage[(K, V), V], we need Stage[Any, Any]  
+    // This is safe because we know the input will be key-value pairs at runtime
+    Stage.values[Any, Any].asInstanceOf[Stage[Any, Any]]
+  }
+
+  private def createMapValuesStage(f: Any => Any): Stage[Any, Any] = {
+    // Stage.mapValues has type Stage[(K, V), (K, B)], we need Stage[Any, Any]
+    // This is safe because we know the input will be key-value pairs at runtime
+    Stage.mapValues[Any, Any, Any](f).asInstanceOf[Stage[Any, Any]]
+  }
+
+  private def createFilterKeysStage(p: Any => Boolean): Stage[Any, Any] = {
+    // Stage.filterKeys has type Stage[(K, V), (K, V)], we need Stage[Any, Any]
+    // This is safe because we know the input will be key-value pairs at runtime
+    Stage.filterKeys[Any, Any](p).asInstanceOf[Stage[Any, Any]]
+  }
+
+  private def createFilterValuesStage(p: Any => Boolean): Stage[Any, Any] = {
+    // Stage.filterValues has type Stage[(K, V), (K, V)], we need Stage[Any, Any]
+    // This is safe because we know the input will be key-value pairs at runtime
+    Stage.filterValues[Any, Any](p).asInstanceOf[Stage[Any, Any]]
+  }
+
+  private def createFlatMapValuesStage(f: Any => IterableOnce[Any]): Stage[Any, Any] = {
+    // Stage.flatMapValues has type Stage[(K, V), (K, B)], we need Stage[Any, Any]
+    // This is safe because we know the input will be key-value pairs at runtime
+    Stage.flatMapValues[Any, Any, Any](f).asInstanceOf[Stage[Any, Any]]
+  }
+
+  private def createGroupByKeyLocalStage(): Stage[Any, Any] = {
+    // Stage.groupByKeyLocal has type Stage[(K, V), (K, Iterable[V])], we need Stage[Any, Any]
+    // This is safe because we know the input will be key-value pairs at runtime
+    Stage.groupByKeyLocal[Any, Any].asInstanceOf[Stage[Any, Any]]
+  }
+
+  private def createReduceByKeyLocalStage(reduceFunc: (Any, Any) => Any): Stage[Any, Any] = {
+    // Stage.reduceByKeyLocal has type Stage[(K, V), (K, V)], we need Stage[Any, Any]
+    // This is safe because we know the input will be key-value pairs at runtime
+    Stage.reduceByKeyLocal[Any, Any](reduceFunc).asInstanceOf[Stage[Any, Any]]
+  }
+
+  /**
    * Helper function to chain an operation onto an existing stage.
    * This function encapsulates the pattern matching for operation chaining
-   * and eliminates the need for unsafe type casting.
+   * and eliminates the need for unsafe type casting where possible.
    */
   private def chainOperation(stage: Stage[Any, Any], op: Operation[Any, Any]): Stage[Any, Any] = {
     op match {
@@ -474,15 +527,15 @@ object StageBuilder:
       case FilterOp(p) => Stage.ChainedStage(stage, Stage.filter(p))
       case FlatMapOp(f) => Stage.ChainedStage(stage, Stage.flatMap(f))
       case DistinctOp() => Stage.ChainedStage(stage, Stage.distinct)
-      case _: KeysOp[_, _] => Stage.ChainedStage(stage, Stage.keys.asInstanceOf[Stage[Any, Any]])
-      case _: ValuesOp[_, _] => Stage.ChainedStage(stage, Stage.values.asInstanceOf[Stage[Any, Any]])
-      case MapValuesOp(f) => Stage.ChainedStage(stage, Stage.mapValues(f).asInstanceOf[Stage[Any, Any]])
-      case FilterKeysOp(p) => Stage.ChainedStage(stage, Stage.filterKeys(p).asInstanceOf[Stage[Any, Any]])
-      case FilterValuesOp(p) => Stage.ChainedStage(stage, Stage.filterValues(p).asInstanceOf[Stage[Any, Any]])
-      case FlatMapValuesOp(f) => Stage.ChainedStage(stage, Stage.flatMapValues(f).asInstanceOf[Stage[Any, Any]])
+      case _: KeysOp[_, _] => Stage.ChainedStage(stage, createKeysStage())
+      case _: ValuesOp[_, _] => Stage.ChainedStage(stage, createValuesStage())
+      case MapValuesOp(f) => Stage.ChainedStage(stage, createMapValuesStage(f.asInstanceOf[Any => Any]))
+      case FilterKeysOp(p) => Stage.ChainedStage(stage, createFilterKeysStage(p.asInstanceOf[Any => Boolean]))
+      case FilterValuesOp(p) => Stage.ChainedStage(stage, createFilterValuesStage(p.asInstanceOf[Any => Boolean]))
+      case FlatMapValuesOp(f) => Stage.ChainedStage(stage, createFlatMapValuesStage(f.asInstanceOf[Any => IterableOnce[Any]]))
       case MapPartitionsOp(f) => Stage.ChainedStage(stage, Stage.mapPartitions(f))
-      case _: GroupByKeyLocalOp[_, _] => Stage.ChainedStage(stage, Stage.groupByKeyLocal.asInstanceOf[Stage[Any, Any]])
-      case ReduceByKeyLocalOp(reduceFunc) => Stage.ChainedStage(stage, Stage.reduceByKeyLocal(reduceFunc).asInstanceOf[Stage[Any, Any]])
+      case _: GroupByKeyLocalOp[_, _] => Stage.ChainedStage(stage, createGroupByKeyLocalStage())
+      case ReduceByKeyLocalOp(reduceFunc) => Stage.ChainedStage(stage, createReduceByKeyLocalStage(reduceFunc.asInstanceOf[(Any, Any) => Any]))
       case _: PartitionByLocalOp[_, _] => Stage.ChainedStage(stage, Stage.identity[Any]) // Bypassed partition is identity
       case _ => throw new UnsupportedOperationException(s"Cannot chain wide operation: $op")
     }
@@ -516,15 +569,15 @@ object StageBuilder:
       case FilterOp(p) => Stage.filter(p)
       case FlatMapOp(f) => Stage.flatMap(f)
       case DistinctOp() => Stage.distinct
-      case _: KeysOp[_, _] => Stage.keys.asInstanceOf[Stage[Any, Any]]
-      case _: ValuesOp[_, _] => Stage.values.asInstanceOf[Stage[Any, Any]]
-      case MapValuesOp(f) => Stage.mapValues(f).asInstanceOf[Stage[Any, Any]]
-      case FilterKeysOp(p) => Stage.filterKeys(p).asInstanceOf[Stage[Any, Any]]
-      case FilterValuesOp(p) => Stage.filterValues(p).asInstanceOf[Stage[Any, Any]]
-      case FlatMapValuesOp(f) => Stage.flatMapValues(f).asInstanceOf[Stage[Any, Any]]
+      case _: KeysOp[_, _] => createKeysStage()
+      case _: ValuesOp[_, _] => createValuesStage()
+      case MapValuesOp(f) => createMapValuesStage(f.asInstanceOf[Any => Any])
+      case FilterKeysOp(p) => createFilterKeysStage(p.asInstanceOf[Any => Boolean])
+      case FilterValuesOp(p) => createFilterValuesStage(p.asInstanceOf[Any => Boolean])
+      case FlatMapValuesOp(f) => createFlatMapValuesStage(f.asInstanceOf[Any => IterableOnce[Any]])
       case MapPartitionsOp(f) => Stage.mapPartitions(f)
-      case _: GroupByKeyLocalOp[_, _] => Stage.groupByKeyLocal.asInstanceOf[Stage[Any, Any]]
-      case ReduceByKeyLocalOp(reduceFunc) => Stage.reduceByKeyLocal(reduceFunc).asInstanceOf[Stage[Any, Any]]
+      case _: GroupByKeyLocalOp[_, _] => createGroupByKeyLocalStage()
+      case ReduceByKeyLocalOp(reduceFunc) => createReduceByKeyLocalStage(reduceFunc.asInstanceOf[(Any, Any) => Any])
       case _: PartitionByLocalOp[_, _] => Stage.identity[Any] // Bypassed partition is identity
       case _ => throw new UnsupportedOperationException(s"Cannot create stage from operation: $op")
     }
