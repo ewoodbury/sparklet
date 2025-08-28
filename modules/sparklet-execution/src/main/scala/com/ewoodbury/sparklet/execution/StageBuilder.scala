@@ -177,7 +177,7 @@ object StageBuilder:
     }
 
     // 2. Every dependency target exists
-    graph.dependencies.foreach { case (stageId, deps) =>
+    graph.dependencies.foreachEntry { (stageId, deps) =>
       if (!graph.stages.contains(stageId)) {
         throw new IllegalStateException(s"Stage $stageId has dependencies but is not in stages map")
       }
@@ -189,7 +189,7 @@ object StageBuilder:
     }
 
     // 3. No stage lists itself as dependency (prevents infinite loops)
-    graph.dependencies.foreach { case (stageId, deps) =>
+    graph.dependencies.foreachEntry { (stageId, deps) =>
       if (deps.contains(stageId)) {
         throw new IllegalStateException(s"Stage $stageId lists itself as a dependency")
       }
@@ -289,7 +289,7 @@ object StageBuilder:
     val stageIds = graph.stages.keys.toSeq.sorted
     if (stageIds.nonEmpty) {
       // Check starts from 0
-      if (stageIds.head.toInt != 0) {
+      if (stageIds.headOption.get.toInt != 0) {
         throw new IllegalStateException(s"Stage IDs should start from 0, but found minimum ID: ${stageIds.head.toInt}")
       }
 
@@ -1053,12 +1053,12 @@ object StageBuilder:
 
     if (path.length == 1) {
       // Single stage - just return it
-      graph.stages(path.head).stage
+      graph.stages(path.headOption.get).stage
     } else {
       // Multiple stages - chain them together
       // Start with the first stage and chain each subsequent stage
       val stages = path.map(graph.stages(_).stage)
-      stages.drop(1).foldLeft(stages.head) { (chained, nextStage) =>
+      stages.drop(1).foldLeft(stages.headOption.get) { (chained, nextStage) =>
         Stage.ChainedStage(chained.asInstanceOf[Stage[Any, Any]], nextStage.asInstanceOf[Stage[Any, Any]])
       }
     }
