@@ -67,9 +67,10 @@ object StageBuilder:
   )
 
   /**
-   * Mutable builder for accumulating operations during stage construction
+   * Immutable stage draft for accumulating operations during stage construction.
+   * All fields are immutable; mutations create new instances.
    */
-  private case class MutableStageBuilder(
+  private case class StageDraft(
       id: StageId,
       ops: Vector[Operation],
       inputSources: Seq[InputSource],
@@ -88,17 +89,46 @@ object StageBuilder:
       id
 
   /**
+   * Encapsulated mutation helpers to centralize stage builder and dependency management.
+   * Provides single points for invariant checking and reduces accidental misuse.
+   */
+  private def putBuilder(
+      builderMap: mutable.Map[StageId, StageDraft],
+      builder: StageDraft
+  ): Unit = {
+    builderMap(builder.id) = builder
+  }
+
+  private def putNewBuilder(
+      builderMap: mutable.Map[StageId, StageDraft],
+      builder: StageDraft
+  ): Unit = {
+    // Check invariant: no duplicate stage IDs
+    require(!builderMap.contains(builder.id), s"Stage ID ${builder.id} already exists in builder map")
+    builderMap(builder.id) = builder
+  }
+
+  private def addDependency(
+      dependencies: mutable.Map[StageId, mutable.Set[StageId]],
+      child: StageId,
+      parent: StageId
+  ): Unit = {
+    require(!(child == parent), s"Stage $child cannot depend on itself")
+    dependencies.getOrElseUpdate(child, mutable.Set.empty) += parent
+  }
+
+  /**
    * Builds a complete stage graph from a plan using the unified builder approach.
    * This replaces the old recursive approach with a more structured operation accumulation.
    */
   def buildStageGraph[A](plan: Plan[A]): StageGraph = {
     val ctx = BuildContext(0)
-    val builderMap = mutable.Map[StageId, MutableStageBuilder]()
+    val builderMap = mutable.Map[StageId, StageDraft]()
     val dependencies = mutable.Map[StageId, mutable.Set[StageId]]()
 
     val (finalStageId, _) = buildStagesFromPlan(ctx, plan, builderMap, dependencies)
 
-    // Convert MutableStageBuilder instances to StageInfo instances
+    // Convert StageDraft instances to StageInfo instances
     val stageMap = mutable.Map[StageId, StageInfo]()
     builderMap.foreachEntry { (stageId, builder) =>
       val stage = if (builder.isShuffle) {
@@ -242,7 +272,7 @@ object StageBuilder:
     }
 
     // For multiple operations, build the chain efficiently
-    ops.drop(1).foldLeft(createStageFromOp(ops.headOption.get)) { (stage, op) =>
+    ops.drop(1).foldLeft(createStageFromOp(ops.head)) { (stage, op) =>
       op match {
         case MapOp(f) => Stage.ChainedStage(stage, Stage.map(f.asInstanceOf[Any => Any]))
         case FilterOp(p) => Stage.ChainedStage(stage, Stage.filter(p.asInstanceOf[Any => Boolean]))
@@ -355,14 +385,14 @@ object StageBuilder:
   private def buildStagesFromPlan[A](
       ctx: BuildContext,
       plan: Plan[A],
-      builderMap: mutable.Map[StageId, MutableStageBuilder],
+      builderMap: mutable.Map[StageId, StageDraft],
       dependencies: mutable.Map[StageId, mutable.Set[StageId]],
   ): (StageId, Option[Plan[_]]) = {
     plan match {
       // Base case: data source - don't create a stage yet, let operations chain to it
       case source: Plan.Source[_] =>
         val stageId = ctx.freshId()
-        builderMap(stageId) = MutableStageBuilder(
+        putNewBuilder(builderMap, StageDraft(
           id = stageId,
           ops = Vector.empty[Operation], // No operations for source - operations will be chained here
           inputSources = Seq(SourceInput(source.partitions)),
@@ -370,7 +400,7 @@ object StageBuilder:
           shuffleMeta = None,
           originalPlan = Some(source),
           outputPartitioning = Some(Partitioning(byKey = false, numPartitions = source.partitions.size)),
-        )
+        ))
         (stageId, Some(source))
 
       // Narrow transformations - accumulate operations or create new stages
@@ -435,7 +465,7 @@ object StageBuilder:
 
         // Union creates a new narrow stage that reads outputs from both input stages
         val unionStageId = ctx.freshId()
-        builderMap(unionStageId) = MutableStageBuilder(
+        putNewBuilder(builderMap, StageDraft(
           id = unionStageId,
           ops = Vector.empty[Operation], // No operations, just union of inputs
           inputSources = Seq(StageOutput(leftStageId), StageOutput(rightStageId)),
@@ -443,10 +473,10 @@ object StageBuilder:
           shuffleMeta = None,
           originalPlan = Some(plan): Option[Plan[_]],
           outputPartitioning = None, // Union doesn't preserve partitioning
-        )
+        ))
 
-        dependencies.getOrElseUpdate(unionStageId, mutable.Set.empty) += leftStageId
-        dependencies.getOrElseUpdate(unionStageId, mutable.Set.empty) += rightStageId
+        addDependency(dependencies, unionStageId, leftStageId)
+        addDependency(dependencies, unionStageId, rightStageId)
         (unionStageId, Some(plan))
 
       // Wide transformations (create shuffle boundaries)
@@ -574,7 +604,7 @@ object StageBuilder:
       ctx: BuildContext,
       sourceStageId: StageId,
       op: Operation,
-      builderMap: mutable.Map[StageId, MutableStageBuilder],
+      builderMap: mutable.Map[StageId, StageDraft],
       dependencies: mutable.Map[StageId, mutable.Set[StageId]],
   ): StageId = {
     val sourceBuilder = builderMap(sourceStageId)
@@ -582,7 +612,7 @@ object StageBuilder:
     if (sourceBuilder.isShuffle) {
       // Can't extend a shuffle stage, create a new narrow stage
       val newStageId = ctx.freshId()
-      val newBuilder = MutableStageBuilder(
+      val newBuilder = StageDraft(
         id = newStageId,
         ops = Vector(op),
         inputSources = Seq(StageOutput(sourceStageId)),
@@ -591,10 +621,10 @@ object StageBuilder:
         originalPlan = None,
         outputPartitioning = updatePartitioning(sourceBuilder.outputPartitioning, op),
       )
-      builderMap(newStageId) = newBuilder
+      putNewBuilder(builderMap, newBuilder)
 
       // Add dependency: new stage depends on source stage
-      dependencies.getOrElseUpdate(newStageId, mutable.Set.empty) += sourceStageId
+      addDependency(dependencies, newStageId, sourceStageId)
       newStageId
     } else {
       // Check if we can chain this operation - only if the stage has a single producing path
@@ -612,12 +642,12 @@ object StageBuilder:
           ops = updatedOps,
           outputPartitioning = updatePartitioning(sourceBuilder.outputPartitioning, op)
         )
-        builderMap(sourceStageId) = updatedBuilder
+        putBuilder(builderMap, updatedBuilder)
         sourceStageId
       } else {
         // Create a new stage with this operation
         val newStageId = ctx.freshId()
-        val newBuilder = MutableStageBuilder(
+        val newBuilder = StageDraft(
           id = newStageId,
           ops = Vector(op),
           inputSources = sourceBuilder.inputSources,
@@ -626,12 +656,12 @@ object StageBuilder:
           originalPlan = None,
           outputPartitioning = updatePartitioning(sourceBuilder.outputPartitioning, op),
         )
-        builderMap(newStageId) = newBuilder
+        putNewBuilder(builderMap, newBuilder)
 
         // Copy dependencies from source stage
         sourceBuilder.inputSources.foreach {
           case StageOutput(upstreamId) =>
-            dependencies.getOrElseUpdate(newStageId, mutable.Set.empty) += upstreamId
+            addDependency(dependencies, newStageId, upstreamId)
           case _ => // SourceInput and ShuffleInput don't create dependencies
         }
 
@@ -648,7 +678,7 @@ object StageBuilder:
       ctx: BuildContext,
       upstreamIds: Seq[StageId],
       wideOp: WideOp,
-      builderMap: mutable.Map[StageId, MutableStageBuilder],
+      builderMap: mutable.Map[StageId, StageDraft],
       dependencies: mutable.Map[StageId, mutable.Set[StageId]],
       originalPlan: Option[Plan[_]] = None,
   ): StageId = {
@@ -692,7 +722,7 @@ object StageBuilder:
         Some(Partitioning(byKey = false, numPartitions = meta.numPartitions))
     }
 
-    builderMap(shuffleStageId) = MutableStageBuilder(
+    putNewBuilder(builderMap, StageDraft(
       id = shuffleStageId,
       ops = Vector.empty[Operation], // Shuffle stages don't have narrow operations
       inputSources = shuffleInputSources,
@@ -700,11 +730,11 @@ object StageBuilder:
       shuffleMeta = Some(wideOp),
       originalPlan = originalPlan,
       outputPartitioning = outputPartitioning,
-    )
+    ))
 
     // Add dependencies for all upstream stages
     upstreamIds.foreach { upstreamId =>
-      dependencies.getOrElseUpdate(shuffleStageId, mutable.Set.empty) += upstreamId
+      addDependency(dependencies, shuffleStageId, upstreamId)
     }
 
     shuffleStageId
@@ -873,12 +903,12 @@ object StageBuilder:
 
     if (path.length == 1) {
       // Single stage - just return it
-      graph.stages(path.headOption.get).stage
+      graph.stages(path.head).stage
     } else {
       // Multiple stages - chain them together
       // Start with the first stage and chain each subsequent stage
       val stages = path.map(graph.stages(_).stage)
-      stages.drop(1).foldLeft(stages.headOption.get) { (chained, nextStage) =>
+      stages.drop(1).foldLeft(stages.head) { (chained, nextStage) =>
         Stage.ChainedStage(chained.asInstanceOf[Stage[Any, Any]], nextStage.asInstanceOf[Stage[Any, Any]])
       }
     }
