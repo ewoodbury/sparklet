@@ -21,13 +21,13 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     val mapOp = MapOp[Int, String](_.toString)
     val filterOp = FilterOp[Int](_ > 5)
     val flatMapOp = FlatMapOp[Int, String](x => Seq(x.toString))
-    val distinctOp = DistinctOp()
+    val distinctOp = DistinctOp[Int]()
     val mapPartitionsOp = MapPartitionsOp[Int, String](_.map(_.toString))
 
     // Test wide operations can be created
     val gbkOp = GroupByKeyOp[Int, String](defaultPartitions)
     val rbkOp = ReduceByKeyOp[Int, String](_ + _, defaultPartitions)
-    val sortOp = SortByOp[Int, String](_.length, defaultPartitions)
+    val sortOp = SortByOp[String, Int](_.length, defaultPartitions)
     val partitionOp = PartitionByOp[Int, String](defaultPartitions)
     val repartitionOp = RepartitionOp[String](defaultPartitions)
     val coalesceOp = CoalesceOp[String](defaultPartitions)
@@ -38,7 +38,7 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     mapOp shouldBe a[MapOp[_, _]]
     filterOp shouldBe a[FilterOp[_]]
     flatMapOp shouldBe a[FlatMapOp[_, _]]
-    distinctOp shouldBe a[DistinctOp]
+    distinctOp shouldBe a[DistinctOp[_]]
     mapPartitionsOp shouldBe a[MapPartitionsOp[_, _]]
     gbkOp shouldBe a[GroupByKeyOp[_, _]]
     rbkOp shouldBe a[ReduceByKeyOp[_, _]]
