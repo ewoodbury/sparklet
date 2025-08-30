@@ -16,21 +16,31 @@ final class ShuffleHandler[F[_]: Sync](
 ) extends StrictLogging:
 
   /**
-   * Handles shuffle output. The cast is necessary as the results from `executeStage` are untyped.
+   * Handles shuffle output with improved type safety. The cast is necessary as the results from 
+   * `executeStage` are untyped, but we centralize it here with clear documentation.
    */
   @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
   def handleShuffleOutput(
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],
+  ): F[ShuffleId] = handleShuffleOutputTyped[Any, Any](stageInfo, results)
+      
+  /**
+   * Type-safe shuffle output handler that can be called when types are known.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
+  def handleShuffleOutputTyped[K, V](
+      stageInfo: StageBuilder.StageInfo,
+      results: Seq[Partition[_]],
   ): F[ShuffleId] =
     Sync[F].delay {
-      val keyValueResults = results.asInstanceOf[Seq[Partition[(Any, Any)]]]
-      val shuffleData = shuffle.partitionByKey[Any, Any](
+      val keyValueResults = results.asInstanceOf[Seq[Partition[(K, V)]]]
+      val shuffleData = shuffle.partitionByKey[K, V](
         data = keyValueResults,
         numPartitions = SparkletConf.get.defaultShufflePartitions,
         partitioner = partitioner,
       )
-      val actualShuffleId = shuffle.write[Any, Any](shuffleData)
+      val actualShuffleId = shuffle.write[K, V](shuffleData)
       logger.debug(
         s"Stored shuffle data for stage ${stageInfo.id.toInt} with shuffle ID ${actualShuffleId.toInt}",
       )
@@ -87,7 +97,9 @@ final class ShuffleHandler[F[_]: Sync](
       }
       .getOrElse(SparkletConf.get.defaultShufflePartitions)
 
-    val elements: Seq[A] = results.flatMap(_.data.asInstanceOf[Iterable[A]])
+    val elements: Seq[A] = results.flatMap(partition => 
+      partition.data.asInstanceOf[Iterable[A]]
+    )
     val keys: Seq[S] = elements.map(sortBy.keyFunc)
 
     val sample = takeKeySample(keys)
@@ -98,6 +110,7 @@ final class ShuffleHandler[F[_]: Sync](
       def partition(key: Any, numPartitions: Int): Int = {
         if (numPartitions <= 1 || cutPoints.isEmpty) return 0
 
+        // The key should be of type S, but Any is required by Partitioner interface
         val k = key.asInstanceOf[S]
 
         @annotation.tailrec
@@ -118,8 +131,8 @@ final class ShuffleHandler[F[_]: Sync](
 
     // Form (key, value) pairs per input partition
     val kvPartitions: Seq[Partition[(S, A)]] =
-      results.asInstanceOf[Seq[Partition[A]]].map { p =>
-        val it = p.data.iterator
+      results.asInstanceOf[Seq[Partition[A]]].map { partition =>
+        val it = partition.data.iterator
         val buf = scala.collection.mutable.ArrayBuffer.empty[(S, A)]
         while (it.hasNext) {
           val a = it.next()

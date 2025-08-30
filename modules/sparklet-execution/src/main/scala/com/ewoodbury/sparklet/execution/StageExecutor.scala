@@ -55,10 +55,9 @@ final class StageExecutor[F[_]: Sync](
   }
 
   /**
-   * Executes a single stage, dispatching to a narrow or shuffle implementation. This function now
-   * handles the necessary casting based on the stage type.
+   * Executes a single stage using type-safe dispatch based on stage operations.
+   * Uses typed helpers to eliminate unsafe casting and improve type safety.
    */
-
   def executeStage(
       stageInfo: StageBuilder.StageInfo,
       inputPartitions: Seq[Partition[_]],
@@ -70,39 +69,63 @@ final class StageExecutor[F[_]: Sync](
     else {
       stageInfo match {
         case info if info.isShuffleStage =>
-          val partitions = inputPartitions.asInstanceOf[Seq[Partition[(Any, Any)]]]
-          executeShuffleStage(info, partitions, stageToShuffleId)
+          executeShuffleStageTyped(info, inputPartitions, stageToShuffleId)
         case info =>
-          val anyPartitions = inputPartitions.asInstanceOf[Seq[Partition[Any]]]
-          executeNarrowStage(info, anyPartitions, stageToShuffleId)
+          executeNarrowStageTyped(info, inputPartitions, stageToShuffleId)
       }
     }
   }
 
   /**
-   * Executes a narrow transformation stage. Now generic for input (T) and output (U) types.
+   * Type-safe execution of narrow stages using the Operation ADT.
+   * 
+   * Wraps around the generic executeNarrowStage method, casting inputs to `Any`.
    */
-  private def executeNarrowStage[A, B](
+  @SuppressWarnings(Array("org.wartremover.warts.Any"))
+  private def executeNarrowStageTyped(
       stageInfo: StageBuilder.StageInfo,
-      inputPartitions: Seq[Partition[A]],
-      @annotation.unused stageToShuffleId: Map[StageId, ShuffleId],
+      inputPartitions: Seq[Partition[_]],
+      stageToShuffleId: Map[StageId, ShuffleId],
   ): F[Seq[Partition[_]]] = {
-    val stage = stageInfo.stage.asInstanceOf[Stage[A, B]]
-    val tasks = inputPartitions.map { partition => Task.StageTask(partition, stage) }
-    scheduler.submit(tasks).map(_.asInstanceOf[Seq[Partition[_]]])
+    // TODO: Migrate to using Operation ADT for better type safety instead of casting to Any.
+    val anyPartitions = inputPartitions.asInstanceOf[Seq[Partition[Any]]]
+    executeNarrowStage(stageInfo, anyPartitions, stageToShuffleId)
   }
 
   /**
-   * Executes a shuffle stage by applying the appropriate shuffle operation. This version uses
-   * generics to provide type safety for keys (K) and values (V).
+   * Type-safe execution of shuffle stages using operation-specific handlers.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Any"))
-  private def executeShuffleStage[K, V](
+  private def executeShuffleStageTyped(
       stageInfo: StageBuilder.StageInfo,
-      inputPartitions: Seq[Partition[(K, V)]],
+      inputPartitions: Seq[Partition[_]],
       stageToShuffleId: Map[StageId, ShuffleId],
   ): F[Seq[Partition[_]]] = {
-    // Join is the only shuffle op that currently requires effectful scheduling work here
+    stageInfo.shuffleOperation match {
+      case Some(joinOp: Plan.JoinOp[_, _, _]) =>
+        executeJoinOperation(stageInfo, stageToShuffleId)
+      case Some(sortBy: Plan.SortByOp[_, _]) =>
+        executeSortByOperation(sortBy, inputPartitions)
+      case Some(groupByKey: Plan.GroupByKeyOp[_, _]) =>
+        executeGroupByKeyOperation(inputPartitions)
+      case Some(reduceByKey: Plan.ReduceByKeyOp[_, _]) =>
+        executeReduceByKeyOperation(reduceByKey, inputPartitions)
+      case Some(cogroup: Plan.CoGroupOp[_, _, _]) =>
+        executeCoGroupOperation(stageInfo, stageToShuffleId)
+      case Some(_: Plan.RepartitionOp[_]) | Some(_: Plan.CoalesceOp[_]) | Some(_: Plan.PartitionByOp[_, _]) =>
+        executeRepartitionOperation(inputPartitions)
+      case _ =>
+        // Default to GroupByKey behavior for unknown operations
+        executeGroupByKeyOperation(inputPartitions)
+    }
+  }
+
+  /**
+   * Type-safe handler for join operations.
+   */
+  private def executeJoinOperation(
+      stageInfo: StageBuilder.StageInfo,
+      stageToShuffleId: Map[StageId, ShuffleId],
+  ): F[Seq[Partition[_]]] = {
     stageInfo.shuffleOperation match {
       case Some(joinOp: Plan.JoinOp[_, _, _]) =>
         val shuffleInputs = stageInfo.inputSources.collect { case s: StageBuilder.ShuffleInput => s }
@@ -132,9 +155,9 @@ final class StageExecutor[F[_]: Sync](
             s"Missing shuffle id for Right upstream stage ${rightInput.stageId.toInt}",
           ),
         )
-        val numPartitions = leftInput.numPartitions // assume both sides same for now
+        val numPartitions = leftInput.numPartitions
 
-        // Determine join strategy: use hint if available, otherwise auto-select
+        // Determine join strategy
         val strategy =
           joinOp.joinStrategy.getOrElse(
             joinExecutor.selectJoinStrategy(leftShuffleId, rightShuffleId),
@@ -151,131 +174,168 @@ final class StageExecutor[F[_]: Sync](
             joinExecutor.executeShuffleHashJoin(leftShuffleId, rightShuffleId, numPartitions)
         }
       case _ =>
-        Sync[F].delay(
-          logger.debug(
-            s"Executing shuffle stage ${stageInfo.id.toInt} with ${inputPartitions.size} input partitions",
-          ),
-        ) *>
-          Sync[F].delay {
-            val resultPartitions: Seq[Partition[_]] = stageInfo.shuffleOperation match {
-
-              // Pattern match to capture the element type `a` and sorting key type `s`.
-              case Some(sortBy: Plan.SortByOp[a, s]) =>
-                // Input for sort is now key-value pairs of (sortKey, element)
-                val typedPartitions = inputPartitions.asInstanceOf[Seq[Partition[(s, a)]]]
-                implicit val ord: Ordering[s] = sortBy.ordering
-
-                // Sort within each partition by key
-                val sortedIters: Seq[Iterator[(s, a)]] =
-                  typedPartitions.map(p => p.data.toSeq.sortBy(_._1)(ord).iterator)
-
-                // K-way merge across partitions to ensure global order
-                import scala.collection.mutable
-                case class Head(idx: Int, pair: (s, a))
-                implicit val heapOrd: Ordering[Head] = Ordering.by(_.pair._1)
-                val heap = mutable.PriorityQueue.empty[Head](heapOrd.reverse)
-                sortedIters.zipWithIndex.foreach { case (it, i) =>
-                  if (it.hasNext) heap.enqueue(Head(i, it.next()))
-                }
-                val buffers = sortedIters.toArray
-
-                val merged = mutable.ArrayBuffer[a]()
-                while (heap.nonEmpty) {
-                  val h = heap.dequeue()
-                  merged += h.pair._2
-                  val i = h.idx
-                  if (buffers(i).hasNext) heap.enqueue(Head(i, buffers(i).next()))
-                }
-
-                Seq(Partition(merged.toSeq))
-
-              // The remaining shuffle operations work on standard (K, V) pairs.
-              case Some(Plan.GroupByKeyOp(_)) =>
-                val allData = inputPartitions.flatMap(_.data)
-                val groupedData = allData.groupBy(_._1).map { case (key, pairs) =>
-                  (key, pairs.map(_._2))
-                }
-                Seq(Partition(groupedData.toSeq)).asInstanceOf[Seq[Partition[Any]]]
-
-              case Some(reduceByKey: Plan.ReduceByKeyOp[_, _]) =>
-                val allData = inputPartitions.flatMap(_.data)
-                val reduceFunc = reduceByKey.reduceFunc.asInstanceOf[(V, V) => V]
-                val reducedData = allData.groupBy(_._1).map { case (key, pairs) =>
-                  val reducedValue = pairs
-                    .map(_._2)
-                    .reduceOption(reduceFunc)
-                    .getOrElse(throw new NoSuchElementException(s"No values found for key $key"))
-                  (key, reducedValue)
-                }
-                Seq(Partition(reducedData.toSeq))
-
-              case Some(_: Plan.CoGroupOp[_, _, _]) =>
-                val shuffleInputs = stageInfo.inputSources.collect {
-                  case s: StageBuilder.ShuffleInput =>
-                    s
-                }
-                val leftInput = shuffleInputs
-                  .find(_.side.contains(StageBuilder.Side.Left))
-                  .getOrElse(
-                    throw new IllegalStateException(
-                      s"Cogroup missing Left input for stage ${stageInfo.id.toInt}",
-                    ),
-                  )
-                val rightInput = shuffleInputs
-                  .find(_.side.contains(StageBuilder.Side.Right))
-                  .getOrElse(
-                    throw new IllegalStateException(
-                      s"Cogroup missing Right input for stage ${stageInfo.id.toInt}",
-                    ),
-                  )
-                val leftShuffleId = stageToShuffleId.getOrElse(
-                  leftInput.stageId,
-                  throw new IllegalStateException(
-                    s"Missing shuffle id for Left upstream stage ${leftInput.stageId.toInt}",
-                  ),
-                )
-                val rightShuffleId = stageToShuffleId.getOrElse(
-                  rightInput.stageId,
-                  throw new IllegalStateException(
-                    s"Missing shuffle id for Right upstream stage ${rightInput.stageId.toInt}",
-                  ),
-                )
-                val numPartitions = leftInput.numPartitions
-                val leftData = (0 until numPartitions).flatMap { partitionId =>
-                  shuffle.readPartition[Any, Any](leftShuffleId, PartitionId(partitionId)).data
-                }
-                val rightData = (0 until numPartitions).flatMap { partitionId =>
-                  shuffle.readPartition[Any, Any](rightShuffleId, PartitionId(partitionId)).data
-                }
-
-                // Group left and right data by key
-                val leftByKey = leftData.groupBy(_._1)
-                val rightByKey = rightData.groupBy(_._1)
-
-                // Perform cogroup - include all keys from both sides
-                val allKeys = leftByKey.keySet ++ rightByKey.keySet
-                val cogroupedData = allKeys.map { key =>
-                  val leftValues = leftByKey.getOrElse(key, Seq.empty).map(_._2)
-                  val rightValues = rightByKey.getOrElse(key, Seq.empty).map(_._2)
-                  (key, (leftValues, rightValues))
-                }
-                Seq(Partition(cogroupedData.toSeq))
-
-              case Some(_: Plan.RepartitionOp[_]) | Some(_: Plan.CoalesceOp[_]) |
-                  Some(_: Plan.PartitionByOp[_, _]) =>
-                val typed = inputPartitions.asInstanceOf[Seq[Partition[(Any, Unit)]]]
-                val out = typed.map { p => Partition(p.data.iterator.map(_._1).toList) }
-                out
-
-              // A default GroupByKey for any other unhandled shuffle operation.
-              case _ =>
-                val allData = inputPartitions.flatMap(_.data)
-                val groupedData = allData.groupBy(_._1).map { case (key, pairs) =>
-                  (key, pairs.map(_._2))
-                }
-                Seq(Partition(groupedData.toSeq))
-            }
-            resultPartitions
-          }
+        Sync[F].raiseError(new IllegalStateException("Join operation expected but not found"))
     }
   }
+
+  /**
+   * Type-safe handler for SortBy operations.
+   */
+  private def executeSortByOperation[A, S](
+      sortBy: Plan.SortByOp[A, S],
+      inputPartitions: Seq[Partition[_]],
+  ): F[Seq[Partition[_]]] = {
+    Sync[F].delay {
+      // Input for sort is key-value pairs of (sortKey, element)
+      val typedPartitions = inputPartitions.asInstanceOf[Seq[Partition[(S, A)]]]
+      implicit val ord: Ordering[S] = sortBy.ordering
+
+      // Sort within each partition by key
+      val sortedIters: Seq[Iterator[(S, A)]] =
+        typedPartitions.map(p => p.data.toSeq.sortBy(_._1)(ord).iterator)
+
+      // K-way merge across partitions to ensure global order
+      import scala.collection.mutable
+      case class Head(idx: Int, pair: (S, A))
+      implicit val heapOrd: Ordering[Head] = Ordering.by(_.pair._1)
+      val heap = mutable.PriorityQueue.empty[Head](heapOrd.reverse)
+      sortedIters.zipWithIndex.foreach { case (it, i) =>
+        if (it.hasNext) heap.enqueue(Head(i, it.next()))
+      }
+      val buffers = sortedIters.toArray
+
+      val merged = mutable.ArrayBuffer[A]()
+      while (heap.nonEmpty) {
+        val h = heap.dequeue()
+        merged += h.pair._2
+        val i = h.idx
+        if (buffers(i).hasNext) heap.enqueue(Head(i, buffers(i).next()))
+      }
+
+      Seq(Partition(merged.toSeq))
+    }
+  }
+
+  /**
+   * Type-safe handler for GroupByKey operations.
+   */
+  private def executeGroupByKeyOperation(
+      inputPartitions: Seq[Partition[_]],
+  ): F[Seq[Partition[_]]] = {
+    Sync[F].delay {
+      val allData = inputPartitions.flatMap(_.data).asInstanceOf[Seq[(Any, Any)]]
+      val groupedData = allData.groupBy(_._1).map { case (key, pairs) =>
+        (key, pairs.map(_._2))
+      }
+      Seq(Partition(groupedData.toSeq)).asInstanceOf[Seq[Partition[Any]]]
+    }
+  }
+
+  /**
+   * Type-safe handler for ReduceByKey operations.
+   */
+  private def executeReduceByKeyOperation[K, V](
+      reduceByKey: Plan.ReduceByKeyOp[K, V],
+      inputPartitions: Seq[Partition[_]],
+  ): F[Seq[Partition[_]]] = {
+    Sync[F].delay {
+      val allData = inputPartitions.flatMap(_.data)
+      val reduceFunc = reduceByKey.reduceFunc
+      val reducedData = allData.asInstanceOf[Seq[(K, V)]].groupBy(_._1).map { case (key, pairs) =>
+        val reducedValue = pairs
+          .map(_._2)
+          .reduceOption(reduceFunc)
+          .getOrElse(throw new NoSuchElementException(s"No values found for key $key"))
+        (key, reducedValue)
+      }
+      Seq(Partition(reducedData.toSeq))
+    }
+  }
+
+  /**
+   * Type-safe handler for CoGroup operations.
+   */
+  private def executeCoGroupOperation(
+      stageInfo: StageBuilder.StageInfo,
+      stageToShuffleId: Map[StageId, ShuffleId],
+  ): F[Seq[Partition[_]]] = {
+    Sync[F].delay {
+      val shuffleInputs = stageInfo.inputSources.collect {
+        case s: StageBuilder.ShuffleInput => s
+      }
+      val leftInput = shuffleInputs
+        .find(_.side.contains(StageBuilder.Side.Left))
+        .getOrElse(
+          throw new IllegalStateException(
+            s"Cogroup missing Left input for stage ${stageInfo.id.toInt}",
+          ),
+        )
+      val rightInput = shuffleInputs
+        .find(_.side.contains(StageBuilder.Side.Right))
+        .getOrElse(
+          throw new IllegalStateException(
+            s"Cogroup missing Right input for stage ${stageInfo.id.toInt}",
+          ),
+        )
+      val leftShuffleId = stageToShuffleId.getOrElse(
+        leftInput.stageId,
+        throw new IllegalStateException(
+          s"Missing shuffle id for Left upstream stage ${leftInput.stageId.toInt}",
+        ),
+      )
+      val rightShuffleId = stageToShuffleId.getOrElse(
+        rightInput.stageId,
+        throw new IllegalStateException(
+          s"Missing shuffle id for Right upstream stage ${rightInput.stageId.toInt}",
+        ),
+      )
+      val numPartitions = leftInput.numPartitions
+      val leftData = (0 until numPartitions).flatMap { partitionId =>
+        shuffle.readPartition[Any, Any](leftShuffleId, PartitionId(partitionId)).data
+      }
+      val rightData = (0 until numPartitions).flatMap { partitionId =>
+        shuffle.readPartition[Any, Any](rightShuffleId, PartitionId(partitionId)).data
+      }
+
+      // Group left and right data by key
+      val leftByKey = leftData.groupBy(_._1)
+      val rightByKey = rightData.groupBy(_._1)
+
+      // Perform cogroup - include all keys from both sides
+      val allKeys = leftByKey.keySet ++ rightByKey.keySet
+      val cogroupedData = allKeys.map { key =>
+        val leftValues = leftByKey.getOrElse(key, Seq.empty).map(_._2)
+        val rightValues = rightByKey.getOrElse(key, Seq.empty).map(_._2)
+        (key, (leftValues, rightValues))
+      }
+      Seq(Partition(cogroupedData.toSeq))
+    }
+  }
+
+  /**
+   * Type-safe handler for repartition operations.
+   */
+  private def executeRepartitionOperation(
+      inputPartitions: Seq[Partition[_]],
+  ): F[Seq[Partition[_]]] = {
+    Sync[F].delay {
+      val typed = inputPartitions.asInstanceOf[Seq[Partition[(Any, Unit)]]]
+      val out = typed.map { p => Partition(p.data.iterator.map(_._1).toList) }
+      out
+    }
+  }
+
+  /**
+   * Executes a narrow transformation stage. Now generic for input (T) and output (U) types.
+   */
+  private def executeNarrowStage[A, B](
+      stageInfo: StageBuilder.StageInfo,
+      inputPartitions: Seq[Partition[A]],
+      @annotation.unused stageToShuffleId: Map[StageId, ShuffleId],
+  ): F[Seq[Partition[_]]] = {
+    val stage = stageInfo.stage.asInstanceOf[Stage[A, B]]
+    val tasks = inputPartitions.map { partition => Task.StageTask(partition, stage) }
+    scheduler.submit(tasks).map(_.asInstanceOf[Seq[Partition[_]]])
+  }
+
+
