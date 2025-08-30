@@ -16,7 +16,11 @@ object Executor:
       val stages = StageBuilder.buildStages(plan)
       stages.flatMap { case (source, stage) =>
         source.partitions.map { partition =>
-          Task.StageTask(partition.asInstanceOf[Partition[Any]], stage.asInstanceOf[Stage[Any, A]])
+          // Type-safe factory method eliminates double casting
+          Task.createStageTask[Any, A](
+            partition.asInstanceOf[Partition[Any]], 
+            stage.asInstanceOf[Stage[Any, A]]
+          )
         }
       }
     }
