@@ -56,7 +56,7 @@ final class StageExecutor[F[_]: Sync](
 
   /**
    * Executes a single stage using type-safe dispatch based on stage operations.
-   * Uses typed helpers to eliminate unsafe casting and improve.
+   * Uses typed helpers to eliminate unsafe casting and improve type safety.
    */
   def executeStage(
       stageInfo: StageBuilder.StageInfo,
