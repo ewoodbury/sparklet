@@ -423,9 +423,6 @@ object StageBuilder:
    * 2. **Efficient Chaining**: For multiple operations, uses a left fold to build the chain,
    *    creating ChainedStage instances that compose operations efficiently.
    *
-   * 3. **Type Safety**: Uses properly typed operations throughout the chain without
-   *    unsafe type casting.
-   *
    * @param ops Non-empty vector of operations to materialize
    * @return A concrete Stage that can be executed
    * @throws UnsupportedOperationException if the operation vector contains wide operations

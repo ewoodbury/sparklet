@@ -94,7 +94,7 @@ final case class ReduceByKeyOp[K, V](reduceFunc: (V, V) => V, numPartitions: Int
 final case class GroupByKeyLocalOp[K, V]() extends Operation[(K, V), (K, Iterable[V])]
 final case class ReduceByKeyLocalOp[K, V](reduceFunc: (V, V) => V) extends Operation[(K, V), (K, V)]
 final case class PartitionByLocalOp[K, V](numPartitions: Int) extends Operation[(K, V), (K, V)]
-final case class SortByOp[A, K](keyFunc: A => K, numPartitions: Int) extends Operation[A, A]
+final case class SortByOp[A, S](keyFunc: A => S, numPartitions: Int) extends Operation[A, A]
 final case class PartitionByOp[K, V](numPartitions: Int) extends Operation[(K, V), (K, V)]
 final case class RepartitionOp[A](numPartitions: Int) extends Operation[A, A]
 final case class CoalesceOp[A](numPartitions: Int) extends Operation[A, A]
