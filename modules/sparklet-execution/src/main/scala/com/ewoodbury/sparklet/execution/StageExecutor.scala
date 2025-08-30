@@ -87,7 +87,7 @@ final class StageExecutor[F[_]: Sync](
       inputPartitions: Seq[Partition[_]],
       stageToShuffleId: Map[StageId, ShuffleId],
   ): F[Seq[Partition[_]]] = {
-    // For now, cast to Any types and execute. Plan to use Operation ADT in future for better safety.
+    // TODO: Migrate to using Operation ADT for better type safety instead of casting to Any.
     val anyPartitions = inputPartitions.asInstanceOf[Seq[Partition[Any]]]
     executeNarrowStage(stageInfo, anyPartitions, stageToShuffleId)
   }
