@@ -33,6 +33,34 @@ sealed trait Task[A, B] extends RunnableTask[A, B]:
 object Task extends StrictLogging:
   private val taskLogger: Logger = logger
 
+  // Type-safe factory methods for creating tasks with better type inference
+  
+  /** Creates a StageTask from a partition and stage. */
+  def createStageTask[A, B](
+      partition: Partition[A], 
+      stage: Stage[A, B],
+      lineage: Option[LineageInfo] = None
+  ): StageTask[A, B] = StageTask(partition, stage, lineage)
+  
+  /** Creates a shuffle hash join task. */
+  def createShuffleHashJoinTask[K, L, R](
+      leftData: Seq[(K, L)],
+      rightData: Seq[(K, R)]
+  ): ShuffleHashJoinTask[K, L, R] = ShuffleHashJoinTask(leftData, rightData)
+  
+  /** Creates a broadcast hash join task. */
+  def createBroadcastHashJoinTask[K, L, R](
+      localData: Seq[(K, L)],
+      broadcastMap: Map[K, Seq[R]],
+      isRightLocal: Boolean = false
+  ): BroadcastHashJoinTask[K, L, R] = BroadcastHashJoinTask(localData, broadcastMap, isRightLocal)
+  
+  /** Creates a sort merge join task with proper ordering. */
+  def createSortMergeJoinTask[K: Ordering, L, R](
+      leftData: Seq[(K, L)],
+      rightData: Seq[(K, R)]
+  ): SortMergeJoinTask[K, L, R] = SortMergeJoinTask(leftData, rightData)
+
   /** A task that applies a map function to a partition. */
   case class MapTask[A, B](
       partition: Partition[A],
@@ -187,18 +215,20 @@ object Task extends StrictLogging:
   ) extends RunnableTask[Any, (K, (L, R))]:
     override def run(): Partition[(K, (L, R))] = {
       taskLogger.debug(s"[${Thread.currentThread().getName}] ShuffleHashJoinTask on partition")
-      // Build a hash map from the smaller side to reduce memory and CPU
-      val (small, large, emitLeftFirst) =
-        if (leftData.size <= rightData.size) (leftData, rightData, true)
-        else (rightData, leftData, false)
-      val grouped = small.groupBy(_._1).view.mapValues(_.map(_._2)).toMap
-      val outIter = large.iterator.flatMap { case (k, v) =>
-        grouped.getOrElse(k, Seq.empty[L]).iterator.map { s =>
-          if (emitLeftFirst) (k, (s.asInstanceOf[L], v.asInstanceOf[R]))
-          else (k, (v.asInstanceOf[L], s.asInstanceOf[R]))
-        }
-      }
-      Partition(IterUtil.iterableOf(outIter))
+      
+      // Build hash maps for both sides to avoid unsafe casting
+      val leftGrouped = leftData.groupBy(_._1).view.mapValues(_.map(_._2)).toMap
+      val rightGrouped = rightData.groupBy(_._1).view.mapValues(_.map(_._2)).toMap
+      
+      // Find all common keys and perform cross product
+      val commonKeys = leftGrouped.keySet.intersect(rightGrouped.keySet)
+      val result = for {
+        key <- commonKeys.toSeq
+        leftValue <- leftGrouped(key)
+        rightValue <- rightGrouped(key)
+      } yield (key, (leftValue, rightValue))
+      
+      Partition(result)
     }
 
   /** A per-partition sort-merge inner join task that joins two sorted, co-partitioned inputs. */
@@ -239,10 +269,11 @@ object Task extends StrictLogging:
       val result = localData.iterator.flatMap { case (k, localValue) =>
         broadcastMap.getOrElse(k, Seq.empty[R]).iterator.map { broadcastValue =>
           if (isRightLocal) {
-            // Local data is right side, broadcast is left side
+            // Local data is right side (R), broadcast is left side (L)
+            // This is a type system limitation - we need the cast here
             (k, (broadcastValue.asInstanceOf[L], localValue.asInstanceOf[R]))
           } else {
-            // Local data is left side, broadcast is right side
+            // Local data is left side (L), broadcast is right side (R) - this is the normal case
             (k, (localValue, broadcastValue))
           }
         }
