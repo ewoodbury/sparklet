@@ -67,24 +67,5 @@ final class DAGScheduler[F[_]: Sync](
 
 object DAGScheduler:
   def requiresDAGScheduling[A](plan: Plan[A]): Boolean = {
-    def containsShuffleOps(p: Plan[_]): Boolean = p match {
-      case _: Plan.GroupByKeyOp[_, _] | _: Plan.ReduceByKeyOp[_, _] | _: Plan.SortByOp[_, _] |
-          _: Plan.JoinOp[_, _, _] | _: Plan.CoGroupOp[_, _, _] | _: Plan.RepartitionOp[_] |
-          _: Plan.CoalesceOp[_] | _: Plan.PartitionByOp[_, _] =>
-        true
-      case Plan.MapOp(source, _) => containsShuffleOps(source)
-      case Plan.FilterOp(source, _) => containsShuffleOps(source)
-      case Plan.FlatMapOp(source, _) => containsShuffleOps(source)
-      case Plan.MapPartitionsOp(source, _) => containsShuffleOps(source)
-      case Plan.DistinctOp(source) => containsShuffleOps(source)
-      case Plan.KeysOp(source) => containsShuffleOps(source)
-      case Plan.ValuesOp(source) => containsShuffleOps(source)
-      case Plan.MapValuesOp(source, _) => containsShuffleOps(source)
-      case Plan.FilterKeysOp(source, _) => containsShuffleOps(source)
-      case Plan.FilterValuesOp(source, _) => containsShuffleOps(source)
-      case Plan.FlatMapValuesOp(source, _) => containsShuffleOps(source)
-      case Plan.UnionOp(left, right) => containsShuffleOps(left) || containsShuffleOps(right)
-      case _ => false
-    }
-    containsShuffleOps(plan)
+    PlanWide.isWide(plan)
   }

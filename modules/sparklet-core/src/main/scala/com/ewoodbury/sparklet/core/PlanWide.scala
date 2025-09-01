@@ -40,9 +40,8 @@ object PlanWide {
     case Plan.FlatMapValuesOp(source, _) => isWide(source)
     case Plan.UnionOp(left, right) => isWide(left) || isWide(right)
     
-    // Base cases - sources and unknown operations are not wide
+    // Base cases - sources are not wide
     case _: Plan.Source[_] => false
-    case _ => false
   }
   
   /**
