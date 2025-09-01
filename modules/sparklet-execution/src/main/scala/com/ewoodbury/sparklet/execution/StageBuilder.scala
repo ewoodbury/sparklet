@@ -2,7 +2,7 @@ package com.ewoodbury.sparklet.execution
 
 import scala.collection.mutable
 
-import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
+import com.ewoodbury.sparklet.core.{Partition, Plan, PlanWide, SparkletConf, StageId}
 
 @SuppressWarnings(
   Array(
@@ -1105,7 +1105,7 @@ object StageBuilder:
    */
   def buildStages[A](plan: Plan[A]): Seq[(Plan.Source[_], Stage[_, A])] = {
     // Check if plan contains shuffle operations
-    if (containsShuffleOperations(plan)) {
+    if (PlanWide.isWide(plan)) {
       throw new UnsupportedOperationException(
         "Plan contains shuffle operations - use DAGScheduler instead of legacy buildStages",
       )
@@ -1213,35 +1213,6 @@ object StageBuilder:
         case None => throw new IllegalStateException("Stage sequence unexpectedly empty")
       }
     }
-  }
-
-  /**
-   * Recursively checks if a Plan tree contains any wide (shuffle) operations.
-   *
-   * This method traverses the Plan tree to detect operations that require shuffle boundaries,
-   * which are incompatible with the legacy buildStages method. It's used to enforce
-   * migration to the DAGScheduler for plans containing wide transformations.
-   *
-   * @param plan The Plan node to check
-   * @return true if the plan contains any shuffle operations, false otherwise
-   */
-  private def containsShuffleOperations(plan: Plan[_]): Boolean = plan match {
-    case _: Plan.GroupByKeyOp[_, _] | _: Plan.ReduceByKeyOp[_, _] | _: Plan.SortByOp[_, _] |
-        _: Plan.JoinOp[_, _, _] | _: Plan.CoGroupOp[_, _, _] =>
-      true
-    case Plan.MapOp(source, _) => containsShuffleOperations(source)
-    case Plan.FilterOp(source, _) => containsShuffleOperations(source)
-    case Plan.FlatMapOp(source, _) => containsShuffleOperations(source)
-    case Plan.DistinctOp(source) => containsShuffleOperations(source)
-    case Plan.KeysOp(source) => containsShuffleOperations(source)
-    case Plan.ValuesOp(source) => containsShuffleOperations(source)
-    case Plan.MapValuesOp(source, _) => containsShuffleOperations(source)
-    case Plan.FilterKeysOp(source, _) => containsShuffleOperations(source)
-    case Plan.FilterValuesOp(source, _) => containsShuffleOperations(source)
-    case Plan.FlatMapValuesOp(source, _) => containsShuffleOperations(source)
-    case Plan.UnionOp(left, right) =>
-      containsShuffleOperations(left) || containsShuffleOperations(right)
-    case _ => false
   }
 
 

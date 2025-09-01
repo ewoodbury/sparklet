@@ -1,6 +1,6 @@
 package com.ewoodbury.sparklet.execution
 
-import com.ewoodbury.sparklet.core.Plan
+import com.ewoodbury.sparklet.core.{Plan, PlanWide}
 
 /**
  * Internal representation of operations that can be applied to data in a stage.
@@ -119,11 +119,8 @@ object Operation {
    * Determines if a Plan operation requires a shuffle boundary.
    * This is the main function for shuffle boundary detection during stage building.
    */
-  private[execution] def needsShuffle(plan: Plan[_]): Boolean = plan match {
-    case _: Plan.GroupByKeyOp[_, _] | _: Plan.ReduceByKeyOp[_, _] | _: Plan.SortByOp[_, _] |
-         _: Plan.PartitionByOp[_, _] | _: Plan.RepartitionOp[_] | _: Plan.CoalesceOp[_] |
-         _: Plan.JoinOp[_, _, _] | _: Plan.CoGroupOp[_, _, _] => true
-    case _ => false
+  private[execution] def needsShuffle(plan: Plan[_]): Boolean = {
+    PlanWide.isDirectlyWide(plan)
   }
 
   /**
