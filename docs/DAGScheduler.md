@@ -60,7 +60,7 @@ SparkletConf.set(
 ```mermaid
 graph TD
     subgraph "Executor.createTasks() Decision Logic"
-        A[Plan Input] --> B{DAGScheduler.requiresDAGScheduling?}
+        A[Plan Input] --> B{PlanWide.isWide?}
         B -->|false| C[Narrow Transformations Only]
         B -->|true| D[Contains Shuffle Operations]
         
@@ -280,7 +280,7 @@ graph TB
     
     subgraph "Execution Decision"
         C --> D["Executor.createTasks()"]
-        D --> E["DAGScheduler.requiresDAGScheduling = true"]
+        D --> E["PlanWide.isWide = true"]
         E --> F["DAGTask(plan)"]
     end
     
