@@ -9,7 +9,7 @@ package com.ewoodbury.sparklet.core
  */
 sealed trait Plan[A]
 
-object Plan:
+object Plan {
   /**
    * Applies a user function over each input partition using iterators. The function receives an
    * iterator view of the partition elements and returns an iterator of output elements. This is a
@@ -239,8 +239,9 @@ object Plan:
   /**
    * Join execution strategies for physical planning.
    */
-  enum JoinStrategy:
+  enum JoinStrategy {
     case ShuffleHash, SortMerge, Broadcast
+  }
 
   /**
    * Represents a join transformation that requires shuffling both datasets by key.
@@ -278,5 +279,4 @@ object Plan:
    */
   case class CoGroupOp[K, V, W](left: Plan[(K, V)], right: Plan[(K, W)])
       extends Plan[(K, (Iterable[V], Iterable[W]))]
-
-end Plan
+}
