@@ -125,8 +125,8 @@ object Stage:
     }
 
   /**
-   * Identity operation that returns the input partition unchanged.
-   * Used for bypassed operations that don't need to transform the data.
+   * Identity operation that returns the input partition unchanged. Used for bypassed operations
+   * that don't need to transform the data.
    */
   def identity[A]: Stage[A, A] =
     SingleOpStage { p => p }

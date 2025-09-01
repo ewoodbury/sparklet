@@ -34,31 +34,31 @@ object Task extends StrictLogging:
   private val taskLogger: Logger = logger
 
   // Type-safe factory methods for creating tasks with better type inference
-  
+
   /** Creates a StageTask from a partition and stage. */
   def createStageTask[A, B](
-      partition: Partition[A], 
+      partition: Partition[A],
       stage: Stage[A, B],
-      lineage: Option[LineageInfo] = None
+      lineage: Option[LineageInfo] = None,
   ): StageTask[A, B] = StageTask(partition, stage, lineage)
-  
+
   /** Creates a shuffle hash join task. */
   def createShuffleHashJoinTask[K, L, R](
       leftData: Seq[(K, L)],
-      rightData: Seq[(K, R)]
+      rightData: Seq[(K, R)],
   ): ShuffleHashJoinTask[K, L, R] = ShuffleHashJoinTask(leftData, rightData)
-  
+
   /** Creates a broadcast hash join task. */
   def createBroadcastHashJoinTask[K, L, R](
       localData: Seq[(K, L)],
       broadcastMap: Map[K, Seq[R]],
-      isRightLocal: Boolean = false
+      isRightLocal: Boolean = false,
   ): BroadcastHashJoinTask[K, L, R] = BroadcastHashJoinTask(localData, broadcastMap, isRightLocal)
-  
+
   /** Creates a sort merge join task with proper ordering. */
   def createSortMergeJoinTask[K: Ordering, L, R](
       leftData: Seq[(K, L)],
-      rightData: Seq[(K, R)]
+      rightData: Seq[(K, R)],
   ): SortMergeJoinTask[K, L, R] = SortMergeJoinTask(leftData, rightData)
 
   /** A task that applies a map function to a partition. */
@@ -215,11 +215,11 @@ object Task extends StrictLogging:
   ) extends RunnableTask[Any, (K, (L, R))]:
     override def run(): Partition[(K, (L, R))] = {
       taskLogger.debug(s"[${Thread.currentThread().getName}] ShuffleHashJoinTask on partition")
-      
+
       // Build hash maps for both sides to avoid unsafe casting
       val leftGrouped = leftData.groupBy(_._1).view.mapValues(_.map(_._2)).toMap
       val rightGrouped = rightData.groupBy(_._1).view.mapValues(_.map(_._2)).toMap
-      
+
       // Find all common keys and perform cross product
       val commonKeys = leftGrouped.keySet.intersect(rightGrouped.keySet)
       val result = for {
@@ -227,7 +227,7 @@ object Task extends StrictLogging:
         leftValue <- leftGrouped(key)
         rightValue <- rightGrouped(key)
       } yield (key, (leftValue, rightValue))
-      
+
       Partition(result)
     }
 

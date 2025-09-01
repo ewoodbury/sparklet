@@ -16,7 +16,7 @@ final class ShuffleHandler[F[_]: Sync](
 ) extends StrictLogging:
 
   /**
-   * Handles shuffle output with improved type safety. The cast is necessary as the results from 
+   * Handles shuffle output with improved type safety. The cast is necessary as the results from
    * `executeStage` are untyped, but we centralize it here with clear documentation.
    */
   @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
@@ -24,7 +24,7 @@ final class ShuffleHandler[F[_]: Sync](
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],
   ): F[ShuffleId] = handleShuffleOutputTyped[Any, Any](stageInfo, results)
-      
+
   /**
    * Type-safe shuffle output handler that can be called when types are known.
    */
@@ -92,14 +92,12 @@ final class ShuffleHandler[F[_]: Sync](
     val expectedN = stageGraph
       .stages(dependentSortByStageId)
       .inputSources
-      .collectFirst {
-        case StageBuilder.ShuffleInput(_, _, n) => n
+      .collectFirst { case StageBuilder.ShuffleInput(_, _, n) =>
+        n
       }
       .getOrElse(SparkletConf.get.defaultShufflePartitions)
 
-    val elements: Seq[A] = results.flatMap(partition => 
-      partition.data.asInstanceOf[Iterable[A]]
-    )
+    val elements: Seq[A] = results.flatMap(partition => partition.data.asInstanceOf[Iterable[A]])
     val keys: Seq[S] = elements.map(sortBy.keyFunc)
 
     val sample = takeKeySample(keys)

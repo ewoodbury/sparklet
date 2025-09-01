@@ -55,8 +55,8 @@ final class StageExecutor[F[_]: Sync](
   }
 
   /**
-   * Executes a single stage using type-safe dispatch based on stage operations.
-   * Uses typed helpers to eliminate unsafe casting and improve type safety.
+   * Executes a single stage using type-safe dispatch based on stage operations. Uses typed helpers
+   * to eliminate unsafe casting and improve type safety.
    */
   def executeStage(
       stageInfo: StageBuilder.StageInfo,
@@ -78,7 +78,7 @@ final class StageExecutor[F[_]: Sync](
 
   /**
    * Type-safe execution of narrow stages using the Operation ADT.
-   * 
+   *
    * Wraps around the generic executeNarrowStage method, casting inputs to `Any`.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Any"))
@@ -111,7 +111,8 @@ final class StageExecutor[F[_]: Sync](
         executeReduceByKeyOperation(reduceByKey, inputPartitions)
       case Some(cogroup: Plan.CoGroupOp[_, _, _]) =>
         executeCoGroupOperation(stageInfo, stageToShuffleId)
-      case Some(_: Plan.RepartitionOp[_]) | Some(_: Plan.CoalesceOp[_]) | Some(_: Plan.PartitionByOp[_, _]) =>
+      case Some(_: Plan.RepartitionOp[_]) | Some(_: Plan.CoalesceOp[_]) |
+          Some(_: Plan.PartitionByOp[_, _]) =>
         executeRepartitionOperation(inputPartitions)
       case _ =>
         // Default to GroupByKey behavior for unknown operations
@@ -128,7 +129,9 @@ final class StageExecutor[F[_]: Sync](
   ): F[Seq[Partition[_]]] = {
     stageInfo.shuffleOperation match {
       case Some(joinOp: Plan.JoinOp[_, _, _]) =>
-        val shuffleInputs = stageInfo.inputSources.collect { case s: StageBuilder.ShuffleInput => s }
+        val shuffleInputs = stageInfo.inputSources.collect { case s: StageBuilder.ShuffleInput =>
+          s
+        }
         val leftInput = shuffleInputs
           .find(_.side.contains(StageBuilder.Side.Left))
           .getOrElse(
@@ -260,8 +263,8 @@ final class StageExecutor[F[_]: Sync](
       stageToShuffleId: Map[StageId, ShuffleId],
   ): F[Seq[Partition[_]]] = {
     Sync[F].delay {
-      val shuffleInputs = stageInfo.inputSources.collect {
-        case s: StageBuilder.ShuffleInput => s
+      val shuffleInputs = stageInfo.inputSources.collect { case s: StageBuilder.ShuffleInput =>
+        s
       }
       val leftInput = shuffleInputs
         .find(_.side.contains(StageBuilder.Side.Left))
@@ -337,5 +340,3 @@ final class StageExecutor[F[_]: Sync](
     val tasks = inputPartitions.map { partition => Task.StageTask(partition, stage) }
     scheduler.submit(tasks).map(_.asInstanceOf[Seq[Partition[_]]])
   }
-
-

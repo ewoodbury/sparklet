@@ -8,6 +8,7 @@ The core processing engine is composed of four layers: a logical planning layer,
 
 - Lazy, immutable representation of what will be computed.
 - Essentially a declarative statement for what operations are applied, organized into a computation graph
+- Uses `PlanWide` module for centralized wide operation detection
 
 ```scala
 // This creates a Plan tree, no computation happens yet
@@ -67,7 +68,7 @@ val dc = DistCollection(data, 2)
 
 ## Dual Execution Paths
 
-The system now intelligently routes operations through two execution paths:
+The system uses `PlanWide.isWide()` to intelligently route operations through two execution paths:
 
 ### Path 1: Single-Stage Execution (Narrow Transformations)
 **Used for:** `map`, `filter`, `flatMap`, `distinct`, `union`, key-value operations without shuffling
@@ -180,7 +181,7 @@ flowchart TD
     
     %% Execution Decision
     Decision{"`**Contains Shuffle?**
-    DAGScheduler.requiresDAGScheduling()`"}
+    PlanWide.isWide()`"}
     
     %% Single-Stage Path
     subgraph SingleStage["⚡ Single-Stage Execution"]
@@ -258,10 +259,10 @@ flowchart TD
 
 ## Stage Boundaries
 
-Stages group **narrow transformations** (operations that don't require shuffling data) together for efficiency. Stage boundaries occur at:
+Stages group **narrow transformations** together for efficiency using centralized wide operation detection via `PlanWide.isWide()`. Stage boundaries occur at:
 
-### Wide Transformations **FULLY IMPLEMENTED**
-Operations that require data shuffling across partitions:
+### Wide Transformations
+Operations requiring data shuffling across partitions:
 - **`groupByKey`** - Groups values by key: `(K, V) → (K, Iterable[V])`
 - **`reduceByKey`** - Reduces values by key: `(K, V) → (K, V)` 
 - **`sortBy`** - Sorts elements by key function: `A → Seq[A]`
@@ -278,10 +279,9 @@ val union = left.union(right)       // Creates separate stages
 ### Benefits of Stages
 
 1. **Efficiency**: Multiple operations execute in a single pass over data
-2. **Memory**: Intermediate results don't need to be materialized between operations
-3. **Parallelism**: Each stage can run independently across partitions
-4. **Optimization**: Future optimizations can operate at the stage level
-5. **Shuffle Coordination**: Multi-stage execution handles complex data dependencies
+2. **Memory**: Intermediate results don't need to be materialized 
+3. **Parallelism**: Each stage runs independently across partitions
+4. **Shuffle Coordination**: Multi-stage execution handles complex data dependencies
 
 ```scala
 // Narrow transformations: 1 pass executing all operations
@@ -294,14 +294,14 @@ data.map(f1).groupByKey.map(f2) // → DAGTask → Multi-stage execution
 ## Supported Operations
 
 ### Narrow Transformations (Single-Stage)
-- `map`, `filter`, `flatMap`, `distinct`
-- `keys`, `values`, `mapValues`, `filterKeys`, `filterValues`, `flatMapValues`
-- `union`
+- **Transformations**: `map`, `filter`, `flatMap`, `distinct`
+- **Key-Value**: `keys`, `values`, `mapValues`, `filterKeys`, `filterValues`, `flatMapValues`
+- **Combining**: `union`
 
 ### Wide Transformations (Multi-Stage)  
-- `groupByKey`, `reduceByKey`, `sortBy`
-- `join`, `cogroup`
+- **Aggregations**: `groupByKey`, `reduceByKey`, `sortBy`
+- **Joins**: `join`, `cogroup`
 
 ### Actions
-- `collect`, `count`, `take`, `first`  
-- `reduce`, `fold`, `aggregate`, `forEach`
+- **Collection**: `collect`, `count`, `take`, `first`  
+- **Aggregation**: `reduce`, `fold`, `aggregate`, `forEach`

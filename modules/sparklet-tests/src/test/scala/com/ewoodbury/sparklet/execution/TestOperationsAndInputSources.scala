@@ -2,8 +2,8 @@ package com.ewoodbury.sparklet.execution
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+
 import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
-import com.ewoodbury.sparklet.execution.{Operation, WideOp, WideOpMeta, SimpleWideOpMeta, SortWideOpMeta, ReduceWideOpMeta, WideOpKind, Stage}
 
 /**
  * Tests for the new Operation ADT and normalized InputSource modeling.
