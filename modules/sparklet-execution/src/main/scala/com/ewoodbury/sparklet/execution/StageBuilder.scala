@@ -30,7 +30,9 @@ object StageBuilder:
       stage: Stage[_, _],
       inputSources: Seq[InputSource], // What this stage reads from
       isShuffleStage: Boolean,
-      shuffleOperation: Option[Plan[_]], // The original Plan operation for shuffle stages - will be replaced with WideOp in future
+      shuffleOperation: Option[
+        Plan[_],
+      ], // The original Plan operation for shuffle stages - will be replaced with WideOp in future
       outputPartitioning: Option[Partitioning],
   )
 
@@ -69,8 +71,8 @@ object StageBuilder:
   )
 
   /**
-   * Immutable stage draft for accumulating operations during stage construction.
-   * All fields are immutable; mutations create new instances.
+   * Immutable stage draft for accumulating operations during stage construction. All fields are
+   * immutable; mutations create new instances.
    */
   private case class StageDraft(
       id: StageId,
@@ -91,37 +93,40 @@ object StageBuilder:
       id
 
   /**
-   * Encapsulated mutation helpers to centralize stage builder and dependency management.
-   * Provides single points for invariant checking and reduces accidental misuse.
+   * Encapsulated mutation helpers to centralize stage builder and dependency management. Provides
+   * single points for invariant checking and reduces accidental misuse.
    */
   private def putBuilder(
       builderMap: mutable.Map[StageId, StageDraft],
-      builder: StageDraft
+      builder: StageDraft,
   ): Unit = {
     builderMap(builder.id) = builder
   }
 
   private def putNewBuilder(
       builderMap: mutable.Map[StageId, StageDraft],
-      builder: StageDraft
+      builder: StageDraft,
   ): Unit = {
     // Check invariant: no duplicate stage IDs
-    require(!builderMap.contains(builder.id), s"Stage ID ${builder.id} already exists in builder map")
+    require(
+      !builderMap.contains(builder.id),
+      s"Stage ID ${builder.id} already exists in builder map",
+    )
     builderMap(builder.id) = builder
   }
 
   private def addDependency(
       dependencies: mutable.Map[StageId, mutable.Set[StageId]],
       child: StageId,
-      parent: StageId
+      parent: StageId,
   ): Unit = {
     require(child != parent, s"Stage $child cannot depend on itself")
     dependencies.getOrElseUpdate(child, mutable.Set.empty) += parent
   }
 
   /**
-   * Builds a complete stage graph from a plan using the unified builder approach.
-   * This replaces the old recursive approach with a more structured operation accumulation.
+   * Builds a complete stage graph from a plan using the unified builder approach. This replaces
+   * the old recursive approach with a more structured operation accumulation.
    */
   def buildStageGraph[A](plan: Plan[A]): StageGraph = {
     val ctx = BuildContext(0)
@@ -169,8 +174,8 @@ object StageBuilder:
   }
 
   /**
-   * Validates StageGraph invariants to catch errors early.
-   * Checks for consistency issues that could cause runtime failures.
+   * Validates StageGraph invariants to catch errors early. Checks for consistency issues that
+   * could cause runtime failures.
    */
   private def validateStageGraph(graph: StageGraph): Unit = {
     // 1. finalStageId exists in stages map
@@ -178,8 +183,8 @@ object StageBuilder:
       val availableStages = graph.stages.keys.toSeq.sorted.mkString(", ")
       throw new IllegalStateException(
         s"Final stage ID ${graph.finalStageId} not found in stages map. " +
-        s"Available stage IDs: [$availableStages]. " +
-        s"This indicates a stage graph construction error."
+          s"Available stage IDs: [$availableStages]. " +
+          "This indicates a stage graph construction error.",
       )
     }
 
@@ -189,8 +194,8 @@ object StageBuilder:
         val availableStages = graph.stages.keys.toSeq.sorted.mkString(", ")
         throw new IllegalStateException(
           s"Stage $stageId has dependencies but is not in stages map. " +
-          s"Available stage IDs: [$availableStages]. " +
-          s"Dependencies: [${deps.mkString(", ")}]"
+            s"Available stage IDs: [$availableStages]. " +
+            s"Dependencies: [${deps.mkString(", ")}]",
         )
       }
       deps.foreach { depId =>
@@ -198,8 +203,8 @@ object StageBuilder:
           val availableStages = graph.stages.keys.toSeq.sorted.mkString(", ")
           throw new IllegalStateException(
             s"Stage $stageId depends on missing stage $depId. " +
-            s"Available stage IDs: [$availableStages]. " +
-            s"Check stage construction order."
+              s"Available stage IDs: [$availableStages]. " +
+              "Check stage construction order.",
           )
         }
       }
@@ -210,8 +215,8 @@ object StageBuilder:
       if (deps.contains(stageId)) {
         throw new IllegalStateException(
           s"Stage $stageId lists itself as a dependency, creating a self-cycle. " +
-          s"All dependencies: [${deps.mkString(", ")}]. " +
-          s"This would cause infinite recursion during execution."
+            s"All dependencies: [${deps.mkString(", ")}]. " +
+            "This would cause infinite recursion during execution.",
         )
       }
     }
@@ -233,11 +238,15 @@ object StageBuilder:
       stageInfo.outputPartitioning.foreach { partitioning =>
         // byKey implies numPartitions > 0
         if (partitioning.byKey && partitioning.numPartitions <= 0) {
-          throw new IllegalStateException(s"Stage ${stageInfo.id} has byKey=true but numPartitions=${partitioning.numPartitions} <= 0")
+          throw new IllegalStateException(
+            s"Stage ${stageInfo.id} has byKey=true but numPartitions=${partitioning.numPartitions} <= 0",
+          )
         }
         // numPartitions should be reasonable (not excessively large)
         if (partitioning.numPartitions > 1000000) {
-          throw new IllegalStateException(s"Stage ${stageInfo.id} has excessively large numPartitions=${partitioning.numPartitions}")
+          throw new IllegalStateException(
+            s"Stage ${stageInfo.id} has excessively large numPartitions=${partitioning.numPartitions}",
+          )
         }
       }
     }
@@ -258,8 +267,8 @@ object StageBuilder:
         val cyclePath = visiting.toSeq :+ stageId
         throw new IllegalStateException(
           s"Cycle detected in stage graph involving stage $stageId. " +
-          s"Cycle path: ${cyclePath.mkString(" -> ")}. " +
-          s"This indicates a circular dependency that would prevent execution."
+            s"Cycle path: ${cyclePath.mkString(" -> ")}. " +
+            "This indicates a circular dependency that would prevent execution.",
         )
       }
       if (visited.contains(stageId)) {
@@ -307,8 +316,8 @@ object StageBuilder:
       val reachableStages = reachable.toSeq.sorted.mkString(", ")
       throw new IllegalStateException(
         s"Orphaned stages not reachable from finalStageId ${graph.finalStageId}: [${orphaned.toSeq.sorted.mkString(", ")}]. " +
-        s"Reachable stages: [$reachableStages]. " +
-        s"Check for disconnected stage subgraphs or missing dependencies."
+          s"Reachable stages: [$reachableStages]. " +
+          "Check for disconnected stage subgraphs or missing dependencies.",
       )
     }
   }
@@ -322,7 +331,9 @@ object StageBuilder:
       // Check starts from 0
       stageIds.headOption match {
         case Some(firstId) if firstId.toInt != 0 =>
-          throw new IllegalStateException(s"Stage IDs should start from 0, but found minimum ID: ${firstId.toInt}")
+          throw new IllegalStateException(
+            s"Stage IDs should start from 0, but found minimum ID: ${firstId.toInt}",
+          )
         case None =>
           // This case shouldn't happen since we check nonEmpty above, but handle defensively
           throw new IllegalStateException("Stage ID sequence is unexpectedly empty")
@@ -335,7 +346,9 @@ object StageBuilder:
       val missing = expectedSequence.filterNot(actualSet.contains)
       if (missing.nonEmpty) {
         // Use println instead of logging to avoid dependencies
-        println(s"Warning: Stage ID sequence has gaps. Missing IDs: ${missing.map(_.toInt).mkString(", ")}")
+        println(
+          s"Warning: Stage ID sequence has gaps. Missing IDs: ${missing.map(_.toInt).mkString(", ")}",
+        )
       }
     }
   }
@@ -348,14 +361,18 @@ object StageBuilder:
       if (stageInfo.isShuffleStage) {
         // Shuffle stages should have shuffle operation metadata
         if (stageInfo.shuffleOperation.isEmpty) {
-          throw new IllegalStateException(s"Shuffle stage ${stageInfo.id} has no shuffle operation metadata")
+          throw new IllegalStateException(
+            s"Shuffle stage ${stageInfo.id} has no shuffle operation metadata",
+          )
         }
 
         // Shuffle stages should have empty ops vector (they don't execute operations)
         stageInfo.stage match {
           case _: Stage.ChainedStage[_, _, _] =>
             // ChainedStage should not be used for shuffle stages
-            throw new IllegalStateException(s"Shuffle stage ${stageInfo.id} incorrectly uses ChainedStage")
+            throw new IllegalStateException(
+              s"Shuffle stage ${stageInfo.id} incorrectly uses ChainedStage",
+            )
           case _ => // Other stage types are acceptable for shuffle stages
         }
 
@@ -363,20 +380,28 @@ object StageBuilder:
         if (stageInfo.inputSources.length == 2) {
           val shuffleInputs = stageInfo.inputSources.collect { case si: ShuffleInput => si }
           if (shuffleInputs.length != 2) {
-            throw new IllegalStateException(s"Multi-input shuffle stage ${stageInfo.id} should have exactly 2 ShuffleInputs, found ${shuffleInputs.length}")
+            throw new IllegalStateException(
+              s"Multi-input shuffle stage ${stageInfo.id} should have exactly 2 ShuffleInputs, found ${shuffleInputs.length}",
+            )
           }
           if (shuffleInputs.exists(_.side.isEmpty)) {
-            throw new IllegalStateException(s"Multi-input shuffle stage ${stageInfo.id} has ShuffleInputs without side markers")
+            throw new IllegalStateException(
+              s"Multi-input shuffle stage ${stageInfo.id} has ShuffleInputs without side markers",
+            )
           }
           val sides = shuffleInputs.flatMap(_.side).toSet
           if (sides.size != 2 || !sides.contains(Side.Left) || !sides.contains(Side.Right)) {
-            throw new IllegalStateException(s"Multi-input shuffle stage ${stageInfo.id} has invalid side markers: expected {Left, Right}, found $sides")
+            throw new IllegalStateException(
+              s"Multi-input shuffle stage ${stageInfo.id} has invalid side markers: expected {Left, Right}, found $sides",
+            )
           }
 
           // Validate numPartitions consistency across inputs
           val numPartitionsList = shuffleInputs.map(_.numPartitions).distinct
           if (numPartitionsList.length > 1) {
-            throw new IllegalStateException(s"Multi-input shuffle stage ${stageInfo.id} has mismatched numPartitions across inputs: ${numPartitionsList.mkString(", ")}")
+            throw new IllegalStateException(
+              s"Multi-input shuffle stage ${stageInfo.id} has mismatched numPartitions across inputs: ${numPartitionsList.mkString(", ")}",
+            )
           }
         }
       }
@@ -384,10 +409,12 @@ object StageBuilder:
   }
 
   /**
-   * Validates partitioning invariants - byKey should only be true for operations that guarantee key grouping.
+   * Validates partitioning invariants - byKey should only be true for operations that guarantee
+   * key grouping.
    */
   private def validatePartitioningInvariants(graph: StageGraph): Unit = {
-    // Operations that guarantee key grouping - simplified approach since classOf with generics is problematic
+    /* Operations that guarantee key grouping - simplified approach since classOf with generics is
+     * problematic */
     // In practice, this would be implemented with a more sophisticated operation analysis system
 
     graph.stages.values.foreach { stageInfo =>
@@ -397,13 +424,15 @@ object StageBuilder:
           if (!stageInfo.isShuffleStage) {
             stageInfo.stage match {
               case _: Stage.ChainedStage[_, _, _] =>
-                // For chained stages, check if any operation guarantees key grouping
-                // Note: This is a simplified check - in practice we'd need to analyze the operation chain
-                // For now, we'll be permissive and allow byKey=true if it's explicitly set
-                // This validation can be strengthened in the future with more detailed operation analysis
+              // For chained stages, check if any operation guarantees key grouping
+              /* Note: This is a simplified check - in practice we'd need to analyze the operation
+               * chain */
+              // For now, we'll be permissive and allow byKey=true if it's explicitly set
+              /* This validation can be strengthened in the future with more detailed operation
+               * analysis */
               case _ =>
-                // For single operation stages, we could check the specific operation type
-                // But since we don't have direct access to the operation, we'll be permissive here
+              // For single operation stages, we could check the specific operation type
+              // But since we don't have direct access to the operation, we'll be permissive here
             }
           }
         }
@@ -414,21 +443,24 @@ object StageBuilder:
   /**
    * Materializes a vector of operations into a concrete Stage form.
    *
-   * This function converts a sequence of Operation ADT instances into executable Stage objects.
-   * It employs several optimization strategies:
+   * This function converts a sequence of Operation ADT instances into executable Stage objects. It
+   * employs several optimization strategies:
    *
-   * 1. **Single Operation Optimization**: For single operations, returns the operation directly
-   *    without unnecessary chaining to minimize overhead.
+   *   1. **Single Operation Optimization**: For single operations, returns the operation directly
+   *      without unnecessary chaining to minimize overhead.
+   *   2. **Efficient Chaining**: For multiple operations, uses a left fold to build the chain,
+   *      creating ChainedStage instances that compose operations efficiently.
    *
-   * 2. **Efficient Chaining**: For multiple operations, uses a left fold to build the chain,
-   *    creating ChainedStage instances that compose operations efficiently.
-   *
-   * @param ops Non-empty vector of operations to materialize
-   * @return A concrete Stage that can be executed
-   * @throws UnsupportedOperationException if the operation vector contains wide operations
-   *         (shuffle operations) that cannot be materialized as narrow stages
-   * @note This function only handles narrow operations. Wide operations should be processed
-   *       through separate shuffle stages before materialization.
+   * @param ops
+   *   Non-empty vector of operations to materialize
+   * @return
+   *   A concrete Stage that can be executed
+   * @throws UnsupportedOperationException
+   *   if the operation vector contains wide operations (shuffle operations) that cannot be
+   *   materialized as narrow stages
+   * @note
+   *   This function only handles narrow operations. Wide operations should be processed through
+   *   separate shuffle stages before materialization.
    */
   private[execution] def materialize(ops: Vector[Operation[Any, Any]]): Stage[Any, Any] = {
     require(ops.nonEmpty, "Cannot materialize empty operation vector")
@@ -437,10 +469,10 @@ object StageBuilder:
     if (ops.length == 1) {
       ops.headOption match {
         case Some(op) => createStageFromOp(op)
-        case None => 
+        case None =>
           throw new IllegalStateException(
             "Single operation vector unexpectedly empty after length check. " +
-            "This indicates a concurrent modification or internal error."
+              "This indicates a concurrent modification or internal error.",
           )
       }
     } else {
@@ -453,17 +485,17 @@ object StageBuilder:
         case None =>
           throw new IllegalStateException(
             "Multiple operation vector unexpectedly empty after validation. " +
-            s"Original vector length: ${ops.length}. " +
-            "This indicates a concurrent modification or internal error."
+              s"Original vector length: ${ops.length}. " +
+              "This indicates a concurrent modification or internal error.",
           )
       }
     }
   }
 
   /**
-   * Type-safe helper methods for creating stages from operations.
-   * These methods encapsulate the type casting in a controlled manner,
-   * providing better type safety than distributed asInstanceOf calls.
+   * Type-safe helper methods for creating stages from operations. These methods encapsulate the
+   * type casting in a controlled manner, providing better type safety than distributed
+   * asInstanceOf calls.
    */
   private def createKeysStage(): Stage[Any, Any] = {
     // Stage.keys has type Stage[(K, V), K], we need Stage[Any, Any]
@@ -472,7 +504,7 @@ object StageBuilder:
   }
 
   private def createValuesStage(): Stage[Any, Any] = {
-    // Stage.values has type Stage[(K, V), V], we need Stage[Any, Any]  
+    // Stage.values has type Stage[(K, V), V], we need Stage[Any, Any]
     // This is safe because we know the input will be key-value pairs at runtime
     Stage.values[Any, Any].asInstanceOf[Stage[Any, Any]]
   }
@@ -514,9 +546,9 @@ object StageBuilder:
   }
 
   /**
-   * Helper function to chain an operation onto an existing stage.
-   * This function encapsulates the pattern matching for operation chaining
-   * and eliminates the need for unsafe type casting where possible.
+   * Helper function to chain an operation onto an existing stage. This function encapsulates the
+   * pattern matching for operation chaining and eliminates the need for unsafe type casting where
+   * possible.
    */
   private def chainOperation(stage: Stage[Any, Any], op: Operation[Any, Any]): Stage[Any, Any] = {
     op match {
@@ -526,14 +558,26 @@ object StageBuilder:
       case DistinctOp() => Stage.ChainedStage(stage, Stage.distinct)
       case _: KeysOp[_, _] => Stage.ChainedStage(stage, createKeysStage())
       case _: ValuesOp[_, _] => Stage.ChainedStage(stage, createValuesStage())
-      case MapValuesOp(f) => Stage.ChainedStage(stage, createMapValuesStage(f.asInstanceOf[Any => Any]))
-      case FilterKeysOp(p) => Stage.ChainedStage(stage, createFilterKeysStage(p.asInstanceOf[Any => Boolean]))
-      case FilterValuesOp(p) => Stage.ChainedStage(stage, createFilterValuesStage(p.asInstanceOf[Any => Boolean]))
-      case FlatMapValuesOp(f) => Stage.ChainedStage(stage, createFlatMapValuesStage(f.asInstanceOf[Any => IterableOnce[Any]]))
+      case MapValuesOp(f) =>
+        Stage.ChainedStage(stage, createMapValuesStage(f.asInstanceOf[Any => Any]))
+      case FilterKeysOp(p) =>
+        Stage.ChainedStage(stage, createFilterKeysStage(p.asInstanceOf[Any => Boolean]))
+      case FilterValuesOp(p) =>
+        Stage.ChainedStage(stage, createFilterValuesStage(p.asInstanceOf[Any => Boolean]))
+      case FlatMapValuesOp(f) =>
+        Stage.ChainedStage(
+          stage,
+          createFlatMapValuesStage(f.asInstanceOf[Any => IterableOnce[Any]]),
+        )
       case MapPartitionsOp(f) => Stage.ChainedStage(stage, Stage.mapPartitions(f))
       case _: GroupByKeyLocalOp[_, _] => Stage.ChainedStage(stage, createGroupByKeyLocalStage())
-      case ReduceByKeyLocalOp(reduceFunc) => Stage.ChainedStage(stage, createReduceByKeyLocalStage(reduceFunc.asInstanceOf[(Any, Any) => Any]))
-      case _: PartitionByLocalOp[_, _] => Stage.ChainedStage(stage, Stage.identity[Any]) // Bypassed partition is identity
+      case ReduceByKeyLocalOp(reduceFunc) =>
+        Stage.ChainedStage(
+          stage,
+          createReduceByKeyLocalStage(reduceFunc.asInstanceOf[(Any, Any) => Any]),
+        )
+      case _: PartitionByLocalOp[_, _] =>
+        Stage.ChainedStage(stage, Stage.identity[Any]) // Bypassed partition is identity
       case _ => throw new UnsupportedOperationException(s"Cannot chain wide operation: $op")
     }
   }
@@ -541,24 +585,30 @@ object StageBuilder:
   /**
    * Creates a concrete Stage object from a single Operation ADT instance.
    *
-   * This method serves as the bridge between the high-level Operation ADT and the concrete
-   * Stage implementations that can be executed by the runtime. It pattern matches on the
-   * operation type and delegates to the appropriate Stage constructor.
+   * This method serves as the bridge between the high-level Operation ADT and the concrete Stage
+   * implementations that can be executed by the runtime. It pattern matches on the operation type
+   * and delegates to the appropriate Stage constructor.
    *
    * The method handles all narrow transformation operations including:
-   * - Basic transformations: MapOp, FilterOp, FlatMapOp, DistinctOp
-   * - Key-value operations: KeysOp, ValuesOp, MapValuesOp, FilterKeysOp, FilterValuesOp, FlatMapValuesOp
-   * - Partition operations: MapPartitionsOp
-   * - Local/bypass operations: GroupByKeyLocalOp, ReduceByKeyLocalOp, PartitionByLocalOp
+   *   - Basic transformations: MapOp, FilterOp, FlatMapOp, DistinctOp
+   *   - Key-value operations: KeysOp, ValuesOp, MapValuesOp, FilterKeysOp, FilterValuesOp,
+   *     FlatMapValuesOp
+   *   - Partition operations: MapPartitionsOp
+   *   - Local/bypass operations: GroupByKeyLocalOp, ReduceByKeyLocalOp, PartitionByLocalOp
    *
    * This method is optimized for creating individual stages and is more efficient than
-   * materialize() when dealing with single operations, as it avoids unnecessary ChainedStage wrapping.
+   * materialize() when dealing with single operations, as it avoids unnecessary ChainedStage
+   * wrapping.
    *
-   * @param op The Operation to convert into a Stage
-   * @return A concrete Stage[Any, Any] that can be executed
-   * @throws UnsupportedOperationException if the operation is a wide operation that requires shuffle boundaries
-   * @note This method only supports narrow operations. Wide operations should be handled
-   *       through shuffle stages created by createShuffleStageUnified().
+   * @param op
+   *   The Operation to convert into a Stage
+   * @return
+   *   A concrete Stage[Any, Any] that can be executed
+   * @throws UnsupportedOperationException
+   *   if the operation is a wide operation that requires shuffle boundaries
+   * @note
+   *   This method only supports narrow operations. Wide operations should be handled through
+   *   shuffle stages created by createShuffleStageUnified().
    */
   private def createStageFromOp(op: Operation[Any, Any]): Stage[Any, Any] = {
     op match {
@@ -574,58 +624,67 @@ object StageBuilder:
       case FlatMapValuesOp(f) => createFlatMapValuesStage(f.asInstanceOf[Any => IterableOnce[Any]])
       case MapPartitionsOp(f) => Stage.mapPartitions(f)
       case _: GroupByKeyLocalOp[_, _] => createGroupByKeyLocalStage()
-      case ReduceByKeyLocalOp(reduceFunc) => createReduceByKeyLocalStage(reduceFunc.asInstanceOf[(Any, Any) => Any])
+      case ReduceByKeyLocalOp(reduceFunc) =>
+        createReduceByKeyLocalStage(reduceFunc.asInstanceOf[(Any, Any) => Any])
       case _: PartitionByLocalOp[_, _] => Stage.identity[Any] // Bypassed partition is identity
       case _ => throw new UnsupportedOperationException(s"Cannot create stage from operation: $op")
     }
   }
 
   /**
-   * Core recursive method that traverses a Plan tree and builds stage graphs with operation accumulation.
+   * Core recursive method that traverses a Plan tree and builds stage graphs with operation
+   * accumulation.
    *
-   * This method implements the unified stage building algorithm that processes Plan nodes recursively,
-   * accumulating narrow operations into stages and creating shuffle boundaries for wide operations.
-   * It replaces the old recursive approach with a more structured operation accumulation strategy
-   * for better optimization and clearer stage boundaries.
+   * This method implements the unified stage building algorithm that processes Plan nodes
+   * recursively, accumulating narrow operations into stages and creating shuffle boundaries for
+   * wide operations. It replaces the old recursive approach with a more structured operation
+   * accumulation strategy for better optimization and clearer stage boundaries.
    *
    * The method handles three main categories of Plan nodes:
    *
-   * 1. **Data Sources (Plan.Source)**:
-   *    - Base case that creates initial stage builders for data partitions
-   *    - Sets up source partitioning metadata based on partition count
-   *    - Returns the stage ID and original Plan for dependency tracking
-   *
-   * 2. **Narrow Transformations**:
-   *    - Accumulates operations using appendOperation() when possible
-   *    - Creates new stages when chaining is not feasible
-   *    - Handles: MapOp, FilterOp, FlatMapOp, DistinctOp, KeysOp, ValuesOp,
-   *      MapValuesOp, FilterKeysOp, FilterValuesOp, FlatMapValuesOp, MapPartitionsOp
-   *
-   * 3. **Multi-input Operations**:
-   *    - UnionOp: Creates a new stage that reads from both input stages
-   *    - Preserves no partitioning metadata due to input consolidation
-   *
-   * 4. **Wide Transformations (Shuffle Operations)**:
-   *    - GroupByKeyOp, ReduceByKeyOp: Supports shuffle bypass optimization when already partitioned correctly
-   *    - SortByOp, PartitionByOp, RepartitionOp, CoalesceOp: Always creates shuffle boundaries
-   *    - JoinOp, CoGroupOp: Multi-input wide operations with side tagging for disambiguation
-   *    - Uses WideOp metadata structures for shuffle execution planning
+   *   1. **Data Sources (Plan.Source)**:
+   *      - Base case that creates initial stage builders for data partitions
+   *      - Sets up source partitioning metadata based on partition count
+   *      - Returns the stage ID and original Plan for dependency tracking
+   *   2. **Narrow Transformations**:
+   *      - Accumulates operations using appendOperation() when possible
+   *      - Creates new stages when chaining is not feasible
+   *      - Handles: MapOp, FilterOp, FlatMapOp, DistinctOp, KeysOp, ValuesOp, MapValuesOp,
+   *        FilterKeysOp, FilterValuesOp, FlatMapValuesOp, MapPartitionsOp
+   *   3. **Multi-input Operations**:
+   *      - UnionOp: Creates a new stage that reads from both input stages
+   *      - Preserves no partitioning metadata due to input consolidation
+   *   4. **Wide Transformations (Shuffle Operations)**:
+   *      - GroupByKeyOp, ReduceByKeyOp: Supports shuffle bypass optimization when already
+   *        partitioned correctly
+   *      - SortByOp, PartitionByOp, RepartitionOp, CoalesceOp: Always creates shuffle boundaries
+   *      - JoinOp, CoGroupOp: Multi-input wide operations with side tagging for disambiguation
+   *      - Uses WideOp metadata structures for shuffle execution planning
    *
    * **Optimization Strategies**:
-   * - Shuffle Bypass: For operations like groupByKey/reduceByKey, checks if upstream partitioning
-   *   matches requirements and bypasses shuffle when possible
-   * - Operation Chaining: Accumulates multiple narrow operations into single stages to reduce overhead
-   * - Dependency Tracking: Builds comprehensive dependency graph for execution ordering
+   *   - Shuffle Bypass: For operations like groupByKey/reduceByKey, checks if upstream
+   *     partitioning matches requirements and bypasses shuffle when possible
+   *   - Operation Chaining: Accumulates multiple narrow operations into single stages to reduce
+   *     overhead
+   *   - Dependency Tracking: Builds comprehensive dependency graph for execution ordering
    *
-   * @param ctx BuildContext for generating unique stage IDs
-   * @param plan The Plan node to process recursively
-   * @param builderMap Mutable map accumulating stage builders (modified in place)
-   * @param dependencies Mutable map tracking stage dependencies (modified in place)
-   * @tparam A Type parameter of the Plan (preserved for type safety)
-   * @return Tuple of (StageId, Option[Plan]) where StageId is the resulting stage identifier,
-   *         and Option[Plan] contains the original Plan for shuffle operation metadata
-   * @note This method modifies builderMap and dependencies in place for efficiency
-   * @note The return Plan is crucial for shuffle stages to preserve original operation metadata
+   * @param ctx
+   *   BuildContext for generating unique stage IDs
+   * @param plan
+   *   The Plan node to process recursively
+   * @param builderMap
+   *   Mutable map accumulating stage builders (modified in place)
+   * @param dependencies
+   *   Mutable map tracking stage dependencies (modified in place)
+   * @tparam A
+   *   Type parameter of the Plan (preserved for type safety)
+   * @return
+   *   Tuple of (StageId, Option[Plan]) where StageId is the resulting stage identifier, and
+   *   Option[Plan] contains the original Plan for shuffle operation metadata
+   * @note
+   *   This method modifies builderMap and dependencies in place for efficiency
+   * @note
+   *   The return Plan is crucial for shuffle stages to preserve original operation metadata
    */
   private def buildStagesFromPlan[A](
       ctx: BuildContext,
@@ -637,77 +696,144 @@ object StageBuilder:
       // Base case: data source - don't create a stage yet, let operations chain to it
       case source: Plan.Source[_] =>
         val stageId = ctx.freshId()
-        putNewBuilder(builderMap, StageDraft(
-          id = stageId,
-          ops = Vector.empty[Operation[Any, Any]], // No operations for source - operations will be chained here
-          inputSources = Seq(SourceInput(source.partitions)),
-          isShuffle = false,
-          shuffleMeta = None,
-          originalPlan = Some(source),
-          outputPartitioning = Some(Partitioning(byKey = false, numPartitions = source.partitions.size)),
-        ))
+        putNewBuilder(
+          builderMap,
+          StageDraft(
+            id = stageId,
+            ops = Vector.empty[
+              Operation[Any, Any],
+            ], // No operations for source - operations will be chained here
+            inputSources = Seq(SourceInput(source.partitions)),
+            isShuffle = false,
+            shuffleMeta = None,
+            originalPlan = Some(source),
+            outputPartitioning =
+              Some(Partitioning(byKey = false, numPartitions = source.partitions.size)),
+          ),
+        )
         (stageId, Some(source))
 
       // Narrow transformations - accumulate operations or create new stages
       case Plan.MapOp(sourcePlan, f) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
-        val resultId = appendOperation(ctx, sourceStageId, MapOp(f.asInstanceOf[Any => Any]), builderMap, dependencies)
+        val resultId = appendOperation(
+          ctx,
+          sourceStageId,
+          MapOp(f.asInstanceOf[Any => Any]),
+          builderMap,
+          dependencies,
+        )
         (resultId, Some(plan))
 
       case Plan.FilterOp(sourcePlan, p) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
-        val resultId = appendOperation(ctx, sourceStageId, FilterOp(p.asInstanceOf[Any => Boolean]), builderMap, dependencies)
+        val resultId = appendOperation(
+          ctx,
+          sourceStageId,
+          FilterOp(p.asInstanceOf[Any => Boolean]),
+          builderMap,
+          dependencies,
+        )
         (resultId, Some(plan))
 
       case Plan.FlatMapOp(sourcePlan, f) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
-        val resultId = appendOperation(ctx, sourceStageId, FlatMapOp(f.asInstanceOf[Any => IterableOnce[Any]]), builderMap, dependencies)
+        val resultId = appendOperation(
+          ctx,
+          sourceStageId,
+          FlatMapOp(f.asInstanceOf[Any => IterableOnce[Any]]),
+          builderMap,
+          dependencies,
+        )
         (resultId, Some(plan))
 
       case Plan.DistinctOp(sourcePlan) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
-        val resultId = appendOperation(ctx, sourceStageId, DistinctOp[Any](), builderMap, dependencies)
+        val resultId =
+          appendOperation(ctx, sourceStageId, DistinctOp[Any](), builderMap, dependencies)
         (resultId, Some(plan))
 
       case Plan.KeysOp(sourcePlan) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
         val op = KeysOp[Any, Any]()
-        val resultId = appendOperation(ctx, sourceStageId, op.asInstanceOf[Operation[Any, Any]], builderMap, dependencies)
+        val resultId = appendOperation(
+          ctx,
+          sourceStageId,
+          op.asInstanceOf[Operation[Any, Any]],
+          builderMap,
+          dependencies,
+        )
         (resultId, Some(plan))
 
       case Plan.ValuesOp(sourcePlan) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
         val op = ValuesOp[Any, Any]()
-        val resultId = appendOperation(ctx, sourceStageId, op.asInstanceOf[Operation[Any, Any]], builderMap, dependencies)
+        val resultId = appendOperation(
+          ctx,
+          sourceStageId,
+          op.asInstanceOf[Operation[Any, Any]],
+          builderMap,
+          dependencies,
+        )
         (resultId, Some(plan))
 
       case Plan.MapValuesOp(sourcePlan, f) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
         val op = MapValuesOp[Any, Any, Any](f.asInstanceOf[Any => Any])
-        val resultId = appendOperation(ctx, sourceStageId, op.asInstanceOf[Operation[Any, Any]], builderMap, dependencies)
+        val resultId = appendOperation(
+          ctx,
+          sourceStageId,
+          op.asInstanceOf[Operation[Any, Any]],
+          builderMap,
+          dependencies,
+        )
         (resultId, Some(plan))
 
       case Plan.FilterKeysOp(sourcePlan, p) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
         val op = FilterKeysOp[Any, Any](p.asInstanceOf[Any => Boolean])
-        val resultId = appendOperation(ctx, sourceStageId, op.asInstanceOf[Operation[Any, Any]], builderMap, dependencies)
+        val resultId = appendOperation(
+          ctx,
+          sourceStageId,
+          op.asInstanceOf[Operation[Any, Any]],
+          builderMap,
+          dependencies,
+        )
         (resultId, Some(plan))
 
       case Plan.FilterValuesOp(sourcePlan, p) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
         val op = FilterValuesOp[Any, Any](p.asInstanceOf[Any => Boolean])
-        val resultId = appendOperation(ctx, sourceStageId, op.asInstanceOf[Operation[Any, Any]], builderMap, dependencies)
+        val resultId = appendOperation(
+          ctx,
+          sourceStageId,
+          op.asInstanceOf[Operation[Any, Any]],
+          builderMap,
+          dependencies,
+        )
         (resultId, Some(plan))
 
       case Plan.FlatMapValuesOp(sourcePlan, f) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
         val op = FlatMapValuesOp[Any, Any, Any](f.asInstanceOf[Any => IterableOnce[Any]])
-        val resultId = appendOperation(ctx, sourceStageId, op.asInstanceOf[Operation[Any, Any]], builderMap, dependencies)
+        val resultId = appendOperation(
+          ctx,
+          sourceStageId,
+          op.asInstanceOf[Operation[Any, Any]],
+          builderMap,
+          dependencies,
+        )
         (resultId, Some(plan))
 
       case Plan.MapPartitionsOp(sourcePlan, f) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
-        val resultId = appendOperation(ctx, sourceStageId, MapPartitionsOp(f.asInstanceOf[Iterator[Any] => Iterator[Any]]), builderMap, dependencies)
+        val resultId = appendOperation(
+          ctx,
+          sourceStageId,
+          MapPartitionsOp(f.asInstanceOf[Iterator[Any] => Iterator[Any]]),
+          builderMap,
+          dependencies,
+        )
         (resultId, Some(plan))
 
       case Plan.UnionOp(left, right) =>
@@ -716,15 +842,18 @@ object StageBuilder:
 
         // Union creates a new narrow stage that reads outputs from both input stages
         val unionStageId = ctx.freshId()
-        putNewBuilder(builderMap, StageDraft(
-          id = unionStageId,
-          ops = Vector.empty[Operation[Any, Any]], // No operations, just union of inputs
-          inputSources = Seq(StageOutput(leftStageId), StageOutput(rightStageId)),
-          isShuffle = false,
-          shuffleMeta = None,
-          originalPlan = Some(plan): Option[Plan[_]],
-          outputPartitioning = None, // Union doesn't preserve partitioning
-        ))
+        putNewBuilder(
+          builderMap,
+          StageDraft(
+            id = unionStageId,
+            ops = Vector.empty[Operation[Any, Any]], // No operations, just union of inputs
+            inputSources = Seq(StageOutput(leftStageId), StageOutput(rightStageId)),
+            isShuffle = false,
+            shuffleMeta = None,
+            originalPlan = Some(plan): Option[Plan[_]],
+            outputPartitioning = None, // Union doesn't preserve partitioning
+          ),
+        )
 
         addDependency(dependencies, unionStageId, leftStageId)
         addDependency(dependencies, unionStageId, rightStageId)
@@ -732,46 +861,88 @@ object StageBuilder:
 
       // Wide transformations (create shuffle boundaries)
       case groupByKey: Plan.GroupByKeyOp[_, _] =>
-        val (sourceStageId, _) = buildStagesFromPlan(ctx, groupByKey.source, builderMap, dependencies)
+        val (sourceStageId, _) =
+          buildStagesFromPlan(ctx, groupByKey.source, builderMap, dependencies)
         val src = builderMap(sourceStageId)
         val defaultN = SparkletConf.get.defaultShufflePartitions
 
         if (Operation.canBypassShuffle(groupByKey, src.outputPartitioning, SparkletConf.get)) {
           // Add local groupByKey operation to existing stage since shuffle can be bypassed
-          val resultId = appendOperation(ctx, sourceStageId, GroupByKeyLocalOp[Any, Any]().asInstanceOf[Operation[Any, Any]], builderMap, dependencies)
+          val resultId = appendOperation(
+            ctx,
+            sourceStageId,
+            GroupByKeyLocalOp[Any, Any]().asInstanceOf[Operation[Any, Any]],
+            builderMap,
+            dependencies,
+          )
           (resultId, Some(groupByKey))
         } else {
-          val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), GroupByKeyWideOp(SimpleWideOpMeta(
-            kind = WideOpKind.GroupByKey,
-            numPartitions = defaultN
-          )), builderMap, dependencies, Some(groupByKey))
+          val shuffleId = createShuffleStageUnified(
+            ctx,
+            Seq(sourceStageId),
+            GroupByKeyWideOp(
+              SimpleWideOpMeta(
+                kind = WideOpKind.GroupByKey,
+                numPartitions = defaultN,
+              ),
+            ),
+            builderMap,
+            dependencies,
+            Some(groupByKey),
+          )
           (shuffleId, Some(groupByKey))
         }
 
       case reduceByKey: Plan.ReduceByKeyOp[_, _] =>
-        val (sourceStageId, _) = buildStagesFromPlan(ctx, reduceByKey.source, builderMap, dependencies)
+        val (sourceStageId, _) =
+          buildStagesFromPlan(ctx, reduceByKey.source, builderMap, dependencies)
         val src = builderMap(sourceStageId)
         val defaultN = SparkletConf.get.defaultShufflePartitions
 
         if (Operation.canBypassShuffle(reduceByKey, src.outputPartitioning, SparkletConf.get)) {
           // Add local reduceByKey operation to existing stage since shuffle can be bypassed
-          val resultId = appendOperation(ctx, sourceStageId, ReduceByKeyLocalOp[Any, Any](reduceByKey.reduceFunc.asInstanceOf[(Any, Any) => Any]).asInstanceOf[Operation[Any, Any]], builderMap, dependencies)
+          val resultId = appendOperation(
+            ctx,
+            sourceStageId,
+            ReduceByKeyLocalOp[Any, Any](reduceByKey.reduceFunc.asInstanceOf[(Any, Any) => Any])
+              .asInstanceOf[Operation[Any, Any]],
+            builderMap,
+            dependencies,
+          )
           (resultId, Some(reduceByKey))
         } else {
-          val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), ReduceByKeyWideOp(ReduceWideOpMeta(
-            numPartitions = defaultN,
-            reduceFunc = reduceByKey.reduceFunc
-          )), builderMap, dependencies, Some(reduceByKey))
+          val shuffleId = createShuffleStageUnified(
+            ctx,
+            Seq(sourceStageId),
+            ReduceByKeyWideOp(
+              ReduceWideOpMeta(
+                numPartitions = defaultN,
+                reduceFunc = reduceByKey.reduceFunc,
+              ),
+            ),
+            builderMap,
+            dependencies,
+            Some(reduceByKey),
+          )
           (shuffleId, Some(reduceByKey))
         }
 
       case sortBy: Plan.SortByOp[_, _] =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sortBy.source, builderMap, dependencies)
         val n = SparkletConf.get.defaultShufflePartitions
-        val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), SortByWideOp(SortWideOpMeta(
-          numPartitions = n,
-          keyFunc = sortBy.keyFunc
-        )), builderMap, dependencies, Some(sortBy))
+        val shuffleId = createShuffleStageUnified(
+          ctx,
+          Seq(sourceStageId),
+          SortByWideOp(
+            SortWideOpMeta(
+              numPartitions = n,
+              keyFunc = sortBy.keyFunc,
+            ),
+          ),
+          builderMap,
+          dependencies,
+          Some(sortBy),
+        )
         (shuffleId, Some(sortBy))
 
       case pby: Plan.PartitionByOp[_, _] =>
@@ -779,13 +950,28 @@ object StageBuilder:
         val src = builderMap(sourceStageId)
 
         if (Operation.canBypassShuffle(pby, src.outputPartitioning, SparkletConf.get)) {
-          val resultId = appendOperation(ctx, sourceStageId, PartitionByLocalOp[Any, Any](pby.numPartitions).asInstanceOf[Operation[Any, Any]], builderMap, dependencies)
+          val resultId = appendOperation(
+            ctx,
+            sourceStageId,
+            PartitionByLocalOp[Any, Any](pby.numPartitions).asInstanceOf[Operation[Any, Any]],
+            builderMap,
+            dependencies,
+          )
           (resultId, Some(pby))
         } else {
-          val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), PartitionByWideOp(SimpleWideOpMeta(
-            kind = WideOpKind.PartitionBy,
-            numPartitions = pby.numPartitions
-          )), builderMap, dependencies, Some(pby))
+          val shuffleId = createShuffleStageUnified(
+            ctx,
+            Seq(sourceStageId),
+            PartitionByWideOp(
+              SimpleWideOpMeta(
+                kind = WideOpKind.PartitionBy,
+                numPartitions = pby.numPartitions,
+              ),
+            ),
+            builderMap,
+            dependencies,
+            Some(pby),
+          )
           (shuffleId, Some(pby))
         }
 
@@ -794,13 +980,28 @@ object StageBuilder:
         val src = builderMap(sourceStageId)
 
         if (Operation.canBypassShuffle(rep, src.outputPartitioning, SparkletConf.get)) {
-          val resultId = appendOperation(ctx, sourceStageId, RepartitionOp[Any](rep.numPartitions), builderMap, dependencies)
+          val resultId = appendOperation(
+            ctx,
+            sourceStageId,
+            RepartitionOp[Any](rep.numPartitions),
+            builderMap,
+            dependencies,
+          )
           (resultId, Some(rep))
         } else {
-          val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), RepartitionWideOp(SimpleWideOpMeta(
-            kind = WideOpKind.Repartition,
-            numPartitions = rep.numPartitions
-          )), builderMap, dependencies, Some(rep))
+          val shuffleId = createShuffleStageUnified(
+            ctx,
+            Seq(sourceStageId),
+            RepartitionWideOp(
+              SimpleWideOpMeta(
+                kind = WideOpKind.Repartition,
+                numPartitions = rep.numPartitions,
+              ),
+            ),
+            builderMap,
+            dependencies,
+            Some(rep),
+          )
           (shuffleId, Some(rep))
         }
 
@@ -809,13 +1010,28 @@ object StageBuilder:
         val src = builderMap(sourceStageId)
 
         if (Operation.canBypassShuffle(coal, src.outputPartitioning, SparkletConf.get)) {
-          val resultId = appendOperation(ctx, sourceStageId, CoalesceOp[Any](coal.numPartitions), builderMap, dependencies)
+          val resultId = appendOperation(
+            ctx,
+            sourceStageId,
+            CoalesceOp[Any](coal.numPartitions),
+            builderMap,
+            dependencies,
+          )
           (resultId, Some(coal))
         } else {
-          val shuffleId = createShuffleStageUnified(ctx, Seq(sourceStageId), CoalesceWideOp(SimpleWideOpMeta(
-            kind = WideOpKind.Coalesce,
-            numPartitions = coal.numPartitions
-          )), builderMap, dependencies, Some(coal))
+          val shuffleId = createShuffleStageUnified(
+            ctx,
+            Seq(sourceStageId),
+            CoalesceWideOp(
+              SimpleWideOpMeta(
+                kind = WideOpKind.Coalesce,
+                numPartitions = coal.numPartitions,
+              ),
+            ),
+            builderMap,
+            dependencies,
+            Some(coal),
+          )
           (shuffleId, Some(coal))
         }
 
@@ -824,12 +1040,21 @@ object StageBuilder:
         val (rightStageId, _) = buildStagesFromPlan(ctx, joinOp.right, builderMap, dependencies)
 
         val numPartitions = SparkletConf.get.defaultShufflePartitions
-        val shuffleId = createShuffleStageUnified(ctx, Seq(leftStageId, rightStageId), JoinWideOp(SimpleWideOpMeta(
-          kind = WideOpKind.Join,
-          numPartitions = numPartitions,
-          joinStrategy = joinOp.joinStrategy,
-          sides = Seq(Side.Left, Side.Right)
-        )), builderMap, dependencies, Some(joinOp))
+        val shuffleId = createShuffleStageUnified(
+          ctx,
+          Seq(leftStageId, rightStageId),
+          JoinWideOp(
+            SimpleWideOpMeta(
+              kind = WideOpKind.Join,
+              numPartitions = numPartitions,
+              joinStrategy = joinOp.joinStrategy,
+              sides = Seq(Side.Left, Side.Right),
+            ),
+          ),
+          builderMap,
+          dependencies,
+          Some(joinOp),
+        )
         (shuffleId, Some(joinOp))
 
       case cogroupOp: Plan.CoGroupOp[_, _, _] =>
@@ -837,19 +1062,28 @@ object StageBuilder:
         val (rightStageId, _) = buildStagesFromPlan(ctx, cogroupOp.right, builderMap, dependencies)
 
         val numPartitions = SparkletConf.get.defaultShufflePartitions
-        val shuffleId = createShuffleStageUnified(ctx, Seq(leftStageId, rightStageId), CoGroupWideOp(SimpleWideOpMeta(
-          kind = WideOpKind.CoGroup,
-          numPartitions = numPartitions,
-          sides = Seq(Side.Left, Side.Right)
-        )), builderMap, dependencies, Some(cogroupOp))
+        val shuffleId = createShuffleStageUnified(
+          ctx,
+          Seq(leftStageId, rightStageId),
+          CoGroupWideOp(
+            SimpleWideOpMeta(
+              kind = WideOpKind.CoGroup,
+              numPartitions = numPartitions,
+              sides = Seq(Side.Left, Side.Right),
+            ),
+          ),
+          builderMap,
+          dependencies,
+          Some(cogroupOp),
+        )
         (shuffleId, Some(cogroupOp))
     }
   }
 
   /**
-   * Appends a narrow operation to an existing stage or creates a new stage if needed.
-   * This handles the logic of when operations can be chained vs when new stages are required.
-   * Returns the StageId that will produce the result (could be the source stage or a new one).
+   * Appends a narrow operation to an existing stage or creates a new stage if needed. This handles
+   * the logic of when operations can be chained vs when new stages are required. Returns the
+   * StageId that will produce the result (could be the source stage or a new one).
    */
   private def appendOperation(
       ctx: BuildContext,
@@ -891,7 +1125,7 @@ object StageBuilder:
         val updatedOps = sourceBuilder.ops :+ op
         val updatedBuilder = sourceBuilder.copy(
           ops = updatedOps,
-          outputPartitioning = updatePartitioning(sourceBuilder.outputPartitioning, op)
+          outputPartitioning = updatePartitioning(sourceBuilder.outputPartitioning, op),
         )
         putBuilder(builderMap, updatedBuilder)
         sourceStageId
@@ -955,20 +1189,24 @@ object StageBuilder:
         require(meta.sides.length == 2, s"${meta.kind} requires exactly 2 sides")
         Seq(
           ShuffleInput(upstreamIds(0), Some(meta.sides(0)), meta.numPartitions),
-          ShuffleInput(upstreamIds(1), Some(meta.sides(1)), meta.numPartitions)
+          ShuffleInput(upstreamIds(1), Some(meta.sides(1)), meta.numPartitions),
         )
       case _ =>
         // Single-input operations
         require(upstreamIds.length == 1, s"${meta.kind} requires exactly 1 upstream stage")
         upstreamIds.headOption match {
           case Some(upstreamId) => Seq(ShuffleInput(upstreamId, None, meta.numPartitions))
-          case None => throw new IllegalStateException(s"${meta.kind} operation missing required upstream stage")
+          case None =>
+            throw new IllegalStateException(
+              s"${meta.kind} operation missing required upstream stage",
+            )
         }
     }
 
     // Determine output partitioning based on operation type
     val outputPartitioning = meta.kind match {
-      case WideOpKind.GroupByKey | WideOpKind.ReduceByKey | WideOpKind.PartitionBy | WideOpKind.Join | WideOpKind.CoGroup =>
+      case WideOpKind.GroupByKey | WideOpKind.ReduceByKey | WideOpKind.PartitionBy |
+          WideOpKind.Join | WideOpKind.CoGroup =>
         Some(Partitioning(byKey = true, numPartitions = meta.numPartitions))
       case WideOpKind.SortBy =>
         Some(Partitioning(byKey = false, numPartitions = meta.numPartitions))
@@ -976,15 +1214,18 @@ object StageBuilder:
         Some(Partitioning(byKey = false, numPartitions = meta.numPartitions))
     }
 
-    putNewBuilder(builderMap, StageDraft(
-      id = shuffleStageId,
-      ops = Vector.empty[Operation[Any, Any]], // Shuffle stages don't have narrow operations
-      inputSources = shuffleInputSources,
-      isShuffle = true,
-      shuffleMeta = Some(wideOp),
-      originalPlan = originalPlan,
-      outputPartitioning = outputPartitioning,
-    ))
+    putNewBuilder(
+      builderMap,
+      StageDraft(
+        id = shuffleStageId,
+        ops = Vector.empty[Operation[Any, Any]], // Shuffle stages don't have narrow operations
+        inputSources = shuffleInputSources,
+        isShuffle = true,
+        shuffleMeta = Some(wideOp),
+        originalPlan = originalPlan,
+        outputPartitioning = outputPartitioning,
+      ),
+    )
 
     // Add dependencies for all upstream stages
     upstreamIds.foreach { upstreamId =>
@@ -998,39 +1239,42 @@ object StageBuilder:
 
   /**
    * Updates output partitioning based on a narrow operation's transformation semantics.
-   * 
+   *
    * This function centralizes the logic for how each operation type affects partitioning metadata,
    * ensuring consistent behavior across the stage building process.
-   * 
+   *
    * **Operation Categories and Effects:**
-   * 
-   * 1. **Preserve completely**: MapOp, FilterOp, FlatMapOp, MapPartitionsOp
-   *    - Maintains both `byKey` status and `numPartitions`
-   * 
-   * 2. **Preserve count, modify key awareness**:
-   *    - KeysOp: Sets `byKey = false` (output is key-only, not key-value pairs)
-   *    - ValuesOp: Sets `byKey = false` (output is value-only)
-   *    - MapValuesOp, FilterKeysOp, FilterValuesOp, FlatMapValuesOp: Preserve both
-   * 
-   * 3. **Key awareness conditional**: DistinctOp
-   *    - Preserves `byKey = true` if input was key-partitioned
-   *    - Sets `byKey = false` otherwise
-   * 
-   * 4. **Local bypass operations**: GroupByKeyLocalOp, ReduceByKeyLocalOp
-   *    - Preserve existing partitioning (no shuffle occurred)
-   * 
-   * 5. **Wide operations**: Create new partitioning based on operation semantics
-   *    - Key-grouping ops (GroupByKey, ReduceByKey, PartitionBy, Join, CoGroup): `byKey = true`
-   *    - Rebalancing ops (SortBy, Repartition, Coalesce): `byKey = false`
-   * 
-   * @param prev Previous partitioning metadata from the upstream stage
-   * @param op The operation being applied to transform the data
-   * @return Updated partitioning metadata reflecting the operation's effect
-   * 
-   * @note This method should handle ALL Operation case classes. If a new operation is added
-   *       to the Operation ADT, this method must be updated to handle it explicitly.
+   *
+   *   1. **Preserve completely**: MapOp, FilterOp, FlatMapOp, MapPartitionsOp
+   *      - Maintains both `byKey` status and `numPartitions`
+   *   2. **Preserve count, modify key awareness**:
+   *      - KeysOp: Sets `byKey = false` (output is key-only, not key-value pairs)
+   *      - ValuesOp: Sets `byKey = false` (output is value-only)
+   *      - MapValuesOp, FilterKeysOp, FilterValuesOp, FlatMapValuesOp: Preserve both
+   *   3. **Key awareness conditional**: DistinctOp
+   *      - Preserves `byKey = true` if input was key-partitioned
+   *      - Sets `byKey = false` otherwise
+   *   4. **Local bypass operations**: GroupByKeyLocalOp, ReduceByKeyLocalOp
+   *      - Preserve existing partitioning (no shuffle occurred)
+   *   5. **Wide operations**: Create new partitioning based on operation semantics
+   *      - Key-grouping ops (GroupByKey, ReduceByKey, PartitionBy, Join, CoGroup): `byKey = true`
+   *      - Rebalancing ops (SortBy, Repartition, Coalesce): `byKey = false`
+   *
+   * @param prev
+   *   Previous partitioning metadata from the upstream stage
+   * @param op
+   *   The operation being applied to transform the data
+   * @return
+   *   Updated partitioning metadata reflecting the operation's effect
+   *
+   * @note
+   *   This method should handle ALL Operation case classes. If a new operation is added to the
+   *   Operation ADT, this method must be updated to handle it explicitly.
    */
-  private def updatePartitioning(prev: Option[Partitioning], op: Operation[Any, Any]): Option[Partitioning] = {
+  private def updatePartitioning(
+      prev: Option[Partitioning],
+      op: Operation[Any, Any],
+  ): Option[Partitioning] = {
     val result = op match {
       // Narrow operations that preserve partitioning completely
       case _: MapOp[_, _] | _: FilterOp[_] | _: FlatMapOp[_, _] | _: MapPartitionsOp[_, _] =>
@@ -1045,12 +1289,14 @@ object StageBuilder:
         // Values clears byKey because output is value-only
         prev.map(p => p.copy(byKey = false))
 
-      case _: MapValuesOp[_, _, _] | _: FilterKeysOp[_, _] | _: FilterValuesOp[_, _] | _: FlatMapValuesOp[_, _, _] =>
+      case _: MapValuesOp[_, _, _] | _: FilterKeysOp[_, _] | _: FilterValuesOp[_, _] |
+          _: FlatMapValuesOp[_, _, _] =>
         // These preserve the partitioning structure
         prev
 
       case _: DistinctOp[_] =>
-        // Distinct clears byKey unless previous was byKey (preserves key-based partitioning for key-value data)
+        /* Distinct clears byKey unless previous was byKey (preserves key-based partitioning for
+         * key-value data) */
         prev.map(p => if (p.byKey) p else p.copy(byKey = false))
 
       // Wide operations that create new partitioning
@@ -1085,17 +1331,25 @@ object StageBuilder:
 
       case cogroup: CoGroupOp[_, _, _] =>
         Some(Partitioning(byKey = true, numPartitions = cogroup.numPartitions))
-      
-      // This case should be unreachable if Operation ADT is properly sealed and all cases are handled above
-      // If this case is reached, it indicates a new operation was added without updating this method
+
+      /* This case should be unreachable if Operation ADT is properly sealed and all cases are
+       * handled above */
+      /* If this case is reached, it indicates a new operation was added without updating this
+       * method */
     }
-    
+
     // Validation: ensure result is sensible
     result.foreach { partitioning =>
-      require(partitioning.numPartitions > 0, s"Invalid partitioning from operation $op: numPartitions must be > 0, got ${partitioning.numPartitions}")
-      require(partitioning.numPartitions <= 1000000, s"Invalid partitioning from operation $op: numPartitions ${partitioning.numPartitions} exceeds reasonable limit")
+      require(
+        partitioning.numPartitions > 0,
+        s"Invalid partitioning from operation $op: numPartitions must be > 0, got ${partitioning.numPartitions}",
+      )
+      require(
+        partitioning.numPartitions <= 1000000,
+        s"Invalid partitioning from operation $op: numPartitions ${partitioning.numPartitions} exceeds reasonable limit",
+      )
     }
-    
+
     result
   }
 
@@ -1133,11 +1387,15 @@ object StageBuilder:
 
     sourceStages.toSeq.map { case (stageId, stageInfo) =>
       // Extract the original source plan from the shuffleOperation field
-      val sourcePlan = stageInfo.shuffleOperation.collect {
-        case source: Plan.Source[_] => source
-      }.getOrElse {
-        throw new IllegalStateException(s"Source stage ${stageId} has no original Plan.Source stored")
-      }
+      val sourcePlan = stageInfo.shuffleOperation
+        .collect { case source: Plan.Source[_] =>
+          source
+        }
+        .getOrElse {
+          throw new IllegalStateException(
+            s"Source stage ${stageId} has no original Plan.Source stored",
+          )
+        }
 
       // For each source stage, traverse to find the linear path to final stage
       val path = findLinearPathToFinal(graph, stageId, graph.finalStageId)
@@ -1148,7 +1406,7 @@ object StageBuilder:
         if (pathStage.isShuffleStage) {
           throw new UnsupportedOperationException(
             s"Legacy adapter encountered shuffle stage ${pathStageId} in path from ${stageId} to ${graph.finalStageId}. " +
-            "Cannot use legacy buildStages with shuffle operations - use DAGScheduler instead."
+              "Cannot use legacy buildStages with shuffle operations - use DAGScheduler instead.",
           )
         }
       }
@@ -1161,10 +1419,14 @@ object StageBuilder:
   }
 
   /**
-   * Finds the linear path from startStageId to endStageId in the dependency graph.
-   * Assumes a linear chain exists (no branching for narrow-only plans).
+   * Finds the linear path from startStageId to endStageId in the dependency graph. Assumes a
+   * linear chain exists (no branching for narrow-only plans).
    */
-  private def findLinearPathToFinal(graph: StageGraph, startStageId: StageId, endStageId: StageId): Seq[StageId] = {
+  private def findLinearPathToFinal(
+      graph: StageGraph,
+      startStageId: StageId,
+      endStageId: StageId,
+  ): Seq[StageId] = {
     def traverse(currentId: StageId, path: List[StageId]): Seq[StageId] = {
       if (currentId == endStageId) {
         (currentId :: path).reverse
@@ -1173,12 +1435,15 @@ object StageBuilder:
         val nextStages = graph.dependencies.filter(_._2.contains(currentId)).keys
         if (nextStages.size != 1) {
           throw new UnsupportedOperationException(
-            s"Legacy adapter expects linear chain but found ${nextStages.size} stages depending on ${currentId}"
+            s"Legacy adapter expects linear chain but found ${nextStages.size} stages depending on ${currentId}",
           )
         }
         nextStages.headOption match {
           case Some(nextStage) => traverse(nextStage, currentId :: path)
-          case None => throw new IllegalStateException(s"Expected exactly one next stage but found none for ${currentId}")
+          case None =>
+            throw new IllegalStateException(
+              s"Expected exactly one next stage but found none for ${currentId}",
+            )
         }
       }
     }
@@ -1187,8 +1452,8 @@ object StageBuilder:
   }
 
   /**
-   * Builds a single Stage by combining all operations from the stages in the path.
-   * For the legacy adapter, we need to create a stage that represents the entire chain from source to end.
+   * Builds a single Stage by combining all operations from the stages in the path. For the legacy
+   * adapter, we need to create a stage that represents the entire chain from source to end.
    */
   private def buildStageFromPath(graph: StageGraph, path: Seq[StageId]): Stage[_, _] = {
     // The path contains stage IDs from source to final stage
@@ -1208,11 +1473,12 @@ object StageBuilder:
       stages.headOption match {
         case Some(firstStage) =>
           stages.drop(1).foldLeft(firstStage) { (chained, nextStage) =>
-            Stage.ChainedStage(chained.asInstanceOf[Stage[Any, Any]], nextStage.asInstanceOf[Stage[Any, Any]])
+            Stage.ChainedStage(
+              chained.asInstanceOf[Stage[Any, Any]],
+              nextStage.asInstanceOf[Stage[Any, Any]],
+            )
           }
         case None => throw new IllegalStateException("Stage sequence unexpectedly empty")
       }
     }
   }
-
-

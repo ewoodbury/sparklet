@@ -18,8 +18,8 @@ object Executor:
         source.partitions.map { partition =>
           // Type-safe factory method eliminates double casting
           Task.createStageTask[Any, A](
-            partition.asInstanceOf[Partition[Any]], 
-            stage.asInstanceOf[Stage[Any, A]]
+            partition.asInstanceOf[Partition[Any]],
+            stage.asInstanceOf[Stage[Any, A]],
           )
         }
       }

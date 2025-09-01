@@ -54,11 +54,12 @@ final class DAGScheduler[F[_]: Sync](
       finalData <- Sync[F].delay {
         val finalResults = stageResults(stageGraph.finalStageId)
         // Type-safe extraction of final results data
-        finalResults.flatMap(partition => 
+        finalResults.flatMap(partition =>
           partition.data match {
             case iter: Iterable[A @unchecked] => iter
-            case other => throw new ClassCastException(s"Expected Iterable[A], got ${other.getClass}")
-          }
+            case other =>
+              throw new ClassCastException(s"Expected Iterable[A], got ${other.getClass}")
+          },
         )
       }
       _ <- Sync[F].delay(logger.info("DAGScheduler: multi-stage execution completed"))
