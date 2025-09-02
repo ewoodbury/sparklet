@@ -517,6 +517,27 @@ object StageBuilder:
   }
 
   /**
+   * Centralized factory for converting Plan nodes to Operation instances with controlled type erasure.
+   * This consolidates all Plan->Operation conversions to minimize casting throughout buildStagesFromPlan.
+   */
+  private object OperationFactoryUnsafe {
+    def fromPlan(plan: Plan[_]): Operation[Any, Any] = plan match {
+      case Plan.MapOp(_, f) => MapOp(f.asInstanceOf[Any => Any])
+      case Plan.FilterOp(_, p) => FilterOp(p.asInstanceOf[Any => Boolean])
+      case Plan.FlatMapOp(_, f) => FlatMapOp(f.asInstanceOf[Any => IterableOnce[Any]])
+      case Plan.DistinctOp(_) => DistinctOp[Any]()
+      case Plan.KeysOp(_) => KeysOp[Any, Any]().asInstanceOf[Operation[Any, Any]]
+      case Plan.ValuesOp(_) => ValuesOp[Any, Any]().asInstanceOf[Operation[Any, Any]]
+      case Plan.MapValuesOp(_, f) => MapValuesOp[Any, Any, Any](f.asInstanceOf[Any => Any]).asInstanceOf[Operation[Any, Any]]
+      case Plan.FilterKeysOp(_, p) => FilterKeysOp[Any, Any](p.asInstanceOf[Any => Boolean]).asInstanceOf[Operation[Any, Any]]
+      case Plan.FilterValuesOp(_, p) => FilterValuesOp[Any, Any](p.asInstanceOf[Any => Boolean]).asInstanceOf[Operation[Any, Any]]
+      case Plan.FlatMapValuesOp(_, f) => FlatMapValuesOp[Any, Any, Any](f.asInstanceOf[Any => IterableOnce[Any]]).asInstanceOf[Operation[Any, Any]]
+      case Plan.MapPartitionsOp(_, f) => MapPartitionsOp(f.asInstanceOf[Iterator[Any] => Iterator[Any]])
+      case _ => throw new UnsupportedOperationException(s"Cannot create operation from plan: $plan")
+    }
+  }
+
+  /**
    * Single controlled point of type erasure where it's unavoidable.
    * This is the only place where we deal with Any types and casting, keeping type safety elsewhere.
    */
@@ -680,7 +701,7 @@ object StageBuilder:
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          MapOp(f.asInstanceOf[Any => Any]),
+          OperationFactoryUnsafe.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -691,7 +712,7 @@ object StageBuilder:
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          FilterOp(p.asInstanceOf[Any => Boolean]),
+          OperationFactoryUnsafe.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -702,7 +723,7 @@ object StageBuilder:
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          FlatMapOp(f.asInstanceOf[Any => IterableOnce[Any]]),
+          OperationFactoryUnsafe.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -710,17 +731,21 @@ object StageBuilder:
 
       case Plan.DistinctOp(sourcePlan) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
-        val resultId =
-          appendOperation(ctx, sourceStageId, DistinctOp[Any](), builderMap, dependencies)
+        val resultId = appendOperation(
+          ctx,
+          sourceStageId,
+          OperationFactoryUnsafe.fromPlan(plan),
+          builderMap,
+          dependencies,
+        )
         (resultId, Some(plan))
 
       case Plan.KeysOp(sourcePlan) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
-        val op = KeysOp[Any, Any]()
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          op.asInstanceOf[Operation[Any, Any]],
+          OperationFactoryUnsafe.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -728,11 +753,10 @@ object StageBuilder:
 
       case Plan.ValuesOp(sourcePlan) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
-        val op = ValuesOp[Any, Any]()
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          op.asInstanceOf[Operation[Any, Any]],
+          OperationFactoryUnsafe.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -740,11 +764,10 @@ object StageBuilder:
 
       case Plan.MapValuesOp(sourcePlan, f) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
-        val op = MapValuesOp[Any, Any, Any](f.asInstanceOf[Any => Any])
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          op.asInstanceOf[Operation[Any, Any]],
+          OperationFactoryUnsafe.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -752,11 +775,10 @@ object StageBuilder:
 
       case Plan.FilterKeysOp(sourcePlan, p) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
-        val op = FilterKeysOp[Any, Any](p.asInstanceOf[Any => Boolean])
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          op.asInstanceOf[Operation[Any, Any]],
+          OperationFactoryUnsafe.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -764,11 +786,10 @@ object StageBuilder:
 
       case Plan.FilterValuesOp(sourcePlan, p) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
-        val op = FilterValuesOp[Any, Any](p.asInstanceOf[Any => Boolean])
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          op.asInstanceOf[Operation[Any, Any]],
+          OperationFactoryUnsafe.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -776,11 +797,10 @@ object StageBuilder:
 
       case Plan.FlatMapValuesOp(sourcePlan, f) =>
         val (sourceStageId, _) = buildStagesFromPlan(ctx, sourcePlan, builderMap, dependencies)
-        val op = FlatMapValuesOp[Any, Any, Any](f.asInstanceOf[Any => IterableOnce[Any]])
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          op.asInstanceOf[Operation[Any, Any]],
+          OperationFactoryUnsafe.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -791,7 +811,7 @@ object StageBuilder:
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          MapPartitionsOp(f.asInstanceOf[Iterator[Any] => Iterator[Any]]),
+          OperationFactoryUnsafe.fromPlan(plan),
           builderMap,
           dependencies,
         )
