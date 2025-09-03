@@ -493,32 +493,35 @@ object StageBuilder:
   }
 
   /**
-   * Type-safe stage builders that work with properly typed operations.
-   * This preserves type safety for operations where the types align naturally.
+   * Type-safe stage builders that work with properly typed operations. This preserves type safety
+   * for operations where the types align naturally.
    */
   object StageBuilderTypeSafe {
     // Basic operations that preserve types naturally
     def map[A, B](f: A => B): Stage[A, B] = Stage.map(f)
-    def filter[A](p: A => Boolean): Stage[A, A] = Stage.filter(p)  
+    def filter[A](p: A => Boolean): Stage[A, A] = Stage.filter(p)
     def flatMap[A, B](f: A => IterableOnce[B]): Stage[A, B] = Stage.flatMap(f)
     def distinct[A]: Stage[A, A] = Stage.distinct[A]
     def mapPartitions[A, B](f: Iterator[A] => Iterator[B]): Stage[A, B] = Stage.mapPartitions(f)
     def identity[A]: Stage[A, A] = Stage.identity[A]
-    
+
     // Key-value operations that work with proper type constraints
     def keys[K, V]: Stage[(K, V), K] = Stage.keys[K, V]
     def values[K, V]: Stage[(K, V), V] = Stage.values[K, V]
     def mapValues[K, V, V2](f: V => V2): Stage[(K, V), (K, V2)] = Stage.mapValues(f)
     def filterKeys[K, V](p: K => Boolean): Stage[(K, V), (K, V)] = Stage.filterKeys(p)
     def filterValues[K, V](p: V => Boolean): Stage[(K, V), (K, V)] = Stage.filterValues(p)
-    def flatMapValues[K, V, V2](f: V => IterableOnce[V2]): Stage[(K, V), (K, V2)] = Stage.flatMapValues(f)
+    def flatMapValues[K, V, V2](f: V => IterableOnce[V2]): Stage[(K, V), (K, V2)] =
+      Stage.flatMapValues(f)
     def groupByKeyLocal[K, V]: Stage[(K, V), (K, Iterable[V])] = Stage.groupByKeyLocal[K, V]
-    def reduceByKeyLocal[K, V](reduceFunc: (V, V) => V): Stage[(K, V), (K, V)] = Stage.reduceByKeyLocal(reduceFunc)
+    def reduceByKeyLocal[K, V](reduceFunc: (V, V) => V): Stage[(K, V), (K, V)] =
+      Stage.reduceByKeyLocal(reduceFunc)
   }
 
   /**
-   * Centralized factory for converting Plan nodes to Operation instances with controlled type erasure.
-   * This consolidates all Plan->Operation conversions to minimize casting throughout buildStagesFromPlan.
+   * Centralized factory for converting Plan nodes to Operation instances with controlled type
+   * erasure. This consolidates all Plan->Operation conversions to minimize casting throughout
+   * buildStagesFromPlan.
    */
   private object OperationFactoryUnsafe {
     def fromPlan(plan: Plan[_]): Operation[Any, Any] = plan match {
@@ -528,18 +531,25 @@ object StageBuilder:
       case Plan.DistinctOp(_) => DistinctOp[Any]()
       case Plan.KeysOp(_) => KeysOp[Any, Any]().asInstanceOf[Operation[Any, Any]]
       case Plan.ValuesOp(_) => ValuesOp[Any, Any]().asInstanceOf[Operation[Any, Any]]
-      case Plan.MapValuesOp(_, f) => MapValuesOp[Any, Any, Any](f.asInstanceOf[Any => Any]).asInstanceOf[Operation[Any, Any]]
-      case Plan.FilterKeysOp(_, p) => FilterKeysOp[Any, Any](p.asInstanceOf[Any => Boolean]).asInstanceOf[Operation[Any, Any]]
-      case Plan.FilterValuesOp(_, p) => FilterValuesOp[Any, Any](p.asInstanceOf[Any => Boolean]).asInstanceOf[Operation[Any, Any]]
-      case Plan.FlatMapValuesOp(_, f) => FlatMapValuesOp[Any, Any, Any](f.asInstanceOf[Any => IterableOnce[Any]]).asInstanceOf[Operation[Any, Any]]
-      case Plan.MapPartitionsOp(_, f) => MapPartitionsOp(f.asInstanceOf[Iterator[Any] => Iterator[Any]])
-      case _ => throw new UnsupportedOperationException(s"Cannot create operation from plan: $plan")
+      case Plan.MapValuesOp(_, f) =>
+        MapValuesOp[Any, Any, Any](f.asInstanceOf[Any => Any]).asInstanceOf[Operation[Any, Any]]
+      case Plan.FilterKeysOp(_, p) =>
+        FilterKeysOp[Any, Any](p.asInstanceOf[Any => Boolean]).asInstanceOf[Operation[Any, Any]]
+      case Plan.FilterValuesOp(_, p) =>
+        FilterValuesOp[Any, Any](p.asInstanceOf[Any => Boolean]).asInstanceOf[Operation[Any, Any]]
+      case Plan.FlatMapValuesOp(_, f) =>
+        FlatMapValuesOp[Any, Any, Any](f.asInstanceOf[Any => IterableOnce[Any]])
+          .asInstanceOf[Operation[Any, Any]]
+      case Plan.MapPartitionsOp(_, f) =>
+        MapPartitionsOp(f.asInstanceOf[Iterator[Any] => Iterator[Any]])
+      case _ =>
+        throw new UnsupportedOperationException(s"Cannot create operation from plan: $plan")
     }
   }
 
   /**
-   * Single controlled point of type erasure where it's unavoidable.
-   * This is the only place where we deal with Any types and casting, keeping type safety elsewhere.
+   * Single controlled point of type erasure where it's unavoidable. This is the only place where
+   * we deal with Any types and casting, keeping type safety elsewhere.
    */
   private def createStageFromOpUnsafe(op: Operation[Any, Any]): Stage[Any, Any] = {
     op match {
@@ -549,25 +559,35 @@ object StageBuilder:
       case DistinctOp() => StageBuilderTypeSafe.distinct[Any]
       case MapPartitionsOp(f) => StageBuilderTypeSafe.mapPartitions(f)
       case PartitionByLocalOp(_) => StageBuilderTypeSafe.identity[Any]
-      
+
       // Key-value operations - controlled type erasure point
-      case _: KeysOp[_, _] => 
+      case _: KeysOp[_, _] =>
         StageBuilderTypeSafe.keys[Any, Any].asInstanceOf[Stage[Any, Any]]
-      case _: ValuesOp[_, _] => 
+      case _: ValuesOp[_, _] =>
         StageBuilderTypeSafe.values[Any, Any].asInstanceOf[Stage[Any, Any]]
-      case MapValuesOp(f) => 
-        StageBuilderTypeSafe.mapValues[Any, Any, Any](f.asInstanceOf[Any => Any]).asInstanceOf[Stage[Any, Any]]
-      case FilterKeysOp(p) => 
-        StageBuilderTypeSafe.filterKeys[Any, Any](p.asInstanceOf[Any => Boolean]).asInstanceOf[Stage[Any, Any]]
-      case FilterValuesOp(p) => 
-        StageBuilderTypeSafe.filterValues[Any, Any](p.asInstanceOf[Any => Boolean]).asInstanceOf[Stage[Any, Any]]
-      case FlatMapValuesOp(f) => 
-        StageBuilderTypeSafe.flatMapValues[Any, Any, Any](f.asInstanceOf[Any => IterableOnce[Any]]).asInstanceOf[Stage[Any, Any]]
-      case _: GroupByKeyLocalOp[_, _] => 
+      case MapValuesOp(f) =>
+        StageBuilderTypeSafe
+          .mapValues[Any, Any, Any](f.asInstanceOf[Any => Any])
+          .asInstanceOf[Stage[Any, Any]]
+      case FilterKeysOp(p) =>
+        StageBuilderTypeSafe
+          .filterKeys[Any, Any](p.asInstanceOf[Any => Boolean])
+          .asInstanceOf[Stage[Any, Any]]
+      case FilterValuesOp(p) =>
+        StageBuilderTypeSafe
+          .filterValues[Any, Any](p.asInstanceOf[Any => Boolean])
+          .asInstanceOf[Stage[Any, Any]]
+      case FlatMapValuesOp(f) =>
+        StageBuilderTypeSafe
+          .flatMapValues[Any, Any, Any](f.asInstanceOf[Any => IterableOnce[Any]])
+          .asInstanceOf[Stage[Any, Any]]
+      case _: GroupByKeyLocalOp[_, _] =>
         StageBuilderTypeSafe.groupByKeyLocal[Any, Any].asInstanceOf[Stage[Any, Any]]
-      case ReduceByKeyLocalOp(reduceFunc) => 
-        StageBuilderTypeSafe.reduceByKeyLocal[Any, Any](reduceFunc.asInstanceOf[(Any, Any) => Any]).asInstanceOf[Stage[Any, Any]]
-      
+      case ReduceByKeyLocalOp(reduceFunc) =>
+        StageBuilderTypeSafe
+          .reduceByKeyLocal[Any, Any](reduceFunc.asInstanceOf[(Any, Any) => Any])
+          .asInstanceOf[Stage[Any, Any]]
+
       case _ => throw new UnsupportedOperationException(s"Cannot create stage from operation: $op")
     }
   }
@@ -577,7 +597,10 @@ object StageBuilder:
    * pattern matching for operation chaining and eliminates the need for unsafe type casting where
    * possible.
    */
-  private def chainOperationUnsafe(stage: Stage[Any, Any], op: Operation[Any, Any]): Stage[Any, Any] = {
+  private def chainOperationUnsafe(
+      stage: Stage[Any, Any],
+      op: Operation[Any, Any],
+  ): Stage[Any, Any] = {
     Stage.ChainedStage(stage, createStageFromOpUnsafe(op))
   }
 
