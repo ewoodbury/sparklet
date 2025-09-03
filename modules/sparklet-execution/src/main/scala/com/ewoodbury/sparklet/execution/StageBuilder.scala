@@ -493,32 +493,6 @@ object StageBuilder:
   }
 
   /**
-   * Type-safe stage builders that work with properly typed operations. This preserves type safety
-   * for operations where the types align naturally.
-   */
-  object StageBuilderTypeSafe {
-    // Basic operations that preserve types naturally
-    def map[A, B](f: A => B): Stage[A, B] = Stage.map(f)
-    def filter[A](p: A => Boolean): Stage[A, A] = Stage.filter(p)
-    def flatMap[A, B](f: A => IterableOnce[B]): Stage[A, B] = Stage.flatMap(f)
-    def distinct[A]: Stage[A, A] = Stage.distinct[A]
-    def mapPartitions[A, B](f: Iterator[A] => Iterator[B]): Stage[A, B] = Stage.mapPartitions(f)
-    def identity[A]: Stage[A, A] = Stage.identity[A]
-
-    // Key-value operations that work with proper type constraints
-    def keys[K, V]: Stage[(K, V), K] = Stage.keys[K, V]
-    def values[K, V]: Stage[(K, V), V] = Stage.values[K, V]
-    def mapValues[K, V, V2](f: V => V2): Stage[(K, V), (K, V2)] = Stage.mapValues(f)
-    def filterKeys[K, V](p: K => Boolean): Stage[(K, V), (K, V)] = Stage.filterKeys(p)
-    def filterValues[K, V](p: V => Boolean): Stage[(K, V), (K, V)] = Stage.filterValues(p)
-    def flatMapValues[K, V, V2](f: V => IterableOnce[V2]): Stage[(K, V), (K, V2)] =
-      Stage.flatMapValues(f)
-    def groupByKeyLocal[K, V]: Stage[(K, V), (K, Iterable[V])] = Stage.groupByKeyLocal[K, V]
-    def reduceByKeyLocal[K, V](reduceFunc: (V, V) => V): Stage[(K, V), (K, V)] =
-      Stage.reduceByKeyLocal(reduceFunc)
-  }
-
-  /**
    * Centralized factory for converting Plan nodes to Operation instances with controlled type
    * erasure. This consolidates all Plan->Operation conversions to minimize casting throughout
    * buildStagesFromPlan.
@@ -553,38 +527,38 @@ object StageBuilder:
    */
   private def createStageFromOpUnsafe(op: Operation[Any, Any]): Stage[Any, Any] = {
     op match {
-      case MapOp(f) => StageBuilderTypeSafe.map(f)
-      case FilterOp(p) => StageBuilderTypeSafe.filter(p)
-      case FlatMapOp(f) => StageBuilderTypeSafe.flatMap(f)
-      case DistinctOp() => StageBuilderTypeSafe.distinct[Any]
-      case MapPartitionsOp(f) => StageBuilderTypeSafe.mapPartitions(f)
-      case PartitionByLocalOp(_) => StageBuilderTypeSafe.identity[Any]
+      case MapOp(f) => Stage.map(f)
+      case FilterOp(p) => Stage.filter(p)
+      case FlatMapOp(f) => Stage.flatMap(f)
+      case DistinctOp() => Stage.distinct[Any]
+      case MapPartitionsOp(f) => Stage.mapPartitions(f)
+      case PartitionByLocalOp(_) => Stage.identity[Any]
 
       // Key-value operations - controlled type erasure point
       case _: KeysOp[_, _] =>
-        StageBuilderTypeSafe.keys[Any, Any].asInstanceOf[Stage[Any, Any]]
+        Stage.keys[Any, Any].asInstanceOf[Stage[Any, Any]]
       case _: ValuesOp[_, _] =>
-        StageBuilderTypeSafe.values[Any, Any].asInstanceOf[Stage[Any, Any]]
+        Stage.values[Any, Any].asInstanceOf[Stage[Any, Any]]
       case MapValuesOp(f) =>
-        StageBuilderTypeSafe
+        Stage
           .mapValues[Any, Any, Any](f.asInstanceOf[Any => Any])
           .asInstanceOf[Stage[Any, Any]]
       case FilterKeysOp(p) =>
-        StageBuilderTypeSafe
+        Stage
           .filterKeys[Any, Any](p.asInstanceOf[Any => Boolean])
           .asInstanceOf[Stage[Any, Any]]
       case FilterValuesOp(p) =>
-        StageBuilderTypeSafe
+        Stage
           .filterValues[Any, Any](p.asInstanceOf[Any => Boolean])
           .asInstanceOf[Stage[Any, Any]]
       case FlatMapValuesOp(f) =>
-        StageBuilderTypeSafe
+        Stage
           .flatMapValues[Any, Any, Any](f.asInstanceOf[Any => IterableOnce[Any]])
           .asInstanceOf[Stage[Any, Any]]
       case _: GroupByKeyLocalOp[_, _] =>
-        StageBuilderTypeSafe.groupByKeyLocal[Any, Any].asInstanceOf[Stage[Any, Any]]
+        Stage.groupByKeyLocal[Any, Any].asInstanceOf[Stage[Any, Any]]
       case ReduceByKeyLocalOp(reduceFunc) =>
-        StageBuilderTypeSafe
+        Stage
           .reduceByKeyLocal[Any, Any](reduceFunc.asInstanceOf[(Any, Any) => Any])
           .asInstanceOf[Stage[Any, Any]]
 
