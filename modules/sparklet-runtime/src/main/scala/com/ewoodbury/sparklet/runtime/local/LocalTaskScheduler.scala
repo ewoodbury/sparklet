@@ -5,99 +5,53 @@ import cats.effect.std.Semaphore
 import cats.syntax.all.*
 import com.typesafe.scalalogging.StrictLogging
 
-import com.ewoodbury.sparklet.core.{Partition, RetryPolicy}
+import com.ewoodbury.sparklet.core.{Partition, RetryPolicy, SparkletConf}
+import com.ewoodbury.sparklet.runtime.TaskExecutionWrapper
 import com.ewoodbury.sparklet.runtime.api.{RunnableTask, TaskScheduler}
-import com.ewoodbury.sparklet.runtime.{
-  LineageRecoveryManager,
-  SparkletRuntime,
-  TaskExecutionWrapper,
-  TaskReconstructor,
-}
 
 /**
- * Enhanced local implementation of the task scheduler with fault tolerance support.
+ * Local implementation of the task scheduler.
  *
  * Tasks are executed with a parallelism bound; each task body is run on the blocking pool using
- * IO.blocking to avoid compute pool starvation. Supports retry logic and lineage-based recovery
- * for enhanced fault tolerance.
+ * IO.blocking to avoid compute pool starvation. Normal submission reads the retry policy from
+ * [[SparkletConf]] at submission time, so configuration changes apply to subsequent submissions;
+ * an explicit policy override is available through `submitWithRetry`.
  */
 final class LocalTaskScheduler(
     parallelism: Int,
-    retryPolicy: RetryPolicy = RetryPolicy.default,
-    enableRecovery: Boolean = true,
 ) extends TaskScheduler[IO]
     with StrictLogging:
 
-  // Lazy initialization of execution wrapper and recovery manager to avoid circular dependency
-  private lazy val executionWrapper: TaskExecutionWrapper[IO] = {
-    if (enableRecovery) {
-      val runtime = SparkletRuntime.get
-      val taskReconstructor = TaskReconstructor.default[IO](runtime.shuffle)
-      val recoveryManager = LineageRecoveryManager.default[IO](taskReconstructor)
-      TaskExecutionWrapper.withRecovery[IO](retryPolicy, recoveryManager)
-    } else {
-      TaskExecutionWrapper.withRetryPolicy[IO](retryPolicy)
-    }
+  /**
+   * Submits tasks and evaluates them in parallel, respecting the configured parallelism. Failed
+   * tasks are retried according to the retry policy derived from the active [[SparkletConf]].
+   */
+  def submit[A, B](tasks: Seq[RunnableTask[A, B]]): IO[Seq[Partition[B]]] = {
+    val retryPolicy = SparkletConf.get.retryPolicy
+    logger.debug(
+      s"LocalTaskScheduler: submitting ${tasks.length} tasks with parallelism=$parallelism " +
+        s"and maxRetries=${retryPolicy.maxRetries}",
+    )
+    executeWithWrapper(tasks, TaskExecutionWrapper.withRetryPolicy[IO](retryPolicy))
+      .guarantee(IO(logger.debug("LocalTaskScheduler: all tasks completed")))
   }
 
   /**
-   * Submits tasks and evaluates them in parallel, respecting the configured parallelism.
-   */
-  def submit[A, B](tasks: Seq[RunnableTask[A, B]]): IO[Seq[Partition[B]]] =
-    logger.debug(
-      s"LocalTaskScheduler: submitting ${tasks.length} tasks with parallelism=$parallelism",
-    )
-
-    // For now, use the same execution path for all tasks
-    // In Phase 3, we can differentiate between enhanced and simple tasks
-    executeTasksWithRetry(tasks)
-      .guarantee(IO(logger.debug("LocalTaskScheduler: all tasks completed")))
-
-  /**
-   * Submits tasks with retry logic using the provided retry policy.
+   * Submits tasks with an explicit retry policy that overrides the configured one.
    */
   def submitWithRetry[A, B](
       tasks: Seq[RunnableTask[A, B]],
       policy: RetryPolicy,
-  ): IO[Seq[Partition[B]]] =
+  ): IO[Seq[Partition[B]]] = {
     logger.debug(
-      s"LocalTaskScheduler: submitting ${tasks.length} tasks with retry policy (maxRetries=${policy.maxRetries})",
+      s"LocalTaskScheduler: submitting ${tasks.length} tasks with explicit retry policy (maxRetries=${policy.maxRetries})",
     )
-
-    // Create a temporary execution wrapper with the provided policy
-    val tempWrapper = {
-      if (enableRecovery) {
-        val runtime = SparkletRuntime.get
-        val taskReconstructor = TaskReconstructor.default[IO](runtime.shuffle)
-        val recoveryManager = LineageRecoveryManager.default[IO](taskReconstructor)
-        TaskExecutionWrapper.withRecovery[IO](policy, recoveryManager)
-      } else {
-        TaskExecutionWrapper.withRetryPolicy[IO](policy)
-      }
-    }
-
-    executeWithWrapper(tasks, tempWrapper)
+    executeWithWrapper(tasks, TaskExecutionWrapper.withRetryPolicy[IO](policy))
+  }
 
   /**
-   * Execute tasks using the execution wrapper with retry logic. For tasks that don't need retry
-   * logic (like timing tests), use direct blocking execution.
-   */
-  private def executeTasksWithRetry[A, B](tasks: Seq[RunnableTask[A, B]]): IO[Seq[Partition[B]]] =
-    Semaphore[IO](parallelism.toLong).flatMap { semaphore =>
-      tasks.toList.parTraverse { task =>
-        semaphore.permit.use { _ =>
-          // Use the execution wrapper for proper retry logic and lineage tracking
-          executionWrapper.executeSimple(task)
-        }
-      }
-    }
-
-  /**
-   * Execute simple tasks (without lineage support) using blocking execution.
-   */
-
-  /**
-   * Execute tasks with a specific wrapper (used by submitWithRetry).
+   * Execute tasks with the given wrapper, preserving input order in the results and bounding
+   * concurrency at `parallelism`.
    */
   private def executeWithWrapper[A, B](
       tasks: Seq[RunnableTask[A, B]],

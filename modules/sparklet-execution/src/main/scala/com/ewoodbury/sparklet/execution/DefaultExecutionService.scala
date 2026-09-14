@@ -3,7 +3,7 @@ package com.ewoodbury.sparklet.execution
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 
-import com.ewoodbury.sparklet.core.{ExecutionService, Plan}
+import com.ewoodbury.sparklet.core.{ExecutionService, Partition, Plan}
 import com.ewoodbury.sparklet.runtime.SparkletRuntime
 
 /**
@@ -11,30 +11,31 @@ import com.ewoodbury.sparklet.runtime.SparkletRuntime
  */
 class DefaultExecutionService extends ExecutionService {
 
-  def execute[A](plan: Plan[A]): Seq[A] = {
-    if (DAGScheduler.requiresDAGScheduling(plan)) {
-      // Use DAG scheduler for wide transformations
-      val rt = SparkletRuntime.get
-      val scheduler = new DAGScheduler[IO](rt.shuffle, rt.scheduler, rt.partitioner)
-      scheduler.execute(plan).unsafeRunSync().toSeq
-    } else {
-      // Use single-stage execution for narrow transformations
-      plan match {
-        case s: Plan.Source[A] =>
-          // Sources don't need tasks, just return the data directly
-          s.partitions.flatMap(_.data)
+  def execute[A](plan: Plan[A]): Seq[A] =
+    executePartitions(plan).flatMap(_.data)
 
-        case _ =>
-          val tasks = Executor.createTasks(plan)
-          // Cast to the expected type for TaskScheduler - this is safe because createTasks
-          // returns tasks that produce the correct output type A
-          @SuppressWarnings(Array("org.wartremover.warts.Any"))
-          val typedTasks = tasks.asInstanceOf[Seq[Task[Any, A]]]
-          @SuppressWarnings(Array("org.wartremover.warts.Any"))
-          val resultPartitions = SparkletRuntime.get.scheduler.submit(typedTasks).unsafeRunSync()
-          resultPartitions.flatMap(_.data)
+  def executePartitions[A](plan: Plan[A]): Seq[Partition[A]] = plan match {
+    case s: Plan.Source[A] =>
+      // Sources don't need tasks, just return the data directly
+      s.partitions
+
+    case _ =>
+      if (DAGScheduler.requiresDAGScheduling(plan)) {
+        // Use DAG scheduler for wide transformations
+        val rt = SparkletRuntime.get
+        val scheduler = new DAGScheduler[IO](rt.shuffle, rt.scheduler, rt.partitioner)
+        scheduler.executePartitions(plan).unsafeRunSync()
+      } else {
+        // Use single-stage execution for narrow transformations
+        val tasks = Executor.createTasks(plan)
+        // Cast to the expected type for TaskScheduler - this is safe because createTasks
+        // returns tasks that produce the correct output type A
+        @SuppressWarnings(Array("org.wartremover.warts.Any"))
+        val typedTasks = tasks.asInstanceOf[Seq[Task[Any, A]]]
+        @SuppressWarnings(Array("org.wartremover.warts.Any"))
+        val resultPartitions = SparkletRuntime.get.scheduler.submit(typedTasks).unsafeRunSync()
+        resultPartitions
       }
-    }
   }
 
   def count[A](plan: Plan[A]): Long = {

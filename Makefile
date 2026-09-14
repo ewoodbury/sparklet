@@ -7,7 +7,7 @@ lint: ## Run linting and formatting
 
 .PHONY: test-lint
 test-lint: ## Run linting without fixing
-	sbt scalafixAll --check
+	sbt "scalafixAll --check"
 	sbt scalafmtCheck
 
 .PHONY: test

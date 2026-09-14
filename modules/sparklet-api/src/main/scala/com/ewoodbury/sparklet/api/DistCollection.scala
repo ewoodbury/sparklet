@@ -266,48 +266,24 @@ final case class DistCollection[A](plan: Plan[A]):
 
   /**
    * Action: Executes the plan and aggregates the elements using the given functions. This triggers
-   * computation.
+   * computation. `seqOp` is applied per partition starting from `zero`; `combOp` combines the
+   * per-partition accumulators. Empty input returns `zero` without invoking either function.
    */
-  def aggregate[B](zero: B)(seqOp: (B, A) => B, combOp: (B, B) => B): B =
-    collect().foldLeft(zero)(seqOp)
+  def aggregate[B](zero: B)(seqOp: (B, A) => B, combOp: (B, B) => B): B = {
+    val partitions = ExecutionService.get.executePartitions(this.plan)
+    if (partitions.forall(_.data.isEmpty)) zero
+    else
+      partitions
+        .map(partition => partition.data.foldLeft(zero)(seqOp))
+        .reduceOption(combOp)
+        .getOrElse(zero)
+  }
 
   /**
    * Action: Executes the plan and applies the given function to each element. This triggers
    * computation.
    */
   def foreach(f: A => Unit): Unit = collect().foreach(f)
-
-  // --- Legacy Actions (these will be removed once DAG scheduler is implemented) ---
-  // These actions still collect all data to the driver first. This is correct for
-  // a local simulation but is not a distributed implementation.
-
-  /**
-   * Legacy action: Reduces by key by collecting all data to driver. Will be replaced by proper
-   * shuffle-based implementation in DAG scheduler.
-   */
-  def reduceByKeyAction[K, V](op: (V, V) => V)(using ev: A =:= (K, V)): Map[K, V] =
-    val collected = this.asInstanceOf[DistCollection[(K, V)]].collect()
-    collected
-      .groupBy(_._1)
-      .map { case (k, pairs) =>
-        (
-          k,
-          pairs
-            .map(_._2)
-            .reduceOption(op)
-            .getOrElse(throw new NoSuchElementException(s"No values found for key $k")),
-        )
-      }
-
-  /**
-   * Legacy action: Groups by key by collecting all data to driver. Will be replaced by proper
-   * shuffle-based implementation in DAG scheduler.
-   */
-  def groupByKeyAction[K, V](using ev: A =:= (K, V)): Map[K, Iterable[V]] =
-    val collected = this.asInstanceOf[DistCollection[(K, V)]].collect()
-    collected
-      .groupBy(_._1)
-      .map { case (k, pairs) => (k, pairs.map(_._2)) }
 
 end DistCollection
 
@@ -341,24 +317,36 @@ object DistCollection:
   }
 
   /**
-   * Creates a DistCollection from an existing Iterable data source, splitting it into a specified
-   * number of partitions.
+   * Creates a DistCollection from an existing Iterable data source, splitting it into exactly
+   * `numPartitions` partitions. Records are distributed deterministically: input order is
+   * preserved within each partition, and earlier records land in earlier partitions. Empty inputs
+   * produce exactly `numPartitions` empty partitions.
    *
    * @param data
    *   The source data.
    * @param numPartitions
-   *   The desired number of partitions.
+   *   The desired number of partitions; must be positive.
    * @return
    *   A new DistCollection.
    */
   def apply[A](data: Iterable[A], numPartitions: Int): DistCollection[A] =
     require(numPartitions > 0, "Number of partitions must be positive.")
+    DistCollection(Plan.Source(splitIntoPartitions(data, numPartitions)))
 
-    // Split the source data into groups that will become our partitions
-    val groupedData = data.toSeq.grouped(math.ceil(data.size.toDouble / numPartitions).toInt)
+  /**
+   * Splits source data into exactly `numPartitions` balanced, contiguous partitions while
+   * preserving record order. The first `size % numPartitions` partitions receive one extra record.
+   */
+  private def splitIntoPartitions[A](data: Iterable[A], numPartitions: Int): Seq[Partition[A]] = {
+    val elements = data.toVector
+    val baseSize = elements.length / numPartitions
+    val remainder = elements.length % numPartitions
 
-    // Create the actual Partition objects
-    val partitions = groupedData.map(chunk => Partition(chunk)).toSeq
+    val boundaries =
+      Seq.tabulate(numPartitions + 1)(index => index * baseSize + math.min(index, remainder))
 
-    // Create the DistCollection, starting its logical plan with a Source node
-    DistCollection(Plan.Source(partitions))
+    boundaries
+      .zip(boundaries.drop(1))
+      .map { case (start, end) => Partition(elements.slice(start, end)) }
+  }
+end DistCollection

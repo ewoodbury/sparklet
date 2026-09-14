@@ -19,10 +19,6 @@ class TestSparkletConf extends AnyFlatSpec with Matchers with BeforeAndAfterEach
     conf.maxTaskRetries shouldBe 3
     conf.baseRetryDelayMs shouldBe 1000L
     conf.maxRetryDelayMs shouldBe 30000L
-    conf.enableLineageRecovery shouldBe true
-    conf.taskTimeoutMs shouldBe 300000L
-    conf.enableSpeculativeExecution shouldBe false
-    conf.speculativeExecutionThreshold shouldBe 1.5
   }
 
   it should "allow overriding fault tolerance configuration" in {
@@ -30,10 +26,6 @@ class TestSparkletConf extends AnyFlatSpec with Matchers with BeforeAndAfterEach
       maxTaskRetries = 5,
       baseRetryDelayMs = 2000L,
       maxRetryDelayMs = 60000L,
-      enableLineageRecovery = false,
-      taskTimeoutMs = 600000L,
-      enableSpeculativeExecution = true,
-      speculativeExecutionThreshold = 2.0
     )
 
     SparkletConf.set(customConf)
@@ -42,10 +34,6 @@ class TestSparkletConf extends AnyFlatSpec with Matchers with BeforeAndAfterEach
     retrieved.maxTaskRetries shouldBe 5
     retrieved.baseRetryDelayMs shouldBe 2000L
     retrieved.maxRetryDelayMs shouldBe 60000L
-    retrieved.enableLineageRecovery shouldBe false
-    retrieved.taskTimeoutMs shouldBe 600000L
-    retrieved.enableSpeculativeExecution shouldBe true
-    retrieved.speculativeExecutionThreshold shouldBe 2.0
   }
 
   it should "preserve existing configuration when setting new values" in {
@@ -78,18 +66,11 @@ class TestSparkletConf extends AnyFlatSpec with Matchers with BeforeAndAfterEach
   it should "validate configuration constraints" in {
     val defaultConf = SparkletConf()
 
-    // Ensure timeout is reasonable for production
-    defaultConf.taskTimeoutMs should be > 0L
-    defaultConf.taskTimeoutMs should be <= 3600000L // 1 hour max
-
     // Ensure retry configuration is reasonable
     defaultConf.maxTaskRetries should be >= 0
     defaultConf.maxTaskRetries should be <= 10 // reasonable upper bound
 
     defaultConf.baseRetryDelayMs should be > 0L
     defaultConf.maxRetryDelayMs should be >= defaultConf.baseRetryDelayMs
-
-    // Ensure speculative execution threshold is reasonable
-    defaultConf.speculativeExecutionThreshold should be >= 1.0
   }
 }
