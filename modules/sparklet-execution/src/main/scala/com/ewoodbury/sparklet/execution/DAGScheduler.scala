@@ -23,12 +23,37 @@ final class DAGScheduler[F[_]: Sync](
   /**
    * Executes a plan using multi-stage execution, handling shuffle boundaries.
    */
-  def execute[A](plan: Plan[A]): F[Iterable[A]] = executeWithRecovery(plan)
+  def execute[A](plan: Plan[A]): F[Iterable[A]] =
+    executePartitions(plan).map(_.flatMap(_.data))
 
   /**
-   * Executes a plan with recovery support using multi-stage execution.
+   * Executes a plan and returns the final stage's output with partition boundaries preserved.
+   * Callers should flatten only at the outermost boundary so partition-aware consumers (such as
+   * aggregate) can operate per partition.
    */
-  def executeWithRecovery[A](plan: Plan[A]): F[Iterable[A]] =
+  def executePartitions[A](plan: Plan[A]): F[Seq[Partition[A]]] =
+    runStages(plan).map { case (stageGraph, stageResults) =>
+      val finalResults = stageResults(stageGraph.finalStageId)
+      logger.debug(
+        s"DAGScheduler: final stage ${stageGraph.finalStageId.toInt} has " +
+          s"${finalResults.size} partitions",
+      )
+      finalResults match {
+        case partitions: Seq[Partition[A] @unchecked] => partitions
+        case other =>
+          throw new ClassCastException(
+            s"Expected Seq[Partition[A]], got ${other.getClass}",
+          )
+      }
+    }
+
+  /**
+   * Runs all stages in topological order and returns the results of every stage, keyed by stage
+   * ID.
+   */
+  private def runStages[A](
+      plan: Plan[A],
+  ): F[(StageBuilder.StageGraph, Map[StageId, Seq[Partition[_]]])] =
     for {
       _ <- Sync[F].delay(
         logger.info(
@@ -51,19 +76,8 @@ final class DAGScheduler[F[_]: Sync](
         executionOrder,
         recoveryManager,
       )
-      finalData <- Sync[F].delay {
-        val finalResults = stageResults(stageGraph.finalStageId)
-        // Type-safe extraction of final results data
-        finalResults.flatMap(partition =>
-          partition.data match {
-            case iter: Iterable[A @unchecked] => iter
-            case other =>
-              throw new ClassCastException(s"Expected Iterable[A], got ${other.getClass}")
-          },
-        )
-      }
       _ <- Sync[F].delay(logger.info("DAGScheduler: multi-stage execution completed"))
-    } yield finalData
+    } yield (stageGraph, stageResults)
 }
 
 object DAGScheduler:

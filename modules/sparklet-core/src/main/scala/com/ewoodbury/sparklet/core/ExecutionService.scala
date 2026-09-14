@@ -12,6 +12,12 @@ trait ExecutionService {
   def execute[A](plan: Plan[A]): Seq[A]
 
   /**
+   * Executes a plan and returns the results partitioned as the engine produced them. Preserving
+   * partition boundaries enables partition-aware actions such as aggregate.
+   */
+  def executePartitions[A](plan: Plan[A]): Seq[Partition[A]]
+
+  /**
    * Executes a plan and returns the count of results.
    */
   def count[A](plan: Plan[A]): Long
@@ -30,6 +36,12 @@ object ExecutionService {
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   @volatile private var current: ExecutionService = new ExecutionService {
     def execute[A](plan: Plan[A]): Seq[A] = {
+      throw new UnsupportedOperationException(
+        "No execution service registered. Please ensure the execution module is properly initialized.",
+      )
+    }
+
+    def executePartitions[A](plan: Plan[A]): Seq[Partition[A]] = {
       throw new UnsupportedOperationException(
         "No execution service registered. Please ensure the execution module is properly initialized.",
       )
