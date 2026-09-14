@@ -13,29 +13,26 @@ import com.ewoodbury.sparklet.runtime.api.{RunnableTask, TaskScheduler}
  * Local implementation of the task scheduler.
  *
  * Tasks are executed with a parallelism bound; each task body is run on the blocking pool using
- * IO.blocking to avoid compute pool starvation. Normal submission applies the retry policy derived
- * from [[SparkletConf]]; submission with an explicit policy override is available through
- * `submitWithRetry`.
+ * IO.blocking to avoid compute pool starvation. Normal submission reads the retry policy from
+ * [[SparkletConf]] at submission time, so configuration changes apply to subsequent submissions;
+ * an explicit policy override is available through `submitWithRetry`.
  */
 final class LocalTaskScheduler(
     parallelism: Int,
-    retryPolicy: RetryPolicy = SparkletConf.get.retryPolicy,
 ) extends TaskScheduler[IO]
     with StrictLogging:
 
-  private val executionWrapper: TaskExecutionWrapper[IO] =
-    TaskExecutionWrapper.withRetryPolicy[IO](retryPolicy)
-
   /**
    * Submits tasks and evaluates them in parallel, respecting the configured parallelism. Failed
-   * tasks are retried according to the configured retry policy.
+   * tasks are retried according to the retry policy derived from the active [[SparkletConf]].
    */
   def submit[A, B](tasks: Seq[RunnableTask[A, B]]): IO[Seq[Partition[B]]] = {
+    val retryPolicy = SparkletConf.get.retryPolicy
     logger.debug(
       s"LocalTaskScheduler: submitting ${tasks.length} tasks with parallelism=$parallelism " +
         s"and maxRetries=${retryPolicy.maxRetries}",
     )
-    executeWithWrapper(tasks, executionWrapper)
+    executeWithWrapper(tasks, TaskExecutionWrapper.withRetryPolicy[IO](retryPolicy))
       .guarantee(IO(logger.debug("LocalTaskScheduler: all tasks completed")))
   }
 

@@ -66,6 +66,21 @@ class TestLocalTaskSchedulerRetry extends AnyFlatSpec with Matchers with BeforeA
     attempts.get shouldEqual 3
   }
 
+  it should "honor SparkletConf changes made after runtime construction" in {
+    // Uses the production singleton from SparkletRuntime, which was constructed before this
+    // test set its configuration; proves the policy is read at submission time.
+    val scheduler = SparkletRuntime.get.scheduler
+    val attempts = new AtomicInteger(0)
+
+    an[IllegalStateException] should be thrownBy scheduler
+      .submit(Seq(alwaysFailingTask(attempts)))
+      .unsafeRunSync()
+
+    // fastConf allows 2 retries, so exactly 3 attempts - not the 4 that the
+    // construction-time default policy (maxTaskRetries = 3) would produce.
+    attempts.get shouldEqual 3
+  }
+
   "LocalTaskScheduler.submitWithRetry" should "allow an explicit policy override" in {
     val scheduler = new LocalTaskScheduler(parallelism = 2)
     val attempts = new AtomicInteger(0)

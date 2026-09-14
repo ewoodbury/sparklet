@@ -32,14 +32,6 @@ final case class SparkletConf(
     baseRetryDelayMs: Long = 1000L,
     /** Maximum backoff delay to prevent excessive waits */
     maxRetryDelayMs: Long = 30000L,
-    /** Whether to enable lineage-based recovery on task failure */
-    enableLineageRecovery: Boolean = true,
-    /** Maximum time to wait for task completion before considering it failed */
-    taskTimeoutMs: Long = 300000L, // 5 minutes
-    /** Whether to enable speculative execution for slow tasks */
-    enableSpeculativeExecution: Boolean = false,
-    /** Slow task threshold for speculative execution (percentage of median) */
-    speculativeExecutionThreshold: Double = 1.5,
 ):
 
   /** Builds the task retry policy from this configuration. */
