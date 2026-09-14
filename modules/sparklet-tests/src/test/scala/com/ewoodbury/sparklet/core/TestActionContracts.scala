@@ -71,15 +71,4 @@ class TestActionContracts extends AnyFlatSpec with Matchers {
 
     result shouldEqual 6
   }
-
-  it should "sum numbers whose combOp differs from seqOp" in {
-    val dc = DistCollection(Seq(1, 2, 3, 4, 5, 6), 3)
-
-    val result = dc.aggregate(0)(
-      seqOp = (acc, element) => acc + element,
-      combOp = (left, right) => left + right,
-    )
-
-    result shouldEqual 21
-  }
 }

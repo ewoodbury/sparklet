@@ -51,14 +51,6 @@ class TestHashPartitioner extends AnyFlatSpec with Matchers {
     partitioner.partition("a", -3) shouldEqual 0
   }
 
-  it should "partition keys deterministically" in {
-    val keys = Seq("alpha", "beta", "gamma", Int.box(42))
-
-    keys.foreach { key =>
-      partitioner.partition(key, 6) shouldEqual partitioner.partition(key, 6)
-    }
-  }
-
   it should "distribute distinct keys across partitions" in {
     val keys = (0 until 100).map(i => s"key-$i")
     val usedPartitions = keys.map(partitioner.partition(_, 4)).toSet

@@ -266,17 +266,12 @@ final case class DistCollection[A](plan: Plan[A]):
 
   /**
    * Action: Executes the plan and aggregates the elements using the given functions. This triggers
-   * computation.
-   *
-   * `seqOp` is applied independently to each output partition, starting each partition's
-   * accumulator at `zero`; `combOp` combines the per-partition accumulators. For inputs with no
-   * elements, this returns `zero` without calling either function. Callers should supply
-   * operations suitable for partitioned aggregation (normally associative, with `combOp` treating
-   * `zero` as its identity).
+   * computation. `seqOp` is applied per partition starting from `zero`; `combOp` combines the
+   * per-partition accumulators. Empty input returns `zero` without invoking either function.
    */
   def aggregate[B](zero: B)(seqOp: (B, A) => B, combOp: (B, B) => B): B = {
     val partitions = ExecutionService.get.executePartitions(this.plan)
-    if (partitions.isEmpty || partitions.forall(_.data.isEmpty)) zero
+    if (partitions.forall(_.data.isEmpty)) zero
     else
       partitions
         .map(partition => partition.data.foldLeft(zero)(seqOp))
@@ -347,13 +342,11 @@ object DistCollection:
     val baseSize = elements.length / numPartitions
     val remainder = elements.length % numPartitions
 
-    val partitionSizes = Seq.tabulate(numPartitions) { partitionIndex =>
-      baseSize + (if (partitionIndex < remainder) 1 else 0)
-    }
-    val offsets = partitionSizes.scanLeft(0)(_ + _)
+    val boundaries =
+      Seq.tabulate(numPartitions + 1)(index => index * baseSize + math.min(index, remainder))
 
-    offsets
-      .zip(offsets.drop(1))
+    boundaries
+      .zip(boundaries.drop(1))
       .map { case (start, end) => Partition(elements.slice(start, end)) }
   }
 end DistCollection

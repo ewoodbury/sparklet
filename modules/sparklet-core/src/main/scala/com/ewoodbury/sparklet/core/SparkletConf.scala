@@ -4,24 +4,14 @@ import scala.concurrent.duration.{FiniteDuration, MILLISECONDS}
 
 /**
  * Centralized configuration for Sparklet runtime defaults.
- *
- * @param defaultShufflePartitions
- *   Number of partitions to use for shuffle outputs when not otherwise specified.
- * @param defaultParallelism
- *   Default task parallelism when deriving concurrency without explicit hints.
- * @param threadPoolSize
- *   Size of the thread pool backing the local TaskScheduler.
- * @param maxTaskRetries
- *   Maximum number of retries for failed tasks.
- * @param baseRetryDelayMs
- *   Base delay between retries in milliseconds (exponential backoff).
- * @param maxRetryDelayMs
- *   Maximum backoff delay to prevent excessive waits.
  */
 @SuppressWarnings(Array("org.wartremover.warts.DefaultArguments"))
 final case class SparkletConf(
+    /** Number of partitions to use for shuffle outputs when not otherwise specified. */
     defaultShufflePartitions: Int = 4,
+    /** Default task parallelism when deriving concurrency without explicit hints. */
     defaultParallelism: Int = 4,
+    /** Size of the thread pool backing the local TaskScheduler. */
     threadPoolSize: Int = 4,
     /** Approximate samples per logical partition to estimate sort key distribution. */
     sortSamplePerPartition: Int = 20,
@@ -34,8 +24,13 @@ final case class SparkletConf(
      * join.
      */
     enableSortMergeJoin: Boolean = true,
+
+    // === Fault Tolerance Configuration ===
+    /** Maximum number of retries for failed tasks */
     maxTaskRetries: Int = 3,
+    /** Base delay between retries in milliseconds (exponential backoff) */
     baseRetryDelayMs: Long = 1000L,
+    /** Maximum backoff delay to prevent excessive waits */
     maxRetryDelayMs: Long = 30000L,
     /** Whether to enable lineage-based recovery on task failure */
     enableLineageRecovery: Boolean = true,
@@ -47,9 +42,7 @@ final case class SparkletConf(
     speculativeExecutionThreshold: Double = 1.5,
 ):
 
-  /**
-   * Builds the task retry policy from this configuration.
-   */
+  /** Builds the task retry policy from this configuration. */
   def retryPolicy: RetryPolicy = RetryPolicy.ExponentialBackoff(
     maxRetries = maxTaskRetries,
     baseDelay = FiniteDuration(baseRetryDelayMs, MILLISECONDS),

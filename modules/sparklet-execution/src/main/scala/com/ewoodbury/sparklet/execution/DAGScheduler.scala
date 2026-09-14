@@ -31,20 +31,10 @@ final class DAGScheduler[F[_]: Sync](
    * Callers should flatten only at the outermost boundary so partition-aware consumers (such as
    * aggregate) can operate per partition.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def executePartitions[A](plan: Plan[A]): F[Seq[Partition[A]]] =
     runStages(plan).map { case (stageGraph, stageResults) =>
-      val finalResults = stageResults(stageGraph.finalStageId)
-      logger.debug(
-        s"DAGScheduler: final stage ${stageGraph.finalStageId.toInt} has " +
-          s"${finalResults.size} partitions",
-      )
-      finalResults match {
-        case partitions: Seq[Partition[A] @unchecked] => partitions
-        case other =>
-          throw new ClassCastException(
-            s"Expected Seq[Partition[A]], got ${other.getClass}",
-          )
-      }
+      stageResults(stageGraph.finalStageId).asInstanceOf[Seq[Partition[A]]]
     }
 
   /**

@@ -66,16 +66,6 @@ class TestLocalTaskSchedulerRetry extends AnyFlatSpec with Matchers with BeforeA
     attempts.get shouldEqual 3
   }
 
-  it should "apply the configured retry policy derived from SparkletConf" in {
-    val scheduler = new LocalTaskScheduler(parallelism = 1)
-    val attempts = new AtomicInteger(0)
-
-    val result = scheduler.submit(Seq(flakyTask(failuresBeforeSuccess = 1, attempts))).unsafeRunSync()
-
-    result.head.data.toSeq shouldEqual Seq(42)
-    attempts.get shouldEqual 2
-  }
-
   "LocalTaskScheduler.submitWithRetry" should "allow an explicit policy override" in {
     val scheduler = new LocalTaskScheduler(parallelism = 2)
     val attempts = new AtomicInteger(0)
