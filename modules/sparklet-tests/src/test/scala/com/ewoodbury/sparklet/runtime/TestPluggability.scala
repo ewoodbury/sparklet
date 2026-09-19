@@ -6,14 +6,13 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.ewoodbury.sparklet.core.{BroadcastId, Partition, PartitionId, RetryPolicy, ShuffleId}
-import com.ewoodbury.sparklet.execution.Task
 import com.ewoodbury.sparklet.runtime.api.*
 
 class TestPluggability extends AnyFlatSpec with Matchers {
 
   behavior of "Sparklet runtime pluggability"
 
-  it should "allow swapping scheduler and shuffle implementations" in {
+  it should "allow swapping scheduler, shuffle, partitioner, and broadcast implementations" in {
     // Fake scheduler that runs tasks sequentially
     val fakeScheduler = new TaskScheduler[IO] {
       def submit[A, B](tasks: Seq[RunnableTask[A, B]]): IO[Seq[Partition[B]]] =
@@ -21,15 +20,11 @@ class TestPluggability extends AnyFlatSpec with Matchers {
 
       def submitWithRetry[A, B](
         tasks: Seq[RunnableTask[A, B]],
-        retryPolicy: RetryPolicy
+        retryPolicy: RetryPolicy,
       ): IO[Seq[Partition[B]]] =
         submit(tasks) // Simple implementation for test
 
       def shutdown(): IO[Unit] = IO.unit
-    }
-
-    val fakeExecutor = new ExecutorBackend {
-      def run[A, B](task: RunnableTask[A, B]): Partition[B] = task.run()
     }
 
     val fakePartitioner = new Partitioner { def partition(key: Any, n: Int): Int = 0 }
@@ -55,7 +50,6 @@ class TestPluggability extends AnyFlatSpec with Matchers {
     SparkletRuntime.set(
       SparkletRuntime.RuntimeComponents(
         scheduler = fakeScheduler,
-        executor = fakeExecutor,
         shuffle = fakeShuffle,
         partitioner = fakePartitioner,
         broadcast = fakeBroadcast,
@@ -63,8 +57,8 @@ class TestPluggability extends AnyFlatSpec with Matchers {
     )
 
     try {
-      val p = Partition(Seq(1, 2, 3))
-      val task = Task.MapTask(p, (x: Int) => x + 1)
+      val partition = Partition(Seq(1, 2, 3))
+      val task = com.ewoodbury.sparklet.execution.Task.StageTask(partition, com.ewoodbury.sparklet.execution.Stage.map((x: Int) => x + 1))
       val result = SparkletRuntime.get.scheduler.submit(Seq(task)).unsafeRunSync()
       result.headOption.map(_.data.toSeq) shouldEqual Some(Seq(2, 3, 4))
     } finally {
@@ -72,5 +66,3 @@ class TestPluggability extends AnyFlatSpec with Matchers {
     }
   }
 }
-
-

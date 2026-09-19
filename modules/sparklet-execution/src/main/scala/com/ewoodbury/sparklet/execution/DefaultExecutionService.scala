@@ -7,7 +7,9 @@ import com.ewoodbury.sparklet.core.{ExecutionService, Partition, Plan}
 import com.ewoodbury.sparklet.runtime.SparkletRuntime
 
 /**
- * Implementation of ExecutionService that bridges the API to the execution engine.
+ * Implementation of ExecutionService that bridges the API to the execution engine. Every plan is
+ * compiled into a stage graph and executed through the DAGScheduler; narrow plans simply produce
+ * one-stage graphs.
  */
 class DefaultExecutionService extends ExecutionService {
 
@@ -16,37 +18,27 @@ class DefaultExecutionService extends ExecutionService {
 
   def executePartitions[A](plan: Plan[A]): Seq[Partition[A]] = plan match {
     case s: Plan.Source[A] =>
-      // Sources don't need tasks, just return the data directly
+      // A bare source needs no tasks; its partitions are the result
       s.partitions
 
     case _ =>
-      if (DAGScheduler.requiresDAGScheduling(plan)) {
-        // Use DAG scheduler for wide transformations
-        val rt = SparkletRuntime.get
-        val scheduler = new DAGScheduler[IO](rt.shuffle, rt.scheduler, rt.partitioner)
-        scheduler.executePartitions(plan).unsafeRunSync()
-      } else {
-        // Use single-stage execution for narrow transformations
-        val tasks = Executor.createTasks(plan)
-        // Cast to the expected type for TaskScheduler - this is safe because createTasks
-        // returns tasks that produce the correct output type A
-        @SuppressWarnings(Array("org.wartremover.warts.Any"))
-        val typedTasks = tasks.asInstanceOf[Seq[Task[Any, A]]]
-        @SuppressWarnings(Array("org.wartremover.warts.Any"))
-        val resultPartitions = SparkletRuntime.get.scheduler.submit(typedTasks).unsafeRunSync()
-        resultPartitions
-      }
+      val rt = SparkletRuntime.get
+      val scheduler = new DAGScheduler[IO](rt.shuffle, rt.scheduler, rt.partitioner)
+      scheduler.executePartitions(plan).unsafeRunSync()
   }
 
-  def count[A](plan: Plan[A]): Long = {
+  def count[A](plan: Plan[A]): Long =
     execute(plan).size.toLong
-  }
 
-  def take[A](plan: Plan[A], n: Int): Seq[A] = {
-    // This is inefficient as it executes the full plan. A real implementation
-    // would have optimized execution for take().
-    execute(plan).take(n)
-  }
+  def take[A](plan: Plan[A], n: Int): Seq[A] =
+    if (n <= 0) Seq.empty
+    else {
+      // Truncate each output partition to n elements before executing. Since every partition can
+      // contribute at most n elements, the first n of the concatenated result are unchanged, while
+      // narrow pipelines avoid materializing full partitions.
+      val limited = Plan.MapPartitionsOp(plan, (it: Iterator[A]) => it.take(n))
+      executePartitions(limited).flatMap(_.data).take(n)
+    }
 }
 
 /**

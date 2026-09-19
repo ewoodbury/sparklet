@@ -1,7 +1,5 @@
 package com.ewoodbury.sparklet.core
 
-import java.util.UUID
-
 /**
  * Unique identifier for a stage in an execution graph.
  */
@@ -25,9 +23,6 @@ object ShuffleId:
 
   /** Extract the underlying `Int` for interop. */
   extension (id: ShuffleId) inline def toInt: Int = id
-
-  /** Transitional helper: derive a ShuffleId from a StageId. */
-  inline def fromStageId(id: StageId): ShuffleId = id
   given Ordering[ShuffleId] with
     def compare(x: ShuffleId, y: ShuffleId): Int = java.lang.Integer.compare(x, y)
 
@@ -56,33 +51,3 @@ object BroadcastId:
   extension (id: BroadcastId) inline def toInt: Int = id
   given Ordering[BroadcastId] with
     def compare(x: BroadcastId, y: BroadcastId): Int = java.lang.Integer.compare(x, y)
-
-/**
- * Job identifier placeholder for future uniqueness scoping. Not yet wired through the system; here
- * for forward-compatibility.
- */
-final case class JobId(value: UUID)
-object JobId:
-  def random(): JobId = JobId(UUID.randomUUID())
-
-/**
- * Lineage information for task recovery and debugging. Tracks task execution context for
- * lineage-based recomputation.
- */
-final case class LineageInfo(
-    stageId: StageId,
-    taskId: Int,
-    inputPartitions: Seq[Int],
-    shuffleDependencies: Seq[ShuffleId],
-    operation: String,
-    attemptCount: Int = 1,
-)
-
-/**
- * Result of task execution with potential failure information.
- */
-sealed trait TaskResult[+B]
-final case class TaskSuccess[B](partition: Partition[B], lineage: LineageInfo)
-    extends TaskResult[B]
-final case class TaskFailure[B](lineage: LineageInfo, exception: Throwable, attempt: Int)
-    extends TaskResult[B]

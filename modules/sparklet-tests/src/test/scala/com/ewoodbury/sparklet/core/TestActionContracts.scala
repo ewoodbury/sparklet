@@ -19,6 +19,12 @@ class TestActionContracts extends AnyFlatSpec with Matchers {
     result shouldEqual List.empty[Int]
   }
 
+  it should "return empty for negative take" in {
+    val result = DistCollection(Seq(1, 2, 3), 2).take(-1)
+
+    result shouldEqual List.empty[Int]
+  }
+
   "first" should "return the first element" in {
     DistCollection(Seq(7, 8, 9), 3).first() shouldEqual 7
   }

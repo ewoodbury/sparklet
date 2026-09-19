@@ -10,20 +10,21 @@ import com.ewoodbury.sparklet.core.StageId
 @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
 object TopologicalSort:
   /**
-   * Performs a topological sort on the stage dependencies.
+   * Performs a topological sort over the given stages.
    *
+   * @param stages
+   *   All stage IDs in the graph; stages without dependency edges are included as-is
    * @param dependencies
-   *   A map of stage IDs to their dependent stage IDs
+   *   A map of stage IDs to the stage IDs they depend on
    * @return
-   *   A list of stage IDs in topological order
+   *   A list of all stage IDs in topological order
    * @throws IllegalStateException
    *   if a cycle is detected in the dependencies
    */
-  def sort(dependencies: Map[StageId, Set[StageId]]): List[StageId] = {
+  def sort(stages: Set[StageId], dependencies: Map[StageId, Set[StageId]]): List[StageId] = {
     val inDegree = mutable.Map[StageId, Int]()
-    val allStages = dependencies.keys.toSet ++ dependencies.values.flatten
 
-    for (stage <- allStages) {
+    for (stage <- stages) {
       inDegree(stage) = 0
     }
 
@@ -46,7 +47,7 @@ object TopologicalSort:
         if (inDegree(stage) == 0) queue.enqueue(stage)
       }
     }
-    if (allStages.sizeIs != result.size)
+    if (inDegree.sizeIs != result.size)
       throw new IllegalStateException("Cycle detected in stage dependencies")
     result.toList
   }

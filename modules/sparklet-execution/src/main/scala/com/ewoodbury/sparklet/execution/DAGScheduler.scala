@@ -4,14 +4,16 @@ import cats.syntax.all.*
 import com.typesafe.scalalogging.StrictLogging
 
 import com.ewoodbury.sparklet.core.*
-import com.ewoodbury.sparklet.runtime.LineageRecoveryManager
 import com.ewoodbury.sparklet.runtime.api.{Partitioner, ShuffleService, TaskScheduler}
 
+/**
+ * The single execution entry point: compiles a plan into a stage graph and runs its stages in
+ * topological order, coordinating shuffles between them.
+ */
 final class DAGScheduler[F[_]: Sync](
     shuffle: ShuffleService,
     scheduler: TaskScheduler[F],
     partitioner: Partitioner,
-    recoveryManager: Option[LineageRecoveryManager[F]] = None,
 ) extends StrictLogging {
 
   // Create instances of the new components
@@ -45,32 +47,20 @@ final class DAGScheduler[F[_]: Sync](
       plan: Plan[A],
   ): F[(StageBuilder.StageGraph, Map[StageId, Seq[Partition[_]]])] =
     for {
-      _ <- Sync[F].delay(
-        logger.info(
-          "DAGScheduler: starting multi-stage execution" +
-            (if (recoveryManager.isDefined) " with recovery support" else ""),
-        ),
-      )
+      _ <- Sync[F].delay(logger.info("DAGScheduler: starting multi-stage execution"))
       stageGraph <- Sync[F].delay(StageBuilder.buildStageGraph(plan))
       _ <- Sync[F].delay(
         logger.debug(s"DAGScheduler: built stage graph with ${stageGraph.stages.size} stages"),
       )
-      executionOrder <- Sync[F].delay(TopologicalSort.sort(stageGraph.dependencies))
+      executionOrder <- Sync[F].delay(
+        TopologicalSort.sort(stageGraph.stages.keySet, stageGraph.dependencies),
+      )
       _ <- Sync[F].delay(
         logger.debug(
           s"DAGScheduler: execution order: ${executionOrder.map(_.toInt).mkString(" -> ")}",
         ),
       )
-      stageResults <- executionPlanner.runStagesWithRecovery(
-        stageGraph,
-        executionOrder,
-        recoveryManager,
-      )
+      stageResults <- executionPlanner.runStages(stageGraph, executionOrder)
       _ <- Sync[F].delay(logger.info("DAGScheduler: multi-stage execution completed"))
     } yield (stageGraph, stageResults)
 }
-
-object DAGScheduler:
-  def requiresDAGScheduling[A](plan: Plan[A]): Boolean = {
-    PlanWide.isWide(plan)
-  }
