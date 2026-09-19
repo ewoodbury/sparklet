@@ -28,6 +28,16 @@ class TestActionContracts extends AnyFlatSpec with Matchers {
     result shouldEqual Seq(1, 2, 3)
   }
 
+  it should "work on wide plans" in {
+    val dc = DistCollection(Seq(1 -> "a", 2 -> "b", 1 -> "c"), 2)
+
+    val result = dc.groupByKey.take(2).toMap
+
+    result should have size 2
+    result(1) should contain theSameElementsAs Seq("a", "c")
+    result(2) should contain theSameElementsAs Seq("b")
+  }
+
   it should "support first() on union plans" in {
     val left = DistCollection(Seq(1, 2), 1)
     val right = DistCollection(Seq(3, 4), 1)
