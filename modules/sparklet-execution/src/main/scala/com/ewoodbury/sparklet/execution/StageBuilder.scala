@@ -252,8 +252,6 @@ object StageBuilder:
         }
       }
     }
-
-    // 9. Partitioning invariants - byKey only for operations that guarantee key grouping
   }
 
   /**
@@ -1200,9 +1198,8 @@ object StageBuilder:
    *      - Sets `byKey = false` otherwise
    *   4. **Local bypass operations**: GroupByKeyLocalOp, ReduceByKeyLocalOp
    *      - Preserve existing partitioning (no shuffle occurred)
-   *   5. **Wide operations**: Create new partitioning based on operation semantics
-   *      - Key-grouping ops (GroupByKey, ReduceByKey, PartitionBy, Join, CoGroup): `byKey = true`
-   *      - Rebalancing ops (SortBy, Repartition, Coalesce): `byKey = false`
+   *   5. **Bypassed wide operations**: Establish new partitioning based on operation semantics;
+   *      true shuffle stages set their output partitioning in `createShuffleStageUnified` instead
    *
    * @param prev
    *   Previous partitioning metadata from the upstream stage
@@ -1212,8 +1209,8 @@ object StageBuilder:
    *   Updated partitioning metadata reflecting the operation's effect
    *
    * @note
-   *   This method should handle ALL Operation case classes. If a new operation is added to the
-   *   Operation ADT, this method must be updated to handle it explicitly.
+   *   This method handles the operations that can be appended to narrow stages. If a new
+   *   operation is added to the Operation ADT, this method must be updated to handle it.
    */
   private def updatePartitioning(
       prev: Option[Partitioning],
