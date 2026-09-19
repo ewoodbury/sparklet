@@ -14,7 +14,6 @@ object SparkletRuntime:
   @volatile private var current: RuntimeComponents =
     RuntimeComponents(
       scheduler = new LocalTaskScheduler(SparkletConf.get.threadPoolSize),
-      executor = new LocalExecutorBackend,
       shuffle = new LocalShuffleService,
       partitioner = new HashPartitioner,
       broadcast = new LocalBroadcastService,
@@ -26,7 +25,6 @@ object SparkletRuntime:
 
   final case class RuntimeComponents(
       scheduler: TaskScheduler[IO],
-      executor: ExecutorBackend,
       shuffle: ShuffleService,
       partitioner: Partitioner,
       broadcast: BroadcastService,

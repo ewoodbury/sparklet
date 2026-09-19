@@ -24,15 +24,12 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     val distinctOp = DistinctOp[Int]()
     val mapPartitionsOp = MapPartitionsOp[Int, String](_.map(_.toString))
 
-    // Test wide operations can be created
-    val gbkOp = GroupByKeyOp[Int, String](defaultPartitions)
-    val rbkOp = ReduceByKeyOp[Int, String](_ + _, defaultPartitions)
-    val sortOp = SortByOp[String, Int](_.length, defaultPartitions)
-    val partitionOp = PartitionByOp[Int, String](defaultPartitions)
+    // Bypassed wide operations are appended as narrow ops by the builder
+    val gbkLocalOp = GroupByKeyLocalOp[Int, String]()
+    val rbkLocalOp = ReduceByKeyLocalOp[Int, String](_ + _)
+    val partitionLocalOp = PartitionByLocalOp[Int, String](defaultPartitions)
     val repartitionOp = RepartitionOp[String](defaultPartitions)
     val coalesceOp = CoalesceOp[String](defaultPartitions)
-    val joinOp = JoinOp[Int, String, String](defaultPartitions)
-    val cogroupOp = CoGroupOp[Int, String, String](defaultPartitions)
 
     // All operations should be created without errors
     mapOp shouldBe a[MapOp[_, _]]
@@ -40,14 +37,11 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     flatMapOp shouldBe a[FlatMapOp[_, _]]
     distinctOp shouldBe a[DistinctOp[_]]
     mapPartitionsOp shouldBe a[MapPartitionsOp[_, _]]
-    gbkOp shouldBe a[GroupByKeyOp[_, _]]
-    rbkOp shouldBe a[ReduceByKeyOp[_, _]]
-    sortOp shouldBe a[SortByOp[_, _]]
-    partitionOp shouldBe a[PartitionByOp[_, _]]
+    gbkLocalOp shouldBe a[GroupByKeyLocalOp[_, _]]
+    rbkLocalOp shouldBe a[ReduceByKeyLocalOp[_, _]]
+    partitionLocalOp shouldBe a[PartitionByLocalOp[_, _]]
     repartitionOp shouldBe a[RepartitionOp[_]]
     coalesceOp shouldBe a[CoalesceOp[_]]
-    joinOp shouldBe a[JoinOp[_, _, _]]
-    cogroupOp shouldBe a[CoGroupOp[_, _, _]]
   }
 
   "InputSource normalization" should "unify shuffle inputs with optional sides" in {
@@ -80,27 +74,19 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
   }
 
   "Shuffle boundary detection" should "be handled via stage building" in {
-    // Test shuffle boundary detection through the public API
-    // Narrow operations should work with buildStages
+    // Narrow operations should produce a valid one-stage graph
     val intSourcePlan = Plan.Source(testPartitions)
     val narrowPlan = Plan.MapOp(intSourcePlan, (_: Int) + 1)
 
-    // Should succeed without throwing an exception about shuffle operations
-    val narrowStages = StageBuilder.buildStages(narrowPlan)
-    narrowStages should have length 1
+    val narrowGraph = StageBuilder.buildStageGraph(narrowPlan)
+    narrowGraph.stages should have size 1
 
-    // Wide operations should fail with buildStages (but work with buildStageGraph)
+    // Wide operations should also produce a valid (multi-stage) graph
     val kvTestData = Seq(("key1", 1), ("key2", 2))
     val kvPartition = Partition(kvTestData)
     val kvSourcePlan: Plan[(String, Int)] = Plan.Source(Seq(kvPartition))
     val widePlan = Plan.GroupByKeyOp(kvSourcePlan)
 
-    // buildStages should fail for wide operations
-    assertThrows[UnsupportedOperationException] {
-      StageBuilder.buildStages(widePlan)
-    }
-
-    // buildStageGraph should work for wide operations
     val stageGraph = StageBuilder.buildStageGraph(widePlan)
     stageGraph.stages should not be empty
   }
@@ -653,25 +639,20 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     result2.data.toSeq shouldBe Seq(2, 4, 6)  // Map + Filter (all elements > 0)
   }
 
-  // --- Legacy API Tests ---
+  // --- Unified Builder Tests ---
 
-  behavior of "Legacy API Compatibility"
+  behavior of "Unified Stage Builder"
 
-  it should "convert simple narrow chain via buildStages" in {
+  it should "build a one-stage graph for a simple narrow chain" in {
     val plan = Plan.MapOp(createSource(), (_: Int) * 2)
 
-    // Test the public buildStages API (which uses legacyAdapter internally)
-    val legacyStages = StageBuilder.buildStages(plan)
+    val stageGraph = StageBuilder.buildStageGraph(plan)
 
-    // Should have exactly one (source, stage) pair
-    legacyStages should have length 1
-
-    val (source, stage) = legacyStages.headOption.get
-    source shouldBe createSource()
-    stage shouldBe a[Stage[_, _]]
+    stageGraph.stages should have size 1
+    stageGraph.stages.contains(stageGraph.finalStageId) shouldBe true
   }
 
-  it should "convert multi-operation narrow chain via buildStages" in {
+  it should "build a one-stage graph for a multi-operation narrow chain" in {
     val plan = Plan.DistinctOp(
       Plan.FilterOp(
         Plan.MapOp(createSource(), (_: Int) * 2),
@@ -679,85 +660,31 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
       )
     )
 
-    // Test the public buildStages API
-    val legacyStages = StageBuilder.buildStages(plan)
+    val stageGraph = StageBuilder.buildStageGraph(plan)
 
-    // Should have exactly one (source, stage) pair
-    legacyStages should have length 1
-
-    val (source, stage) = legacyStages.headOption.get
-    source shouldBe createSource()
-    stage shouldBe a[Stage[_, _]]
+    stageGraph.stages should have size 1
   }
 
-  it should "fail with buildStages when encountering shuffle stages" in {
-    // Create a plan that would result in shuffle stages
+  it should "build a multi-stage graph for a shuffle plan" in {
     val source = createSource()
     val kvSource = Plan.MapOp(source, (x: Int) => (x % 3, x))
     val plan = Plan.GroupByKeyOp(kvSource)
 
-    // buildStages should fail for plans with shuffle operations
-    assertThrows[UnsupportedOperationException] {
-      StageBuilder.buildStages(plan)
-    }
+    val stageGraph = StageBuilder.buildStageGraph(plan)
+
+    stageGraph.stages.size should be > 1
+    stageGraph.dependencies.nonEmpty shouldBe true
   }
 
-  it should "handle union operations correctly via buildStages" in {
+  it should "build a graph with source stages for union plans" in {
     val left = Plan.MapOp(createSource(), (_: Int) * 2)
     val right = Plan.FilterOp(createSource(), (_: Int) > 0)
     val plan = Plan.UnionOp(left, right)
 
-    // Test the public buildStages API
-    val legacyStages = StageBuilder.buildStages(plan)
+    val stageGraph = StageBuilder.buildStageGraph(plan)
 
-    // Union should result in multiple (source, stage) pairs
-    legacyStages should have length 2
-
-    // Each pair should have the correct source and a valid stage
-    legacyStages.foreach { case (source, stage) =>
-      source shouldBe a[Plan.Source[_]]
-      stage shouldBe a[Stage[_, _]]
-    }
-  }
-
-  it should "preserve original Plan.Source via buildStages" in {
-    val source = createSource()
-    val plan = Plan.MapOp(source, (_: Int) * 2)
-
-    // Test the public buildStages API
-    val legacyStages = StageBuilder.buildStages(plan)
-
-    // The source should be the same as the original
-    legacyStages.headOption.get._1 shouldBe source
-  }
-
-  // --- Integration Tests with buildStages ---
-
-  behavior of "buildStages Integration"
-
-  it should "work with legacy buildStages method for narrow plans" in {
-    val plan = Plan.MapOp(createSource(), (_: Int) * 2)
-
-    // This should work without throwing an exception
-    val legacyStages = StageBuilder.buildStages(plan)
-
-    // Should have exactly one (source, stage) pair
-    legacyStages should have length 1
-
-    val (source, stage) = legacyStages.headOption.get
-    source shouldBe createSource()
-    stage shouldBe a[Stage[_, _]]
-  }
-
-  it should "fail with buildStages method for wide plans" in {
-    val source = createSource()
-    val kvSource = Plan.MapOp(source, (x: Int) => (x % 3, x))
-    val plan = Plan.GroupByKeyOp(kvSource)
-
-    // buildStages should fail for plans with shuffle operations
-    assertThrows[UnsupportedOperationException] {
-      StageBuilder.buildStages(plan)
-    }
+    stageGraph.stages.size should be > 1
+    stageGraph.stages.contains(stageGraph.finalStageId) shouldBe true
   }
 
   // --- StageGraph Validation Tests ---

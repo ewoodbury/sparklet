@@ -43,6 +43,22 @@ class TestShuffleOperationsExecution extends AnyFlatSpec with Matchers {
     result.toSeq shouldBe Seq(1, 1, 2, 3, 4, 5, 6, 9)
   }
 
+  it should "execute cogroup operations correctly" in {
+    SparkletRuntime.get.shuffle.clear()
+    val left = toDistCollection(Seq("a" -> 1, "b" -> 2, "a" -> 3))
+    val right = toDistCollection(Seq("a" -> 10, "c" -> 30))
+
+    val result = left.cogroup(right).collect().toMap
+
+    result should have size 3
+    result("a")._1 should contain theSameElementsAs Seq(1, 3)
+    result("a")._2 should contain theSameElementsAs Seq(10)
+    result("b")._1 should contain theSameElementsAs Seq(2)
+    result("b")._2 shouldBe empty
+    result("c")._1 shouldBe empty
+    result("c")._2 should contain theSameElementsAs Seq(30)
+  }
+
   it should "execute sortBy with custom key function correctly" in {
     SparkletRuntime.get.shuffle.clear()
     val source = toDistCollection(Seq("apple", "pie", "a", "bb"))

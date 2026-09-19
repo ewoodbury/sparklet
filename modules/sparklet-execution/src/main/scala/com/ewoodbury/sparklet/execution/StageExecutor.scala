@@ -87,7 +87,6 @@ final class StageExecutor[F[_]: Sync](
       inputPartitions: Seq[Partition[_]],
       stageToShuffleId: Map[StageId, ShuffleId],
   ): F[Seq[Partition[_]]] = {
-    // TODO: Migrate to using Operation ADT for better type safety instead of casting to Any.
     val anyPartitions = inputPartitions.asInstanceOf[Seq[Partition[Any]]]
     executeNarrowStage(stageInfo, anyPartitions, stageToShuffleId)
   }
@@ -111,12 +110,18 @@ final class StageExecutor[F[_]: Sync](
         executeReduceByKeyOperation(reduceByKey, inputPartitions)
       case Some(cogroup: Plan.CoGroupOp[_, _, _]) =>
         executeCoGroupOperation(stageInfo, stageToShuffleId)
-      case Some(_: Plan.RepartitionOp[_]) | Some(_: Plan.CoalesceOp[_]) |
-          Some(_: Plan.PartitionByOp[_, _]) =>
+      case Some(_: Plan.RepartitionOp[_]) | Some(_: Plan.CoalesceOp[_]) =>
         executeRepartitionOperation(inputPartitions)
-      case _ =>
-        // Default to GroupByKey behavior for unknown operations
-        executeGroupByKeyOperation(inputPartitions)
+      case Some(_: Plan.PartitionByOp[_, _]) =>
+        // Upstream wrote key-hashed (K, V) tuples; the partitioning already happened in the
+        // shuffle write, so the stage itself is an identity pass-through
+        Sync[F].pure(inputPartitions)
+      case other =>
+        Sync[F].raiseError(
+          new IllegalStateException(
+            s"Stage ${stageInfo.id.toInt} has no executable shuffle operation (found: $other)",
+          ),
+        )
     }
   }
 

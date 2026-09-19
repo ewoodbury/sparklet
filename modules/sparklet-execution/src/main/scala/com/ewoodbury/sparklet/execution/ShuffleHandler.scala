@@ -23,24 +23,27 @@ final class ShuffleHandler[F[_]: Sync](
   def handleShuffleOutput(
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],
-  ): F[ShuffleId] = handleShuffleOutputTyped[Any, Any](stageInfo, results)
+  ): F[ShuffleId] =
+    handleKeyedOutput(stageInfo, results, SparkletConf.get.defaultShufflePartitions)
 
   /**
-   * Type-safe shuffle output handler that can be called when types are known.
+   * Writes key-value results to the shuffle service, hash-partitioned by key into `numPartitions`
+   * partitions. Used when downstream stages assume key partitioning.
    */
   @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
-  def handleShuffleOutputTyped[K, V](
+  def handleKeyedOutput(
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],
+      numPartitions: Int,
   ): F[ShuffleId] =
     Sync[F].delay {
-      val keyValueResults = results.asInstanceOf[Seq[Partition[(K, V)]]]
-      val shuffleData = shuffle.partitionByKey[K, V](
+      val keyValueResults = results.asInstanceOf[Seq[Partition[(Any, Any)]]]
+      val shuffleData = shuffle.partitionByKey[Any, Any](
         data = keyValueResults,
-        numPartitions = SparkletConf.get.defaultShufflePartitions,
+        numPartitions = numPartitions,
         partitioner = partitioner,
       )
-      val actualShuffleId = shuffle.write[K, V](shuffleData)
+      val actualShuffleId = shuffle.write[Any, Any](shuffleData)
       logger.debug(
         s"Stored shuffle data for stage ${stageInfo.id.toInt} with shuffle ID ${actualShuffleId.toInt}",
       )

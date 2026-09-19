@@ -1,44 +1,22 @@
 package com.ewoodbury.sparklet.execution
 
+import cats.effect.IO
+import cats.effect.unsafe.implicits.global
 import com.typesafe.scalalogging.StrictLogging
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.ewoodbury.sparklet.api.DistCollection
-import com.ewoodbury.sparklet.core.{Partition, Plan}
+import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf}
 import com.ewoodbury.sparklet.runtime.SparkletRuntime
 
 class TestDAGScheduler extends AnyFlatSpec with Matchers with StrictLogging {
   val toDistCollection: [T] => (seq: Seq[T]) => DistCollection[T] = [T] => (seq: Seq[T]) => DistCollection(Plan.Source(Seq(Partition(seq))))
 
-  // Basic detection tests for scheduling
-  "DAGScheduler" should "detect plans that require DAG scheduling" in {
-    SparkletRuntime.get.shuffle.clear() // Clean state for test isolation
-    val source = toDistCollection(Seq(1 -> "one", 2 -> "two"))
-    val groupedPlan = source.groupByKey.plan
-    val narrowPlan = source.map(_._1).plan
-    
-    DAGScheduler.requiresDAGScheduling(groupedPlan) shouldBe true
-    DAGScheduler.requiresDAGScheduling(narrowPlan) shouldBe false
-  }
+  // Unified execution path: every plan (narrow and wide) compiles to a stage graph and runs
+  // through the same DAGScheduler entry point.
 
-  it should "detect complex plans with nested shuffle operations" in {
-    SparkletRuntime.get.shuffle.clear() // Clean state for test isolation
-    val source = toDistCollection(Seq(1 -> "one", 2 -> "two"))
-    val complexPlan = source.map(x => (x._1 + 1, x._2)).reduceByKey[Int, String](_ + _).map(_._1).plan
-    
-    DAGScheduler.requiresDAGScheduling(complexPlan) shouldBe true
-  }
-
-  it should "detect join operations require DAG scheduling" in {
-    SparkletRuntime.get.shuffle.clear() // Clean state for test isolation
-    val source1 = toDistCollection(Seq(1 -> "a", 2 -> "b"))
-    val source2 = toDistCollection(Seq(1 -> "x", 3 -> "y"))
-    val joinPlan = source1.join(source2).plan
-    DAGScheduler.requiresDAGScheduling(joinPlan) shouldBe true
-  }
-
-  it should "execute simple narrow transformations without DAG scheduling" in {
+  it should "execute simple narrow transformations" in {
     SparkletRuntime.get.shuffle.clear() // Clean state for test isolation
     val source = toDistCollection(Seq(1, 2, 3, 4, 5))
     val result = source.map(_ * 2).filter(_ > 5).collect()
@@ -75,12 +53,43 @@ class TestDAGScheduler extends AnyFlatSpec with Matchers with StrictLogging {
   }
 
   it should "support partitionBy for key-value datasets" in {
-    SparkletRuntime.get.shuffle.clear()
+    SparkletRuntime.get.shuffle.clear() // Clean state for test isolation
     val source = toDistCollection(Seq("a" -> 1, "b" -> 2, "c" -> 3, "a" -> 4))
     val result = source.partitionBy[String, Int](numPartitions = 3).reduceByKey[String, Int](_ + _).collect().toMap
     result("a") shouldBe 5
     result("b") shouldBe 2
     result("c") shouldBe 3
+  }
+
+  it should "produce correct results when partitionBy count equals the shuffle default" in {
+    SparkletRuntime.get.shuffle.clear()
+    val source = toDistCollection(Seq("a" -> 1, "b" -> 2, "a" -> 3, "b" -> 4))
+
+    // partitionBy(defaultShufflePartitions) enables the shuffle bypass for downstream keyed ops
+    val reduced = source
+      .partitionBy[String, Int](SparkletConf.get.defaultShufflePartitions)
+      .reduceByKey[String, Int](_ + _)
+      .collect()
+      .toMap
+    reduced("a") shouldBe 4
+    reduced("b") shouldBe 6
+
+    val grouped = source
+      .partitionBy[String, Int](SparkletConf.get.defaultShufflePartitions)
+      .groupByKey
+      .collect()
+      .toMap
+    grouped("a") should contain theSameElementsAs Seq(1, 3)
+    grouped("b") should contain theSameElementsAs Seq(2, 4)
+  }
+
+  it should "support repartition to the current partition count" in {
+    SparkletRuntime.get.shuffle.clear()
+    val source = DistCollection(1 to 10, SparkletConf.get.defaultShufflePartitions)
+
+    val result = source.repartition(SparkletConf.get.defaultShufflePartitions).collect()
+
+    result should contain theSameElementsAs (1 to 10)
   }
 
   it should "support mapPartitions, repartition, and coalesce together" in {
@@ -112,45 +121,43 @@ class TestDAGScheduler extends AnyFlatSpec with Matchers with StrictLogging {
   it should "handle plans with multiple shuffle operations" in {
     SparkletRuntime.get.shuffle.clear() // Clean state for test isolation
     val source = toDistCollection(Seq("a" -> 1, "b" -> 2, "a" -> 3))
-    val plan = source.reduceByKey[String, Int](_ + _).groupByKey.plan
-    DAGScheduler.requiresDAGScheduling(plan) shouldBe true
-    }
-
-  it should "execute shuffle operations using DAG scheduler (basic smoke test)" in {
-    SparkletRuntime.get.shuffle.clear() // Clean state for test isolation
-    val source = toDistCollection(Seq(1 -> "a", 2 -> "b", 1 -> "c"))
-    
-    // This is a basic smoke test - the current implementation is simplified
-    // and may not produce the exact expected result yet, but it should not crash
-    noException should be thrownBy {
-      val result = source.groupByKey.collect()
-      logger.debug(s"GroupByKey result: $result")
-    }
+    val result = source.reduceByKey[String, Int](_ + _).groupByKey.collect().toMap
+    result("a") should contain theSameElementsAs Seq(4)
+    result("b") should contain theSameElementsAs Seq(2)
   }
 
-  it should "execute reduceByKey operations using DAG scheduler (basic smoke test)" in {
+  it should "execute groupByKey operations end to end" in {
+    SparkletRuntime.get.shuffle.clear() // Clean state for test isolation
+    val source = toDistCollection(Seq(1 -> "a", 2 -> "b", 1 -> "c"))
+
+    val result = source.groupByKey.collect().toMap
+    result(1) should contain theSameElementsAs Seq("a", "c")
+    result(2) should contain theSameElementsAs Seq("b")
+  }
+
+  it should "execute reduceByKey operations end to end" in {
     SparkletRuntime.get.shuffle.clear() // Clean state for test isolation
     val source = toDistCollection(Seq("a" -> 1, "b" -> 2, "a" -> 3))
-    
-    // This is a basic smoke test - the current implementation is simplified
-    noException should be thrownBy {
-      val result = source.reduceByKey[String, Int](_ + _).collect()
-      logger.debug(s"ReduceByKey result: $result")
-    }
+
+    val result = source.reduceByKey[String, Int](_ + _).collect().toMap
+    result("a") shouldBe 4
+    result("b") shouldBe 2
   }
 
   it should "handle mixed narrow and wide transformations" in {
+    SparkletRuntime.get.shuffle.clear()
     val source = toDistCollection(Seq(1 -> "a", 2 -> "b", 1 -> "c"))
-    
+
     // Chain narrow transformations before and after shuffle
-    noException should be thrownBy {
-      val result = source
-        .map { case (k, v) => (k + 10, v.toUpperCase(java.util.Locale.ENGLISH)) }  // narrow
-        .groupByKey                                       // wide (shuffle)
-        .map { case (k, vs) => (k, vs.size) }           // narrow after shuffle
-        .collect()
-      logger.debug(s"Mixed transformations result: $result")
-    }
+    val result = source
+      .map { case (k, v) => (k + 10, v.toUpperCase(java.util.Locale.ENGLISH)) } // narrow
+      .groupByKey // wide (shuffle)
+      .map { case (k, vs) => (k, vs.size) } // narrow after shuffle
+      .collect()
+      .toMap
+
+    result(11) shouldBe 2
+    result(12) shouldBe 1
   }
 
   it should "correctly concatenate results for union of transformed branches" in {
@@ -170,6 +177,30 @@ class TestDAGScheduler extends AnyFlatSpec with Matchers with StrictLogging {
 
     val res = a.union(b).union(c).collect()
     res shouldBe Seq(1, 2, 13)
+  }
+
+  it should "execute source-only, narrow, and wide plans through the same scheduler path" in {
+    SparkletRuntime.get.shuffle.clear()
+    val rt = SparkletRuntime.get
+    val scheduler = new DAGScheduler[IO](rt.shuffle, rt.scheduler, rt.partitioner)
+
+    // Source-only plan
+    val sourcePlan = Plan.Source(Seq(Partition(Seq(1, 2)), Partition(Seq(3))))
+    scheduler.executePartitions(sourcePlan).unsafeRunSync().flatMap(_.data).toSeq shouldBe Seq(1, 2, 3)
+
+    // Narrow plan: one-stage graph
+    val narrowPlan = Plan.MapOp(
+      Plan.FilterOp(sourcePlan, (x: Int) => x > 1),
+      (x: Int) => x * 10,
+    )
+    scheduler.execute(narrowPlan).unsafeRunSync().toSeq shouldBe Seq(20, 30)
+
+    // Wide plan: multi-stage graph
+    val widePlan = Plan.GroupByKeyOp[Int, String](
+      Plan.Source(Seq(Partition(Seq(1 -> "x")), Partition(Seq(1 -> "y")))),
+    )
+    val wideResult = scheduler.execute(widePlan).unsafeRunSync().toMap
+    wideResult(1) should contain theSameElementsAs Seq("x", "y")
   }
 }
 

@@ -10,6 +10,7 @@ package com.ewoodbury.sparklet.core
 sealed trait Plan[A]
 
 object Plan {
+
   /**
    * Applies a user function over each input partition using iterators. The function receives an
    * iterator view of the partition elements and returns an iterator of output elements. This is a

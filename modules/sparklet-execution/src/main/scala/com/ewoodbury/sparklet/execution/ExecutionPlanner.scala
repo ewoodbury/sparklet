@@ -5,7 +5,6 @@ import cats.syntax.all.*
 import com.typesafe.scalalogging.StrictLogging
 
 import com.ewoodbury.sparklet.core.{Partition, Plan, ShuffleId, StageId}
-import com.ewoodbury.sparklet.runtime.LineageRecoveryManager
 
 /**
  * Planner for coordinating stage execution.
@@ -22,7 +21,7 @@ final class ExecutionPlanner[F[_]: Sync](
   def runStages(
       stageGraph: StageBuilder.StageGraph,
       executionOrder: List[StageId],
-  ): F[Map[StageId, Seq[Partition[_]]]] = {
+  ): F[Map[StageId, Seq[Partition[_]]]] =
     executionOrder
       .foldLeftM((Map.empty[StageId, Seq[Partition[_]]], Map.empty[StageId, ShuffleId])) {
         case ((stageResults, shuffleMappings), stageId) =>
@@ -40,21 +39,6 @@ final class ExecutionPlanner[F[_]: Sync](
           } yield (stageResults + (stageId -> results), updatedMappings)
       }
       .map(_._1)
-  }
-
-  /**
-   * Iterates through the stages in topological order, executing each with recovery support when
-   * available. Returns a map of stage results.
-   */
-  def runStagesWithRecovery(
-      stageGraph: StageBuilder.StageGraph,
-      executionOrder: List[StageId],
-      recoveryManager: Option[LineageRecoveryManager[F]],
-  ): F[Map[StageId, Seq[Partition[_]]]] = {
-    // For now, delegate to the regular runStages method
-    // Recovery integration can be added at the stage level in StageExecutor
-    runStages(stageGraph, executionOrder)
-  }
 
   /**
    * If any dependent stage is a shuffle stage, persist this stage's output to the shuffle service.
@@ -109,20 +93,19 @@ final class ExecutionPlanner[F[_]: Sync](
             sortByDependentId,
           )
         } else
-          repartitionDep
-            .map(op =>
-              shuffleHandler
-                .handleRepartitionOrCoalesceOutput(stageInfo, results, op.numPartitions),
-            )
+          partitionByDep
+            // Key-value data: write key-hashed into the partitionBy target count so the
+            // partitionBy stage reads all of it and downstream bypasses stay correct
+            .map(op => shuffleHandler.handleKeyedOutput(stageInfo, results, op.numPartitions))
             .orElse(
-              coalesceDep
+              repartitionDep
                 .map(op =>
                   shuffleHandler
                     .handleRepartitionOrCoalesceOutput(stageInfo, results, op.numPartitions),
                 ),
             )
             .orElse(
-              partitionByDep
+              coalesceDep
                 .map(op =>
                   shuffleHandler
                     .handleRepartitionOrCoalesceOutput(stageInfo, results, op.numPartitions),
