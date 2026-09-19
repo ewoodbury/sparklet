@@ -1209,8 +1209,8 @@ object StageBuilder:
    *   Updated partitioning metadata reflecting the operation's effect
    *
    * @note
-   *   This method handles the operations that can be appended to narrow stages. If a new
-   *   operation is added to the Operation ADT, this method must be updated to handle it.
+   *   This method handles the operations that can be appended to narrow stages. If a new operation
+   *   is added to the Operation ADT, this method must be updated to handle it.
    */
   private def updatePartitioning(
       prev: Option[Partitioning],
