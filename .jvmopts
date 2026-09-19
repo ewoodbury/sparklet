@@ -1,0 +1,6 @@
+-Xmx3g
+-XX:+UseG1GC
+-XX:MaxMetaspaceSize=1g
+-Dsbt.color=false
+-Dsbt.log.noformat=true
+-Dfile.encoding=UTF-8
