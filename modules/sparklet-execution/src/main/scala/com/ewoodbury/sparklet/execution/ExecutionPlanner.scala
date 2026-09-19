@@ -93,20 +93,19 @@ final class ExecutionPlanner[F[_]: Sync](
             sortByDependentId,
           )
         } else
-          repartitionDep
-            .map(op =>
-              shuffleHandler
-                .handleRepartitionOrCoalesceOutput(stageInfo, results, op.numPartitions),
-            )
+          partitionByDep
+            // Key-value data: write key-hashed into the partitionBy target count so the
+            // partitionBy stage reads all of it and downstream bypasses stay correct
+            .map(op => shuffleHandler.handleKeyedOutput(stageInfo, results, op.numPartitions))
             .orElse(
-              coalesceDep
+              repartitionDep
                 .map(op =>
                   shuffleHandler
                     .handleRepartitionOrCoalesceOutput(stageInfo, results, op.numPartitions),
                 ),
             )
             .orElse(
-              partitionByDep
+              coalesceDep
                 .map(op =>
                   shuffleHandler
                     .handleRepartitionOrCoalesceOutput(stageInfo, results, op.numPartitions),

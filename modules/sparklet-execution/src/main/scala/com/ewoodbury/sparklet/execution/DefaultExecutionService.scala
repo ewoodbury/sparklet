@@ -33,9 +33,9 @@ class DefaultExecutionService extends ExecutionService {
   def take[A](plan: Plan[A], n: Int): Seq[A] =
     if (n <= 0) Seq.empty
     else {
-      // Truncate each output partition to n elements before executing. Since every partition can
-      // contribute at most n elements, the first n of the concatenated result are unchanged, while
-      // narrow pipelines avoid materializing full partitions.
+      // Truncate each output partition of the final stage to n elements before executing. Each
+      // partition can then contribute at most n elements, so the first n elements of the
+      // partition-ordered result are unchanged.
       val limited = Plan.MapPartitionsOp(plan, (it: Iterator[A]) => it.take(n))
       executePartitions(limited).flatMap(_.data).take(n)
     }

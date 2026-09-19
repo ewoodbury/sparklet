@@ -7,7 +7,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.ewoodbury.sparklet.api.DistCollection
-import com.ewoodbury.sparklet.core.{Partition, Plan}
+import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf}
 import com.ewoodbury.sparklet.runtime.SparkletRuntime
 
 class TestDAGScheduler extends AnyFlatSpec with Matchers with StrictLogging {
@@ -53,12 +53,43 @@ class TestDAGScheduler extends AnyFlatSpec with Matchers with StrictLogging {
   }
 
   it should "support partitionBy for key-value datasets" in {
-    SparkletRuntime.get.shuffle.clear()
+    SparkletRuntime.get.shuffle.clear() // Clean state for test isolation
     val source = toDistCollection(Seq("a" -> 1, "b" -> 2, "c" -> 3, "a" -> 4))
     val result = source.partitionBy[String, Int](numPartitions = 3).reduceByKey[String, Int](_ + _).collect().toMap
     result("a") shouldBe 5
     result("b") shouldBe 2
     result("c") shouldBe 3
+  }
+
+  it should "produce correct results when partitionBy count equals the shuffle default" in {
+    SparkletRuntime.get.shuffle.clear()
+    val source = toDistCollection(Seq("a" -> 1, "b" -> 2, "a" -> 3, "b" -> 4))
+
+    // partitionBy(defaultShufflePartitions) enables the shuffle bypass for downstream keyed ops
+    val reduced = source
+      .partitionBy[String, Int](SparkletConf.get.defaultShufflePartitions)
+      .reduceByKey[String, Int](_ + _)
+      .collect()
+      .toMap
+    reduced("a") shouldBe 4
+    reduced("b") shouldBe 6
+
+    val grouped = source
+      .partitionBy[String, Int](SparkletConf.get.defaultShufflePartitions)
+      .groupByKey
+      .collect()
+      .toMap
+    grouped("a") should contain theSameElementsAs Seq(1, 3)
+    grouped("b") should contain theSameElementsAs Seq(2, 4)
+  }
+
+  it should "support repartition to the current partition count" in {
+    SparkletRuntime.get.shuffle.clear()
+    val source = DistCollection(1 to 10, SparkletConf.get.defaultShufflePartitions)
+
+    val result = source.repartition(SparkletConf.get.defaultShufflePartitions).collect()
+
+    result should contain theSameElementsAs (1 to 10)
   }
 
   it should "support mapPartitions, repartition, and coalesce together" in {
@@ -95,41 +126,38 @@ class TestDAGScheduler extends AnyFlatSpec with Matchers with StrictLogging {
     result("b") should contain theSameElementsAs Seq(2)
   }
 
-  it should "execute shuffle operations using DAG scheduler (basic smoke test)" in {
+  it should "execute groupByKey operations end to end" in {
     SparkletRuntime.get.shuffle.clear() // Clean state for test isolation
     val source = toDistCollection(Seq(1 -> "a", 2 -> "b", 1 -> "c"))
-    
-    // This is a basic smoke test - the current implementation is simplified
-    // and may not produce the exact expected result yet, but it should not crash
-    noException should be thrownBy {
-      val result = source.groupByKey.collect()
-      logger.debug(s"GroupByKey result: $result")
-    }
+
+    val result = source.groupByKey.collect().toMap
+    result(1) should contain theSameElementsAs Seq("a", "c")
+    result(2) should contain theSameElementsAs Seq("b")
   }
 
-  it should "execute reduceByKey operations using DAG scheduler (basic smoke test)" in {
+  it should "execute reduceByKey operations end to end" in {
     SparkletRuntime.get.shuffle.clear() // Clean state for test isolation
     val source = toDistCollection(Seq("a" -> 1, "b" -> 2, "a" -> 3))
-    
-    // This is a basic smoke test - the current implementation is simplified
-    noException should be thrownBy {
-      val result = source.reduceByKey[String, Int](_ + _).collect()
-      logger.debug(s"ReduceByKey result: $result")
-    }
+
+    val result = source.reduceByKey[String, Int](_ + _).collect().toMap
+    result("a") shouldBe 4
+    result("b") shouldBe 2
   }
 
   it should "handle mixed narrow and wide transformations" in {
+    SparkletRuntime.get.shuffle.clear()
     val source = toDistCollection(Seq(1 -> "a", 2 -> "b", 1 -> "c"))
-    
+
     // Chain narrow transformations before and after shuffle
-    noException should be thrownBy {
-      val result = source
-        .map { case (k, v) => (k + 10, v.toUpperCase(java.util.Locale.ENGLISH)) }  // narrow
-        .groupByKey                                       // wide (shuffle)
-        .map { case (k, vs) => (k, vs.size) }           // narrow after shuffle
-        .collect()
-      logger.debug(s"Mixed transformations result: $result")
-    }
+    val result = source
+      .map { case (k, v) => (k + 10, v.toUpperCase(java.util.Locale.ENGLISH)) } // narrow
+      .groupByKey // wide (shuffle)
+      .map { case (k, vs) => (k, vs.size) } // narrow after shuffle
+      .collect()
+      .toMap
+
+    result(11) shouldBe 2
+    result(12) shouldBe 1
   }
 
   it should "correctly concatenate results for union of transformed branches" in {

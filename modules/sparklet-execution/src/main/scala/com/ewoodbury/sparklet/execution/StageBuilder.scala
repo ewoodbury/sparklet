@@ -32,7 +32,7 @@ object StageBuilder:
       isShuffleStage: Boolean,
       shuffleOperation: Option[
         Plan[_],
-      ], // The original Plan operation for shuffle stages - will be replaced with WideOp in future
+      ], // The original Plan for shuffle stages, used by StageExecutor to dispatch execution
       outputPartitioning: Option[Partitioning],
   )
 
@@ -80,7 +80,9 @@ object StageBuilder:
       inputSources: Seq[InputSource],
       isShuffle: Boolean,
       shuffleMeta: Option[WideOp], // Use WideOp instead of Plan for better structure
-      originalPlan: Option[Plan[_]], // Keep original Plan for backward compatibility
+      originalPlan: Option[
+        Plan[_],
+      ], // Original Plan for shuffle stages, kept for execution dispatch
       outputPartitioning: Option[Partitioning],
   )
 
@@ -252,7 +254,6 @@ object StageBuilder:
     }
 
     // 9. Partitioning invariants - byKey only for operations that guarantee key grouping
-    validatePartitioningInvariants(graph)
   }
 
   /**
@@ -409,38 +410,6 @@ object StageBuilder:
   }
 
   /**
-   * Validates partitioning invariants - byKey should only be true for operations that guarantee
-   * key grouping.
-   */
-  private def validatePartitioningInvariants(graph: StageGraph): Unit = {
-    /* Operations that guarantee key grouping - simplified approach since classOf with generics is
-     * problematic */
-    // In practice, this would be implemented with a more sophisticated operation analysis system
-
-    graph.stages.values.foreach { stageInfo =>
-      stageInfo.outputPartitioning.foreach { partitioning =>
-        if (partitioning.byKey) {
-          // For byKey=true, verify stage has key-grouping operations or is a shuffle stage
-          if (!stageInfo.isShuffleStage) {
-            stageInfo.stage match {
-              case _: Stage.ChainedStage[_, _, _] =>
-              // For chained stages, check if any operation guarantees key grouping
-              /* Note: This is a simplified check - in practice we'd need to analyze the operation
-               * chain */
-              // For now, we'll be permissive and allow byKey=true if it's explicitly set
-              /* This validation can be strengthened in the future with more detailed operation
-               * analysis */
-              case _ =>
-              // For single operation stages, we could check the specific operation type
-              // But since we don't have direct access to the operation, we'll be permissive here
-            }
-          }
-        }
-      }
-    }
-  }
-
-  /**
    * Materializes a vector of operations into a concrete Stage form.
    *
    * This function converts a sequence of Operation ADT instances into executable Stage objects. It
@@ -532,7 +501,12 @@ object StageBuilder:
       case FlatMapOp(f) => Stage.flatMap(f)
       case DistinctOp() => Stage.distinct[Any]
       case MapPartitionsOp(f) => Stage.mapPartitions(f)
+
+      // Bypassed wide ops are appended as no-op narrow stages: the upstream data is already
+      // partitioned the way the operation wants it.
       case PartitionByLocalOp(_) => Stage.identity[Any]
+      case _: RepartitionOp[_] => Stage.identity[Any]
+      case _: CoalesceOp[_] => Stage.identity[Any]
 
       // Key-value operations - controlled type erasure point
       case _: KeysOp[_, _] =>
@@ -616,8 +590,7 @@ object StageBuilder:
    *
    * This method implements the unified stage building algorithm that processes Plan nodes
    * recursively, accumulating narrow operations into stages and creating shuffle boundaries for
-   * wide operations. It replaces the old recursive approach with a more structured operation
-   * accumulation strategy for better optimization and clearer stage boundaries.
+   * wide operations.
    *
    * The method handles three main categories of Plan nodes:
    *
@@ -1090,15 +1063,15 @@ object StageBuilder:
       addDependency(dependencies, newStageId, sourceStageId)
       newStageId
     } else {
-      // Check if we can chain this operation - only if the stage has a single producing path
-      // For now, we chain if there are no multi-input sources (like Union)
+      // Narrow ops can chain onto any non-shuffle stage: ops run per partition of the stage's
+      // output, which is valid for single-input stages and for concatenation stages (union).
       val canChain = sourceBuilder.inputSources.forall {
         case _: SourceInput => true
-        case _: StageOutput => sourceBuilder.inputSources.length == 1
+        case _: StageOutput => true
         case _: ShuffleInput => false
       }
 
-      if (canChain && (!sourceBuilder.isShuffle || sourceBuilder.ops.nonEmpty)) {
+      if (canChain) {
         // Extend the existing stage by appending the operation
         val updatedOps = sourceBuilder.ops :+ op
         val updatedBuilder = sourceBuilder.copy(
@@ -1108,26 +1081,19 @@ object StageBuilder:
         putBuilder(builderMap, updatedBuilder)
         sourceStageId
       } else {
-        // Create a new stage with this operation
+        // Create a new stage that reads the source stage's computed output
         val newStageId = ctx.freshId()
         val newBuilder = StageDraft(
           id = newStageId,
           ops = Vector(op),
-          inputSources = sourceBuilder.inputSources,
+          inputSources = Seq(StageOutput(sourceStageId)),
           isShuffle = false,
           shuffleMeta = None,
           originalPlan = None,
           outputPartitioning = updatePartitioning(sourceBuilder.outputPartitioning, op),
         )
         putNewBuilder(builderMap, newBuilder)
-
-        // Copy dependencies from source stage
-        sourceBuilder.inputSources.foreach {
-          case StageOutput(upstreamId) =>
-            addDependency(dependencies, newStageId, upstreamId)
-          case _ => // SourceInput and ShuffleInput don't create dependencies
-        }
-
+        addDependency(dependencies, newStageId, sourceStageId)
         newStageId
       }
     }
@@ -1277,23 +1243,9 @@ object StageBuilder:
          * key-value data) */
         prev.map(p => if (p.byKey) p else p.copy(byKey = false))
 
-      // Wide operations that create new partitioning
-      case gbk: GroupByKeyOp[_, _] =>
-        Some(Partitioning(byKey = true, numPartitions = gbk.numPartitions))
-
-      case rbk: ReduceByKeyOp[_, _] =>
-        Some(Partitioning(byKey = true, numPartitions = rbk.numPartitions))
-
-      // Local operations preserve existing partitioning
+      // Local (bypassed) operations preserve or establish key-based partitioning
       case _: GroupByKeyLocalOp[_, _] | _: ReduceByKeyLocalOp[_, _] =>
         prev
-
-      case sb: SortByOp[_, _] =>
-        // SortBy creates key-based partitioning but doesn't guarantee byKey for output
-        Some(Partitioning(byKey = false, numPartitions = sb.numPartitions))
-
-      case pby: PartitionByOp[_, _] =>
-        Some(Partitioning(byKey = true, numPartitions = pby.numPartitions))
 
       case pbl: PartitionByLocalOp[_, _] =>
         Some(Partitioning(byKey = true, numPartitions = pbl.numPartitions))
@@ -1303,17 +1255,6 @@ object StageBuilder:
 
       case coal: CoalesceOp[_] =>
         Some(Partitioning(byKey = false, numPartitions = coal.numPartitions))
-
-      case join: JoinOp[_, _, _] =>
-        Some(Partitioning(byKey = true, numPartitions = join.numPartitions))
-
-      case cogroup: CoGroupOp[_, _, _] =>
-        Some(Partitioning(byKey = true, numPartitions = cogroup.numPartitions))
-
-      /* This case should be unreachable if Operation ADT is properly sealed and all cases are
-       * handled above */
-      /* If this case is reached, it indicates a new operation was added without updating this
-       * method */
     }
 
     // Validation: ensure result is sensible

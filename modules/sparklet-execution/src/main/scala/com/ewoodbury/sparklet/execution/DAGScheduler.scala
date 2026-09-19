@@ -16,7 +16,6 @@ final class DAGScheduler[F[_]: Sync](
     partitioner: Partitioner,
 ) extends StrictLogging {
 
-  // Create instances of the new components
   private val joinExecutor = new JoinExecutor[F](shuffle, scheduler)
   private val shuffleHandler = new ShuffleHandler[F](shuffle, partitioner)
   private val stageExecutor = new StageExecutor[F](shuffle, scheduler, joinExecutor)

@@ -12,6 +12,7 @@ sealed trait Stage[A, B] {
 }
 
 object Stage {
+
   /** A stage that applies a single transformation */
   case class SingleOpStage[A, B](operation: Partition[A] => Partition[B]) extends Stage[A, B] {
     def execute(partition: Partition[A]): Partition[B] = operation(partition)

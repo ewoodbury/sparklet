@@ -24,15 +24,12 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     val distinctOp = DistinctOp[Int]()
     val mapPartitionsOp = MapPartitionsOp[Int, String](_.map(_.toString))
 
-    // Test wide operations can be created
-    val gbkOp = GroupByKeyOp[Int, String](defaultPartitions)
-    val rbkOp = ReduceByKeyOp[Int, String](_ + _, defaultPartitions)
-    val sortOp = SortByOp[String, Int](_.length, defaultPartitions)
-    val partitionOp = PartitionByOp[Int, String](defaultPartitions)
+    // Bypassed wide operations are appended as narrow ops by the builder
+    val gbkLocalOp = GroupByKeyLocalOp[Int, String]()
+    val rbkLocalOp = ReduceByKeyLocalOp[Int, String](_ + _)
+    val partitionLocalOp = PartitionByLocalOp[Int, String](defaultPartitions)
     val repartitionOp = RepartitionOp[String](defaultPartitions)
     val coalesceOp = CoalesceOp[String](defaultPartitions)
-    val joinOp = JoinOp[Int, String, String](defaultPartitions)
-    val cogroupOp = CoGroupOp[Int, String, String](defaultPartitions)
 
     // All operations should be created without errors
     mapOp shouldBe a[MapOp[_, _]]
@@ -40,14 +37,11 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     flatMapOp shouldBe a[FlatMapOp[_, _]]
     distinctOp shouldBe a[DistinctOp[_]]
     mapPartitionsOp shouldBe a[MapPartitionsOp[_, _]]
-    gbkOp shouldBe a[GroupByKeyOp[_, _]]
-    rbkOp shouldBe a[ReduceByKeyOp[_, _]]
-    sortOp shouldBe a[SortByOp[_, _]]
-    partitionOp shouldBe a[PartitionByOp[_, _]]
+    gbkLocalOp shouldBe a[GroupByKeyLocalOp[_, _]]
+    rbkLocalOp shouldBe a[ReduceByKeyLocalOp[_, _]]
+    partitionLocalOp shouldBe a[PartitionByLocalOp[_, _]]
     repartitionOp shouldBe a[RepartitionOp[_]]
     coalesceOp shouldBe a[CoalesceOp[_]]
-    joinOp shouldBe a[JoinOp[_, _, _]]
-    cogroupOp shouldBe a[CoGroupOp[_, _, _]]
   }
 
   "InputSource normalization" should "unify shuffle inputs with optional sides" in {
