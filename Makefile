@@ -2,17 +2,19 @@
 
 .PHONY: lint
 lint: ## Run linting and formatting
-	sbt scalafixAll
-	sbt scalafmt
+	sbt ";scalafixAll; scalafmt"
 
 .PHONY: test-lint
 test-lint: ## Run linting without fixing
-	sbt "scalafixAll --check"
-	sbt scalafmtCheck
+	sbt ";scalafixAll --check; scalafmtCheck"
 
 .PHONY: test
 test: ## Run tests
 	sbt test
+
+.PHONY: test-one
+test-one: ## Run a single suite: make test-one T=com.ewoodbury.sparklet.core.TestLocalActions
+	sbt "sparklet-tests/testOnly $(T)"
 
 .PHONY: help
 help: ## Display this help
