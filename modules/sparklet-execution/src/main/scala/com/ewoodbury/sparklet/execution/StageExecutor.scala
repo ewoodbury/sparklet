@@ -99,27 +99,27 @@ final class StageExecutor[F[_]: Sync](
       inputPartitions: Seq[Partition[_]],
       stageToShuffleId: Map[StageId, ShuffleId],
   ): F[Seq[Partition[_]]] = {
-    stageInfo.shuffleOperation match {
-      case Some(joinOp: Plan.JoinOp[_, _, _]) =>
-        executeJoinOperation(stageInfo, stageToShuffleId)
-      case Some(sortBy: Plan.SortByOp[_, _]) =>
-        executeSortByOperation(sortBy, inputPartitions)
-      case Some(groupByKey: Plan.GroupByKeyOp[_, _]) =>
+    stageInfo.wideOp match {
+      case Some(op: JoinWideOp) =>
+        executeJoinOperation(stageInfo, op, stageToShuffleId)
+      case Some(op: SortByWideOp[_, _]) =>
+        executeSortByOperation(op, inputPartitions)
+      case Some(_: GroupByKeyWideOp) =>
         executeGroupByKeyOperation(inputPartitions)
-      case Some(reduceByKey: Plan.ReduceByKeyOp[_, _]) =>
-        executeReduceByKeyOperation(reduceByKey, inputPartitions)
-      case Some(cogroup: Plan.CoGroupOp[_, _, _]) =>
+      case Some(op: ReduceByKeyWideOp[_]) =>
+        executeReduceByKeyOperation(op, inputPartitions)
+      case Some(_: CoGroupWideOp) =>
         executeCoGroupOperation(stageInfo, stageToShuffleId)
-      case Some(_: Plan.RepartitionOp[_]) | Some(_: Plan.CoalesceOp[_]) =>
+      case Some(_: RepartitionWideOp) | Some(_: CoalesceWideOp) =>
         executeRepartitionOperation(inputPartitions)
-      case Some(_: Plan.PartitionByOp[_, _]) =>
+      case Some(_: PartitionByWideOp) =>
         // Upstream wrote key-hashed (K, V) tuples; the partitioning already happened in the
         // shuffle write, so the stage itself is an identity pass-through
         Sync[F].pure(inputPartitions)
       case other =>
         Sync[F].raiseError(
           new IllegalStateException(
-            s"Stage ${stageInfo.id.toInt} has no executable shuffle operation (found: $other)",
+            s"Stage ${stageInfo.id.toInt} has no executable wide operation (found: $other)",
           ),
         )
     }
@@ -130,59 +130,55 @@ final class StageExecutor[F[_]: Sync](
    */
   private def executeJoinOperation(
       stageInfo: StageBuilder.StageInfo,
+      joinOp: JoinWideOp,
       stageToShuffleId: Map[StageId, ShuffleId],
   ): F[Seq[Partition[_]]] = {
-    stageInfo.shuffleOperation match {
-      case Some(joinOp: Plan.JoinOp[_, _, _]) =>
-        val shuffleInputs = stageInfo.inputSources.collect { case s: StageBuilder.ShuffleInput =>
-          s
-        }
-        val leftInput = shuffleInputs
-          .find(_.side.contains(StageBuilder.Side.Left))
-          .getOrElse(
-            throw new IllegalStateException(
-              s"Join missing Left input for stage ${stageInfo.id.toInt}",
-            ),
-          )
-        val rightInput = shuffleInputs
-          .find(_.side.contains(StageBuilder.Side.Right))
-          .getOrElse(
-            throw new IllegalStateException(
-              s"Join missing Right input for stage ${stageInfo.id.toInt}",
-            ),
-          )
-        val leftShuffleId = stageToShuffleId.getOrElse(
-          leftInput.stageId,
-          throw new IllegalStateException(
-            s"Missing shuffle id for Left upstream stage ${leftInput.stageId.toInt}",
-          ),
-        )
-        val rightShuffleId = stageToShuffleId.getOrElse(
-          rightInput.stageId,
-          throw new IllegalStateException(
-            s"Missing shuffle id for Right upstream stage ${rightInput.stageId.toInt}",
-          ),
-        )
-        val numPartitions = leftInput.numPartitions
+    val shuffleInputs = stageInfo.inputSources.collect { case s: StageBuilder.ShuffleInput =>
+      s
+    }
+    val leftInput = shuffleInputs
+      .find(_.side.contains(StageBuilder.Side.Left))
+      .getOrElse(
+        throw new IllegalStateException(
+          s"Join missing Left input for stage ${stageInfo.id.toInt}",
+        ),
+      )
+    val rightInput = shuffleInputs
+      .find(_.side.contains(StageBuilder.Side.Right))
+      .getOrElse(
+        throw new IllegalStateException(
+          s"Join missing Right input for stage ${stageInfo.id.toInt}",
+        ),
+      )
+    val leftShuffleId = stageToShuffleId.getOrElse(
+      leftInput.stageId,
+      throw new IllegalStateException(
+        s"Missing shuffle id for Left upstream stage ${leftInput.stageId.toInt}",
+      ),
+    )
+    val rightShuffleId = stageToShuffleId.getOrElse(
+      rightInput.stageId,
+      throw new IllegalStateException(
+        s"Missing shuffle id for Right upstream stage ${rightInput.stageId.toInt}",
+      ),
+    )
+    val numPartitions = leftInput.numPartitions
 
-        // Determine join strategy
-        val strategy =
-          joinOp.joinStrategy.getOrElse(
-            joinExecutor.selectJoinStrategy(leftShuffleId, rightShuffleId),
-          )
+    // Determine join strategy
+    val strategy =
+      joinOp.meta.joinStrategy.getOrElse(
+        joinExecutor.selectJoinStrategy(leftShuffleId, rightShuffleId),
+      )
 
-        logger.info(s"Using join strategy: $strategy for stage ${stageInfo.id.toInt}")
+    logger.info(s"Using join strategy: $strategy for stage ${stageInfo.id.toInt}")
 
-        strategy match {
-          case Plan.JoinStrategy.Broadcast =>
-            joinExecutor.executeBroadcastHashJoin(leftShuffleId, rightShuffleId, numPartitions)
-          case Plan.JoinStrategy.SortMerge =>
-            joinExecutor.executeSortMergeJoin(leftShuffleId, rightShuffleId, numPartitions)
-          case Plan.JoinStrategy.ShuffleHash =>
-            joinExecutor.executeShuffleHashJoin(leftShuffleId, rightShuffleId, numPartitions)
-        }
-      case _ =>
-        Sync[F].raiseError(new IllegalStateException("Join operation expected but not found"))
+    strategy match {
+      case Plan.JoinStrategy.Broadcast =>
+        joinExecutor.executeBroadcastHashJoin(leftShuffleId, rightShuffleId, numPartitions)
+      case Plan.JoinStrategy.SortMerge =>
+        joinExecutor.executeSortMergeJoin(leftShuffleId, rightShuffleId, numPartitions)
+      case Plan.JoinStrategy.ShuffleHash =>
+        joinExecutor.executeShuffleHashJoin(leftShuffleId, rightShuffleId, numPartitions)
     }
   }
 
@@ -190,13 +186,14 @@ final class StageExecutor[F[_]: Sync](
    * Type-safe handler for SortBy operations.
    */
   private def executeSortByOperation[A, S](
-      sortBy: Plan.SortByOp[A, S],
+      sortBy: SortByWideOp[A, S],
       inputPartitions: Seq[Partition[_]],
   ): F[Seq[Partition[_]]] = {
     Sync[F].delay {
+      val meta = sortBy.meta
       // Input for sort is key-value pairs of (sortKey, element)
       val typedPartitions = inputPartitions.asInstanceOf[Seq[Partition[(S, A)]]]
-      implicit val ord: Ordering[S] = sortBy.ordering
+      implicit val ord: Ordering[S] = meta.ordering
 
       // Sort within each partition by key
       val sortedIters: Seq[Iterator[(S, A)]] =
@@ -242,20 +239,21 @@ final class StageExecutor[F[_]: Sync](
   /**
    * Type-safe handler for ReduceByKey operations.
    */
-  private def executeReduceByKeyOperation[K, V](
-      reduceByKey: Plan.ReduceByKeyOp[K, V],
+  private def executeReduceByKeyOperation[V](
+      reduceByKey: ReduceByKeyWideOp[V],
       inputPartitions: Seq[Partition[_]],
   ): F[Seq[Partition[_]]] = {
     Sync[F].delay {
       val allData = inputPartitions.flatMap(_.data)
-      val reduceFunc = reduceByKey.reduceFunc
-      val reducedData = allData.asInstanceOf[Seq[(K, V)]].groupBy(_._1).map { case (key, pairs) =>
-        val reducedValue = pairs
-          .map(_._2)
-          .reduceOption(reduceFunc)
-          .getOrElse(throw new NoSuchElementException(s"No values found for key $key"))
-        (key, reducedValue)
-      }
+      val reduceFunc = reduceByKey.meta.reduceFunc
+      val reducedData =
+        allData.asInstanceOf[Seq[(Any, V)]].groupBy(_._1).map { case (key, pairs) =>
+          val reducedValue = pairs
+            .map(_._2)
+            .reduceOption(reduceFunc)
+            .getOrElse(throw new NoSuchElementException(s"No values found for key $key"))
+          (key, reducedValue)
+        }
       Seq(Partition(reducedData.toSeq))
     }
   }

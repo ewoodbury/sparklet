@@ -34,12 +34,13 @@ final case class SimpleWideOpMeta(
 ) extends WideOpMeta
 
 /**
- * Metadata for sort operations with typed key function.
+ * Metadata for sort operations with typed key function and ordering.
  */
 final case class SortWideOpMeta[A, B](
     kind: WideOpKind = WideOpKind.SortBy,
     numPartitions: Int,
     keyFunc: A => B,
+    ordering: Ordering[B],
     sides: Seq[StageBuilder.Side] = Seq.empty,
 ) extends WideOpMeta
 
@@ -60,8 +61,8 @@ enum WideOpKind:
   case GroupByKey, ReduceByKey, SortBy, PartitionBy, Repartition, Coalesce, Join, CoGroup
 
 /**
- * Structured representation of wide operations for execution planning. Replaces the raw Plan[_]
- * storage in StageInfo for better type safety and introspection.
+ * Structured description of a wide operation attached to a shuffle stage. This is the execution
+ * dispatch record: StageExecutor executes a shuffle stage by pattern-matching on it.
  */
 sealed trait WideOp
 
@@ -99,6 +100,37 @@ final case class RepartitionOp[A](numPartitions: Int) extends Operation[A, A]
 final case class CoalesceOp[A](numPartitions: Int) extends Operation[A, A]
 
 object Operation {
+
+  /**
+   * The single named erasure boundary for Plan → Operation conversion. Stage building works with
+   * `Operation[Any, Any]` because element types are erased at the stage level; the returned
+   * operation retains its real types, so execution is type-correct even though the compiler cannot
+   * verify it here.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private[execution] def fromPlan(plan: Plan[_]): Operation[Any, Any] = plan match {
+    case Plan.MapOp(_, f) => MapOp(f.asInstanceOf[Any => Any])
+    case Plan.FilterOp(_, p) => FilterOp(p.asInstanceOf[Any => Boolean])
+    case Plan.FlatMapOp(_, f) => FlatMapOp(f.asInstanceOf[Any => IterableOnce[Any]])
+    case Plan.DistinctOp(_) => DistinctOp[Any]()
+    case Plan.KeysOp(_) => KeysOp[Any, Any]().asInstanceOf[Operation[Any, Any]]
+    case Plan.ValuesOp(_) => ValuesOp[Any, Any]().asInstanceOf[Operation[Any, Any]]
+    case Plan.MapValuesOp(_, f) =>
+      MapValuesOp[Any, Any, Any](f.asInstanceOf[Any => Any]).asInstanceOf[Operation[Any, Any]]
+    case Plan.FilterKeysOp(_, p) =>
+      FilterKeysOp[Any, Any](p.asInstanceOf[Any => Boolean]).asInstanceOf[Operation[Any, Any]]
+    case Plan.FilterValuesOp(_, p) =>
+      FilterValuesOp[Any, Any](p.asInstanceOf[Any => Boolean]).asInstanceOf[Operation[Any, Any]]
+    case Plan.FlatMapValuesOp(_, f) =>
+      FlatMapValuesOp[Any, Any, Any](f.asInstanceOf[Any => IterableOnce[Any]])
+        .asInstanceOf[Operation[Any, Any]]
+    case Plan.MapPartitionsOp(_, f) =>
+      MapPartitionsOp(f.asInstanceOf[Iterator[Any] => Iterator[Any]])
+    case _ =>
+      throw new IllegalArgumentException(
+        s"Plan node $plan is not a narrow operation and cannot become a stage Operation",
+      )
+  }
 
   /**
    * Determines if a shuffle operation can be bypassed based on upstream partitioning metadata.
