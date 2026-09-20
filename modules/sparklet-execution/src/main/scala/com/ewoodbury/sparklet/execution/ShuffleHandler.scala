@@ -170,7 +170,7 @@ final class ShuffleHandler[F[_]: Sync](
       val step = sorted.size.toDouble / P
       (1 to cutCount).map { i =>
         val idx = math.min(sorted.size - 1, math.max(0, math.ceil(i * step).toInt - 1))
-        sorted(idx) // Now safe because sorted is a Vector and idx is clamped
+        sorted(idx) // idx is clamped to the sample bounds
       }.toVector
     }
   }

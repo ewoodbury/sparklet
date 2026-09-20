@@ -13,6 +13,32 @@ import com.ewoodbury.sparklet.core.{Partition, ShuffleId, StageId}
 sealed trait ShuffleWriteReason
 
 object ShuffleWriteReason:
+
+  /**
+   * Selects the write reason for a stage whose dependents include shuffle stages. SortBy wins
+   * regardless of dependent order because range partitioning is the only scheme change; among the
+   * rest, partitionBy (key-hash into its own count) beats repartition/coalesce; otherwise the
+   * output is written with the default keyed write.
+   */
+  private[execution] def forDependents(
+      shuffleDependents: Seq[StageBuilder.StageInfo],
+  ): ShuffleWriteReason = {
+    val wideOps = shuffleDependents.flatMap(_.wideOp)
+    if (wideOps.exists(_.isInstanceOf[SortByWideOp[_, _]])) DownstreamSortBy
+    else {
+      // Filter by type first: collectFirst across case alternatives would pick whichever
+      // dependent comes first in iteration order, not the highest-priority type
+      val partitionBy = wideOps.collectFirst { case op: PartitionByWideOp =>
+        DownstreamPartitionBy(op.meta.numPartitions)
+      }
+      val repartition = wideOps.collectFirst {
+        case op: RepartitionWideOp => DownstreamRepartition(op.meta.numPartitions)
+        case op: CoalesceWideOp => DownstreamRepartition(op.meta.numPartitions)
+      }
+      partitionBy.orElse(repartition).getOrElse(DownstreamShuffle)
+    }
+  }
+
   /** A downstream stage reads this output through a shuffle boundary. */
   case object DownstreamShuffle extends ShuffleWriteReason
 
@@ -73,46 +99,48 @@ final class ExecutionPlanner[F[_]: Sync](
     val dependentStages: Iterable[StageId] =
       stageGraph.dependencies.filter(_._2.contains(stageInfo.id)).keys
 
-    val shuffleDependents =
-      dependentStages.map(depStageId => stageGraph.stages(depStageId)).filter(_.isShuffleStage)
+    val shuffleDependents: Seq[StageBuilder.StageInfo] =
+      dependentStages
+        .map(depStageId => stageGraph.stages(depStageId))
+        .filter(_.isShuffleStage)
+        .toSeq
 
     if (shuffleDependents.isEmpty) Sync[F].pure(None)
     else {
-      val reason: ShuffleWriteReason = shuffleDependents
-        .flatMap(_.wideOp)
-        .collectFirst {
-          case op: SortByWideOp[_, _] => ShuffleWriteReason.DownstreamSortBy
-          case op: PartitionByWideOp =>
-            ShuffleWriteReason.DownstreamPartitionBy(op.meta.numPartitions)
-          case op: RepartitionWideOp =>
-            ShuffleWriteReason.DownstreamRepartition(op.meta.numPartitions)
-          case op: CoalesceWideOp =>
-            ShuffleWriteReason.DownstreamRepartition(op.meta.numPartitions)
-        }
-        .getOrElse(ShuffleWriteReason.DownstreamShuffle)
+      // A sortBy dependent is found first so the dispatch below is driven by the same value that
+      // produced the reason: no reason/dispatch agreement to maintain by hand.
+      val sortByDependent =
+        shuffleDependents.find(_.wideOp.exists(_.isInstanceOf[SortByWideOp[_, _]]))
 
-      val sortByDependentId = shuffleDependents
-        .find(_.wideOp.exists(_.isInstanceOf[SortByWideOp[_, _]]))
-        .map(_.id)
+      val reason: ShuffleWriteReason =
+        sortByDependent.fold(ShuffleWriteReason.forDependents(shuffleDependents))(_ =>
+          ShuffleWriteReason.DownstreamSortBy,
+        )
 
-      val writeF: F[ShuffleId] = reason match {
-        case ShuffleWriteReason.DownstreamSortBy =>
-          shuffleHandler.handleSortByRangePartitionedOutput(
-            stageInfo,
-            results,
-            stageGraph,
-            sortByDependentId.get,
-          )
-        case ShuffleWriteReason.DownstreamPartitionBy(n) =>
-          // Key-value data: write key-hashed into the partitionBy target count so the
-          // partitionBy stage reads all of it and downstream bypasses stay correct
-          shuffleHandler.handleKeyedOutput(stageInfo, results, n)
-        case ShuffleWriteReason.DownstreamRepartition(n) =>
-          shuffleHandler.handleRepartitionOrCoalesceOutput(stageInfo, results, n)
-        case ShuffleWriteReason.DownstreamShuffle =>
-          shuffleHandler.handleShuffleOutput(stageInfo, results)
+      val writeF: F[ShuffleId] = sortByDependent match {
+        case Some(dep) =>
+          shuffleHandler.handleSortByRangePartitionedOutput(stageInfo, results, stageGraph, dep.id)
+        case None =>
+          reason match {
+            case ShuffleWriteReason.DownstreamPartitionBy(n) =>
+              // Key-value data: write key-hashed into the partitionBy target count so the
+              // partitionBy stage reads all of it and downstream bypasses stay correct
+              shuffleHandler.handleKeyedOutput(stageInfo, results, n)
+            case ShuffleWriteReason.DownstreamRepartition(n) =>
+              shuffleHandler.handleRepartitionOrCoalesceOutput(stageInfo, results, n)
+            case ShuffleWriteReason.DownstreamShuffle =>
+              shuffleHandler.handleShuffleOutput(stageInfo, results)
+            case ShuffleWriteReason.DownstreamSortBy =>
+              Sync[F].raiseError(
+                new IllegalStateException(
+                  "sortBy write reason selected without a sortBy dependent; this is unreachable " +
+                    "by construction of ShuffleWriteReason.forDependents",
+                ),
+              )
+          }
       }
 
+      logger.debug(s"Shuffle write for stage ${stageInfo.id.toInt}: $reason")
       writeF.map(id => Some((id, reason)))
     }
   }
