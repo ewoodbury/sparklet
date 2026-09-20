@@ -10,7 +10,13 @@ import com.ewoodbury.sparklet.runtime.api.{ShuffleService, TaskScheduler}
 
 /**
  * Executor for handling different join strategies.
+ *
+ * Named erasure boundary: join tasks operate on co-partitioned shuffle reads whose record types
+ * are erased in stage transport; task results are cast back to the partition sequence the stage
+ * graph expects. Safe because every task in a submission produces the same record type as the
+ * stage it belongs to.
  */
+@SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 final class JoinExecutor[F[_]: Sync](
     shuffle: ShuffleService,
     scheduler: TaskScheduler[F],

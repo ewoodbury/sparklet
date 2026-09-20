@@ -5,6 +5,8 @@ import org.scalatest.matchers.should.Matchers
 
 import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
 
+// Stage fixtures build existential WideOp values the production types erase.
+@SuppressWarnings(Array("org.wartremover.warts.Any"))
 class TestShuffleWriteReason extends AnyFlatSpec with Matchers {
 
   private def sortByStage(id: Int, numPartitions: Int): StageBuilder.StageInfo =

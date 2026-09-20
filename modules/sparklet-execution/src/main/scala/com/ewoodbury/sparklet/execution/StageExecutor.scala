@@ -9,10 +9,15 @@ import com.ewoodbury.sparklet.runtime.api.{ShuffleService, TaskScheduler}
 
 /**
  * Executor for handling stage execution.
+ *
+ * Named erasure boundary: stages transport data as `Partition[_]`, and each wide-op handler casts
+ * the transport partitions back to the record types its `WideOp` describes. Safe because the stage
+ * graph is built from the same typed operations that the handlers dispatch on.
  */
 @SuppressWarnings(
   Array(
     "org.wartremover.warts.Any",
+    "org.wartremover.warts.AsInstanceOf",
     "org.wartremover.warts.MutableDataStructures",
     "org.wartremover.warts.Equals",
   ),

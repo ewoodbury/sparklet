@@ -8,9 +8,15 @@ import scala.collection.mutable
 import com.ewoodbury.sparklet.core.{Partition, PartitionId, ShuffleId}
 import com.ewoodbury.sparklet.runtime.api.{Partitioner, ShuffleService}
 
+/**
+ * Named erasure boundary: shuffle storage is keyed by id, not by record type, so reads cast back
+ * to the reader's (K, V). Safe because a ShuffleId is only ever returned together with data of the
+ * matching record type.
+ */
 @SuppressWarnings(
   Array(
     "org.wartremover.warts.MutableDataStructures",
+    "org.wartremover.warts.AsInstanceOf",
   ),
 )
 final class LocalShuffleService extends ShuffleService:

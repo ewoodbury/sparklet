@@ -8,7 +8,10 @@ import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
 /**
  * Tests for the new Operation ADT and normalized InputSource modeling.
  */
-@SuppressWarnings(Array("org.wartremover.warts.Any"))
+// Internals tests exercise erased stage/transport types directly.
+@SuppressWarnings(
+  Array("org.wartremover.warts.Any", "org.wartremover.warts.AsInstanceOf"),
+)
 class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
 
   // Test data

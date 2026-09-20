@@ -1,307 +1,141 @@
 # Architecture
 
-## Processing Core
+Sparklet is a data processing engine inspired by Spark, written in pure functional Scala 3. This
+document describes the system as it exists today: one execution path, a clean logical/physical
+split, and type erasure confined to named boundaries.
 
-The core processing engine is composed of four layers: a logical planning layer, a stage layer, a task layer, and a DistCollection layer. The system now supports both **narrow transformations** (single-stage execution) and **wide transformations** (multi-stage execution with shuffle operations).
+## Module layout
 
-### 1. Planning Layer
+| Module | Responsibility |
+|---|---|
+| `sparklet-api` | `DistCollection`: the user-facing lazy API. Builds `Plan` trees, triggers actions. |
+| `sparklet-core` | `Plan` ADT, `PlanWide`, `Partition`, `SparkletConf`, `ExecutionService` SPI, IDs. |
+| `sparklet-execution` | The compiler and runtime: `StageBuilder`, `Stage`, `Operation`/`WideOp`, `DAGScheduler`, `ExecutionPlanner`, `StageExecutor`, `ShuffleHandler`, `JoinExecutor`, `Task`. |
+| `sparklet-runtime` | Execution SPIs (`TaskScheduler`, `ShuffleService`, `Partitioner`, `BroadcastService`) and local in-memory implementations. |
+| `sparklet-tests` | Aggregated ScalaTest suite (sequential by design; see Testing notes). |
 
-- Lazy, immutable representation of what will be computed.
-- Essentially a declarative statement for what operations are applied, organized into a computation graph
-- Uses `PlanWide` module for centralized wide operation detection
+Dependency direction: `api -> core`; `execution -> api, core, runtime`; `runtime -> core`. The
+logical layer cannot name physical types — the split is enforced by the build.
 
-```scala
-// This creates a Plan tree, no computation happens yet
-val plan = Plan.MapOp(
-  Plan.FilterOp(
-    Plan.Source(partitions), 
-    x => x > 2
-  ), 
-  x => x * 2
-)
+## Logical vs physical
+
+Two vocabularies, separated at the module level:
+
+- **Logical** (`sparklet-core`): `Plan[A]` — an immutable, lazy tree of what the user asked for.
+  `DistCollection` transformations only prepend nodes; nothing runs until an action.
+- **Physical** (`sparklet-execution`): `StageGraph` — stages, dependencies, shuffle boundaries.
+  Narrow operations are fused into stages; wide operations become shuffle stages carrying a
+  structured `WideOp` record.
+
+The rule: `Plan` is legal in the compiler (`StageBuilder` reads it to compile), illegal in the
+executor (`StageExecutor`/`ShuffleHandler`/`ExecutionPlanner` dispatch only on `WideOp`).
+
+## The execution path (the only one)
+
+```text
+DistCollection action
+  -> ExecutionService (SPI, registered by the execution module)
+  -> DefaultExecutionService
+  -> DAGScheduler.executePartitions
+  -> StageBuilder.buildStageGraph        (plan -> stage graph)
+  -> TopologicalSort                     (execution order)
+  -> ExecutionPlanner.runStages          (per stage:)
+       StageExecutor.getInputPartitions  (SourceInput | StageOutput | ShuffleInput)
+       StageExecutor.executeStage        (narrow: StageTask per partition via TaskScheduler SPI
+                                          shuffle: WideOp dispatch)
+       ExecutionPlanner.writeShuffleIfNeeded (ShuffleWriteReason decides the write shape)
+  -> final stage partitions, flattened only at the action boundary
 ```
 
-### 2. Stage Layer
+A bare `Plan.Source` short-circuits to its partitions (no tasks needed for identity work).
+Narrow-only plans compile to a one-stage graph and flow through the same path as wide plans.
 
-- Groups narrow transformations together for efficient execution
-- Each stage can execute multiple operations in a single pass over the data
-- Stage boundaries occur at wide transformations (shuffles) or unions
+## Compilation: stages and fusion
 
-```scala
-// A stage that chains map and filter operations
-val stage = Stage.ChainedStage(
-  Stage.map(x => x * 2),
-  Stage.filter(x => x > 4)
-)
-val result = stage.execute(partition) // Executes both operations in one pass
-```
+`StageBuilder` walks the plan recursively:
 
-### 3. Task Layer
+- Narrow operations chain onto the current stage (`appendOperation`); their operations accumulate
+  into a `Vector[Operation]` materialized as fused `Stage` closures — one pass per partition.
+- Wide operations cut a stage boundary (`createShuffleStageUnified`), producing a `WideOp`
+  (`GroupByKeyWideOp`, `SortByWideOp`, `JoinWideOp`, ...) plus `ShuffleInput` sources and
+  `outputPartitioning` metadata.
+- Shuffle bypass: when upstream partitioning metadata already matches the wide operation's
+  requirement (`Operation.canBypassShuffle`), the operation is appended as a local no-op instead
+  of creating a shuffle stage. Example: `partitionBy(4)` then `groupByKey` (default 4) is a local
+  group.
+- Narrow work after a shuffle reads the upstream stage's output in memory (`StageOutput`) — no
+  extra shuffle or materialization round-trip.
+- The graph is validated (existence, acyclicity, reachability, partitioning sanity,
+  side-tag consistency) before execution; see `TestStageGraphValidation` for the enforced
+  invariants.
 
-- Computation is broken down into actual execution units over a single piece of data (partition). One task always runs on exactly one partition.
-- **Two types of tasks** for different execution patterns:
-  - **`StageTask`**: Executes single stages with narrow transformations
-  - **`DAGTask`**: Orchestrates multi-stage execution through DAGScheduler for shuffle operations
-- Computation is actually triggered with `task.run()`
+## Shuffle write policy
 
-```scala
-// Narrow transformations - single stage
-val stageTask = Task.StageTask(partition, stage)
-val result = stageTask.run()
+`ExecutionPlanner` writes a stage's output only when a dependent stage is a shuffle stage, and
+the write shape is a value: `ShuffleWriteReason.forDependents` picks, by priority — sortBy
+(range partitioned to preserve global order), then partitionBy (key-hashed into its target
+count), then repartition/coalesce, then a generic keyed write. Shuffle IDs come from the
+`ShuffleService`, never from stage IDs.
 
-// Wide transformations - multi-stage DAG execution  
-val dagTask = Task.DAGTask(plan)
-val result = dagTask.run() // Executes entire DAG via DAGScheduler
-```
+## Type erasure policy
 
-### 4. DistCollection Layer (User API)
+`Plan[A]` is invariant and stages transport `Partition[_]`, so some casts are unavoidable.
+Policy (compiler-enforced — `Wart.AsInstanceOf` and `Wart.Any` are errors):
 
-- High-level API that users interact with
+- Casts live only at named erasure boundaries, each with a suppression and a comment explaining
+  why the cast is safe: `Operation.fromPlan`, `DistCollection.kvPlan`,
+  `StageBuilder`/`StageExecutor`/`JoinExecutor`/`ShuffleHandler` (file-level, documented),
+  `Task.BroadcastHashJoinTask`, `DAGScheduler.executePartitions`, and the storage
+  implementations (`LocalShuffleService`, `LocalBroadcastService`).
+- No new cast sites outside these boundaries without a suppression and a justification.
 
-```scala
-val dc = DistCollection(data, 2)
-  .map(_ * 2)        // Creates Plan.MapOp (narrow)
-  .filter(_ > 4)     // Creates Plan.FilterOp (narrow) 
-  .groupByKey()      // Creates Plan.GroupByKeyOp (wide - triggers shuffle)
-  .collect()         // Triggers execution via appropriate Tasks
-```
+## Runtime SPIs
 
-## Dual Execution Paths
+| SPI | Local impl | Role |
+|---|---|---|
+| `TaskScheduler[F]` | `LocalTaskScheduler` (thread pool, bounded parallelism) | Runs tasks; applies the `SparkletConf`-derived retry policy at submission time |
+| `ShuffleService` | `LocalShuffleService` (in-memory, concurrent map) | Shuffle write/read keyed by `ShuffleId` + `PartitionId` |
+| `Partitioner` | `HashPartitioner` (`floorMod` — safe for negative hashes) | Key -> partition assignment |
+| `BroadcastService` | `LocalBroadcastService` | Broadcast join support |
 
-The system uses `PlanWide.isWide()` to intelligently route operations through two execution paths:
+`SparkletRuntime` wires these into `RuntimeComponents` (a global holder with a thread-local
+override used by tests).
 
-### Path 1: Single-Stage Execution (Narrow Transformations)
-**Used for:** `map`, `filter`, `flatMap`, `distinct`, `union`, key-value operations without shuffling
+## Failure handling
 
-```
-Plan → Executor.createTasks() → StageTask → TaskScheduler → Results
-```
+Tasks retry per `SparkletConf` (`maxTaskRetries`, exponential backoff) inside
+`TaskExecutionWrapper`; permanent failure propagates to the caller. Lineage-based recovery was
+removed: it could not safely reconstruct arbitrary user functions. Retry is honest and tested
+(`TestLocalTaskSchedulerRetry`).
 
-### Path 2: Multi-Stage Execution (Wide Transformations) 
-**Used for:** `groupByKey`, `reduceByKey`, `sortBy`, `join`, `cogroup`
+## Ordering guarantees
 
-```
-Plan → Executor.createTasks() → DAGTask → DAGScheduler → Multi-Stage Coordination → Results
-```
+- `collect`/`take`/`count` preserve partition order and within-partition order.
+- `sortBy` produces a globally ordered result (sampling-based range partitioning + k-way merge).
+- `union` concatenates left then right.
+- `groupBy`-family outputs group by key equality; record order inside groups follows input order.
+- Wide operations other than joins collapse to a single output partition today — see the
+  limitations in TODO.md.
 
-## Example Walkthrough
+## Testing notes
 
-### Narrow Transformations Example
-User writes code with DistCollection API
-```scala
-// User code:
-val result = DistCollection(Seq(1,2,3,4), 2)
-  .map(_ * 2)
-  .filter(_ > 4)
-  .collect()
-```
+- Tests run sequentially (`Test / parallelExecution := false`): `SparkletConf`,
+  `SparkletRuntime`, and `ExecutionService` are process-global; suites mutate them. Parallelism
+  returns when global state becomes injected (deferred).
+- `SparkletConf` is global mutable state: tests that change it restore defaults in `afterEach`.
+- Retry tests set `baseRetryDelayMs = 1L` or they take seconds.
+- Test logs are silenced to WARN via `modules/sparklet-tests/src/test/resources/log4j2-test.xml`.
 
-Step 1: Plan Creation
-```scala
-// DistCollection.map() creates:
-Plan.MapOp(Plan.Source([Partition([1,2]), Partition([3,4])]), x => x * 2)
+## Known limitations (deferred work)
 
-// DistCollection.filter() creates:
-Plan.FilterOp(Plan.MapOp(...), x => x > 4)
-```
+Details and sequencing in `TODO.md`; the headline items:
 
-Step 2: Task Creation & Execution
-```scala
-// Executor.createTasks() detects narrow-only plan
-// Creates one StageTask per partition with chained operations:
-val stage = Stage.ChainedStage(
-  Stage.map(x => x * 2),
-  Stage.filter(x => x > 4)
-)
-val tasks = [
-  StageTask(Partition([1,2]), stage),
-  StageTask(Partition([3,4]), stage)
-]
-```
-
-Step 3: Task Execution
-```scala
-// Each task runs the entire stage independently:
-task1.run() // Stage on [1,2] -> map -> [2,4] -> filter -> [4]
-task2.run() // Stage on [3,4] -> map -> [6,8] -> filter -> [6,8]
-// Results are combined and returned to `result`
-```
-
-### Wide Transformations Example
-```scala
-// User code with shuffle operation:
-val result = DistCollection(Seq(("a",1), ("b",2), ("a",3)), 2)
-  .groupByKey()
-  .collect()
-```
-
-Step 1: Plan Creation
-```scala
-Plan.GroupByKeyOp(Plan.Source([Partition([("a",1), ("b",2)]), Partition([("a",3)])]))
-```
-
-Step 2: DAG Task Creation
-```scala
-// Executor.createTasks() detects shuffle operation
-// Routes through DAGScheduler:
-val dagTask = Task.DAGTask(plan)
-```
-
-Step 3: Multi-Stage Execution
-```scala
-// DAGTask.run() triggers:
-// 1. StageBuilder.buildStageGraph() - creates stage dependency graph
-// 2. DAGScheduler.execute() - coordinates multi-stage execution
-// 3. ShuffleManager - handles data redistribution
-// Result: [("a", [1,3]), ("b", [2])]
-```
-
-### Updated Execution Flow Diagram
-```mermaid
-flowchart TD
-    %% User API Layer (Lazy)
-    User["`**User Code**
-    DistCollection(data, 2)
-    .map(_ * 2)
-    .groupByKey()`"]
-    
-    %% Planning Layer (Lazy)
-    subgraph Lazy["🔄 Lazy Evaluation Phase"]
-        DC1["`**DistCollection.map()**
-        Creates Plan.MapOp`"]
-        DC2["`**DistCollection.groupByKey()**
-        Creates Plan.GroupByKeyOp`"]
-        PlanTree["`**Plan Tree Built**
-        GroupByKeyOp(MapOp(Source(...)))`"]
-    end
-    
-    %% Execution Trigger
-    Trigger["`**🚀 EXECUTION TRIGGER**
-    .collect() called`"]
-    
-    %% Execution Decision
-    Decision{"`**Contains Shuffle?**
-    PlanWide.isWide()`"}
-    
-    %% Single-Stage Path
-    subgraph SingleStage["⚡ Single-Stage Execution"]
-        Executor1["`**Executor.createTasks()**`"]
-        StageBuilder1["`**StageBuilder.buildStages()**
-        Groups narrow transformations`"]
-        StageTasks["`**StageTask Creation**
-        One per partition`"]
-        
-        subgraph ParallelSingle["🔄 Parallel StageTask Execution"]
-            StageTask1["`**StageTask 1**
-            Single-pass execution`"]
-            StageTask2["`**StageTask 2**
-            Single-pass execution`"]
-        end
-    end
-    
-    %% Multi-Stage Path  
-    subgraph MultiStage["⚡ Multi-Stage Execution"]
-        Executor2["`**Executor.createTasks()**`"]
-        DAGTaskCreate["`**DAGTask Creation**
-        Encapsulates entire DAG`"]
-        DAGExecution["`**DAGTask.run()**
-        Triggers DAGScheduler`"]
-        StageBuilder2["`**StageBuilder.buildStageGraph()**
-        Creates stage dependencies`"]
-        DAGScheduler["`**DAGScheduler.execute()**
-        Multi-stage coordination`"]
-        ShuffleManager["`**ShuffleManager**
-        Data redistribution`"]
-    end
-    
-    Results["`**Results Combined**
-    Final output`"]
-    
-    %% Flow connections
-    User --> DC1
-    DC1 --> DC2
-    DC2 --> PlanTree
-    PlanTree --> Trigger
-    
-    Trigger --> Decision
-    Decision -->|"No (Narrow Only)"| Executor1
-    Decision -->|"Yes (Contains Shuffle)"| Executor2
-    
-    %% Single-stage flow
-    Executor1 --> StageBuilder1
-    StageBuilder1 --> StageTasks
-    StageTasks --> StageTask1
-    StageTasks --> StageTask2
-    StageTask1 --> Results
-    StageTask2 --> Results
-    
-    %% Multi-stage flow
-    Executor2 --> DAGTaskCreate
-    DAGTaskCreate --> DAGExecution
-    DAGExecution --> StageBuilder2
-    StageBuilder2 --> DAGScheduler
-    DAGScheduler --> ShuffleManager
-    ShuffleManager --> Results
-    
-    %% Styling
-    classDef lazy fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    classDef execution fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    classDef trigger fill:#f3e5f5,stroke:#4a148c,stroke-width:3px
-    classDef parallel fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
-    classDef decision fill:#ffebee,stroke:#c62828,stroke-width:3px
-    
-    class DC1,DC2,PlanTree lazy
-    class Executor1,StageBuilder1,StageTasks,Executor2,DAGTaskCreate,DAGExecution,StageBuilder2,DAGScheduler,ShuffleManager execution
-    class Trigger trigger
-    class StageTask1,StageTask2 parallel
-    class Decision decision
-```
-
-## Stage Boundaries
-
-Stages group **narrow transformations** together for efficiency using centralized wide operation detection via `PlanWide.isWide()`. Stage boundaries occur at:
-
-### Wide Transformations
-Operations requiring data shuffling across partitions:
-- **`groupByKey`** - Groups values by key: `(K, V) → (K, Iterable[V])`
-- **`reduceByKey`** - Reduces values by key: `(K, V) → (K, V)` 
-- **`sortBy`** - Sorts elements by key function: `A → Seq[A]`
-- **`join`** - Inner joins two collections: `(K, V), (K, W) → (K, (V, W))`
-- **`cogroup`** - Co-groups collections: `(K, V), (K, W) → (K, (Iterable[V], Iterable[W]))`
-
-### Union Operations
-```scala
-val left = collection1.map(_ * 2)   // Stage 1
-val right = collection2.filter(_ > 0) // Stage 2  
-val union = left.union(right)       // Creates separate stages
-```
-
-### Benefits of Stages
-
-1. **Efficiency**: Multiple operations execute in a single pass over data
-2. **Memory**: Intermediate results don't need to be materialized 
-3. **Parallelism**: Each stage runs independently across partitions
-4. **Shuffle Coordination**: Multi-stage execution handles complex data dependencies
-
-```scala
-// Narrow transformations: 1 pass executing all operations
-data.map(f1).map(f2).filter(p) // → Single StageTask
-
-// Wide transformations: Multi-stage coordination  
-data.map(f1).groupByKey.map(f2) // → DAGTask → Multi-stage execution
-```
-
-## Supported Operations
-
-### Narrow Transformations (Single-Stage)
-- **Transformations**: `map`, `filter`, `flatMap`, `distinct`
-- **Key-Value**: `keys`, `values`, `mapValues`, `filterKeys`, `filterValues`, `flatMapValues`
-- **Combining**: `union`
-
-### Wide Transformations (Multi-Stage)  
-- **Aggregations**: `groupByKey`, `reduceByKey`, `sortBy`
-- **Joins**: `join`, `cogroup`
-
-### Actions
-- **Collection**: `collect`, `count`, `take`, `first`  
-- **Aggregation**: `reduce`, `fold`, `aggregate`, `forEach`
+- `groupByKey`/`reduceByKey`/`cogroup`/`sortBy` collapse to one output partition (joins keep
+  per-partition parallelism).
+- No map-side combine for `reduceByKey` (full records are shuffled).
+- No cross-branch dedup: reusing a `DistCollection` in two places recomputes it; at most one
+  shuffle write per stage.
+- No rule-based logical optimizer (predicate/projection pushdown) — the `PhysicalPlan` layer
+  precedes this work.
+- Sort-merge join is a hash grouping wearing a sort-merge name; a true typed sort-merge join is
+  deferred.

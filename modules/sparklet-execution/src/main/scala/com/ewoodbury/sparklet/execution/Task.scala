@@ -99,12 +99,20 @@ object Task extends StrictLogging:
       Partition(result)
     }
 
-  /** A broadcast-hash inner join task that joins a local partition with a broadcast dataset. */
+  /**
+   * A broadcast-hash inner join task that joins a local partition with a broadcast dataset.
+   *
+   * Named erasure boundary: the task operates on erased (Any, Any) records because join sides
+   * travel through the shuffle service; when the broadcast side is the join's left input the
+   * values are re-typed at the tuple level. Safe because the caller broadcasts and reads the same
+   * side consistently for a given join stage.
+   */
   final case class BroadcastHashJoinTask[K, L, R](
       localData: Seq[(K, L)],
       broadcastMap: Map[K, Seq[R]],
       isRightLocal: Boolean,
   ) extends RunnableTask[Any, (K, (L, R))]:
+    @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
     override def run(): Partition[(K, (L, R))] = {
       taskLogger.debug(s"[${Thread.currentThread().getName}] BroadcastHashJoinTask on partition")
       val result = localData.iterator.flatMap { case (k, localValue) =>

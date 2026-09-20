@@ -1,4 +1,9 @@
 # Completed Todos
+
+Historical record of completed work. Entries describing modules, APIs, or behavior that no
+longer exist are marked superseded; see ARCHITECTURE.md for the current system and TODO.md for
+current work.
+
 ## Project 1 — Foundation & Hygiene
 - [x] Central config (`SparkletConf`)
   - [x] Default shuffle partitions, default parallelism, thread pool size
@@ -12,6 +17,8 @@
 - [x] Thread-safe `ShuffleManager`
   - [x] Use concurrent map with thread locks
   - [x] Re-enable `Test / parallelExecution := true` when safe
+  - SUPERSEDED: tests stay sequential while `SparkletConf`/`SparkletRuntime` are process-global;
+    parallelism returns with dependency injection (see TODO.md)
 - [x] Union correctness
   - [x] Implement union as true concatenation of inputs (not “pick left”)
 - [x] Explicit join/cogroup inputs
@@ -26,18 +33,18 @@
 
 ## Project 2 — Extensibility & Module Boundaries
 - [x] Define runtime and shuffle SPIs
-  - [x] `TaskScheduler[F[_]]`, `ExecutorBackend`, `ShuffleService`, `Partitioner`
+  - [x] `TaskScheduler[F[_]]`, `ShuffleService`, `Partitioner`
   - [x] DAG scheduler depends only on SPIs
+  - SUPERSEDED: `ExecutorBackend` removed in Milestone 2 — it was registered in
+    `RuntimeComponents` but never called
 - [x] Hide current implementations behind SPIs
   - [x] `runtime-local`: thread pool scheduler/executor
   - [x] `shuffle-local`: in-memory shuffle storage
 - [x] Multi-module sbt reorg
-  - [x] `sparklet-core` (Plan, DistCollection, model, config)
-  - [x] `sparklet-planner` (StageBuilder, future optimizer)
-  - [x] `sparklet-runtime-api`, `sparklet-runtime-local`
-  - [x] `sparklet-shuffle-api`, `sparklet-shuffle-local`
-  - [x] `sparklet-dataset` (typed API stub)
-  - [x] Update `build.sbt` aggregates/dependsOn
+  - SUPERSEDED module names: the build defines five modules — `sparklet-api`, `sparklet-core`,
+    `sparklet-execution`, `sparklet-runtime`, `sparklet-tests`. The planner and shuffle work
+    landed inside `sparklet-execution` and `sparklet-runtime` respectively; no
+    `sparklet-dataset` module exists.
 
 ## Project 3 — Execution Correctness & Performance
 - [x] Iterator-based execution
@@ -55,41 +62,57 @@
   - [x] Shuffle-Hash Join (SHJ)
   - [x] Sort-Merge Join (SMJ)
   - [x] Add tests to cover all join strategies, and test automatic join strategy decisions
+  - NOTE: the sort-merge join implementation groups by key with a hash-code-based ordering
+    rather than consuming a real sort order; correctness is by key equality, not by merge.
+    A true typed sort-merge join is deferred (see TODO.md).
 
 ## Project 4 - Hygiene, Fault Tolerance, and Reliability
 
 ### Phase 1: Basic Retry Logic
-- [x] Enhanced `SparkletConf` with fault tolerance settings:
-  - `maxTaskRetries`: Maximum retry attempts (default: 3)
-  - `baseRetryDelayMs`: Base delay for exponential backoff (default: 10ms)
-  - `maxRetryDelayMs`: Maximum delay cap (default: 1000ms)
-  - `enableLineageRecovery`: Toggle for lineage-based recovery (default: true)
-  - `taskTimeoutMs`: Task execution timeout (default: 30000ms)
-  - `enableSpeculativeExecution`: Toggle for speculative execution (default: false)
-  - `speculativeExecutionThreshold`: Slow task threshold (default: 2.0x)
+- [x] `SparkletConf` fault tolerance settings: `maxTaskRetries`, `baseRetryDelayMs`,
+  `maxRetryDelayMs` (wired into `LocalTaskScheduler.submit` as of Milestone 1)
+  - SUPERSEDED conf fields: `enableLineageRecovery`, `taskTimeoutMs`,
+    `enableSpeculativeExecution`, `speculativeExecutionThreshold` removed in Milestone 1 —
+    they controlled nothing
 - [x] `RetryPolicy` trait with exponential backoff implementation
-- [x] Enhanced `TaskScheduler[F[_]]` interface with `submitWithRetry` method
+- [x] `TaskScheduler[F[_]]` interface with `submitWithRetry` method
 - [x] Comprehensive retry policy tests with edge cases
 
 ### Phase 2: Enhanced Retry & Recovery
-- [x] `TaskExecutionWrapper[F[_]]` with integrated retry logic
+- [x] `TaskExecutionWrapper[F[_]]` with retry logic
   - [x] Configurable retry policies with exponential backoff
-  - [x] Task execution timeout handling
   - [x] Detailed logging for retry attempts and failures
+  - SUPERSEDED: `executeSimple`, `executeWithLineage`, and the `withRecovery` factory removed
+    in Milestone 2; the wrapper is retry-only
 - [x] `LineageRecoveryManager[F[_]]` for dependency-based recovery
-  - [x] Framework for lineage-based task recovery
-  - [x] Integration with shuffle service for data reconstruction
-  - [x] Recovery statistics and monitoring
-- [x] Enhanced `LocalTaskScheduler` with fault tolerance integration
-  - [x] Lazy initialization of execution wrapper and recovery manager
-  - [x] Support for both simple and retry-enabled task execution
-  - [x] Proper parallelism handling with semaphore-based task limits
-- [x] Updated `Task` trait with optional lineage support
-  - [x] `LineageInfo` case class for task metadata tracking
-  - [x] `TaskResult` sealed trait for structured task outcomes
-  - [x] Backward compatibility for existing task implementations
-- [x] Comprehensive test coverage:
-  - [x] `TestRetryPolicy`: 167 test cases covering all retry scenarios
-  - [x] `TestTaskExecutionWrapper`: Retry logic and failure handling
-  - [x] `TestTaskScheduler`: Concurrent execution with timing validation
-  - [x] Integration tests for fault tolerance end-to-end workflows
+  - REMOVED in Milestone 2: recovery could not safely reconstruct arbitrary user functions
+    (it returned identity-like results) and was unreachable from the supported path
+- [x] `LocalTaskScheduler` with fault tolerance integration
+  - [x] Semaphore-based bounded parallelism
+  - SUPERSEDED: `enableRecovery` constructor flag removed in Milestone 1; submission now
+    applies the `SparkletConf`-derived retry policy at submission time
+- [x] `Task` trait lineage support (`LineageInfo`, `TaskResult`)
+  - REMOVED in Milestone 2
+
+## Phase 1 Execution Cleanup (2026-09)
+- [x] Milestone 1: contract tests and safe correctness fixes (#10)
+  - `aggregate` honors `combOp` via partition-preserving `executePartitions`
+  - source construction produces exactly `numPartitions` partitions (empty input safe)
+  - `HashPartitioner` uses floorMod (negative hashes safe)
+  - `LocalTaskScheduler.submit` applies the configured retry policy
+  - legacy driver-collecting `reduceByKeyAction`/`groupByKeyAction` removed
+- [x] Milestone 2: one DAG execution path, legacy deletion (#11)
+  - every plan compiles to a stage graph; `Executor.createTasks`, `StageBuilder.buildStages`,
+    the legacy adapter, `Task.DAGTask`, and the ten single-op task classes removed
+  - `TopologicalSort` fixed to include stages without dependency edges
+  - recovery subsystem removed; `TaskExecutionWrapper` retry-only
+  - `take(n)` per-partition limit; `take(n <= 0)` returns empty
+- [x] Milestone 3: WideOp migration, explicit shuffle policy (#13)
+  - `StageInfo.wideOp: Option[WideOp]`; runtime dispatch no longer inspects `Plan`
+  - single `Operation.fromPlan` erasure boundary
+  - `ShuffleWriteReason` ADT with pure, tested priority selection
+  - `DistCollection` KV casts collapsed into one `kvPlan` boundary
+- [x] Milestone 4: enforcement and documentation (#14, this PR)
+  - graph validation independently testable, every rejection mode covered by tests
+  - `Wart.AsInstanceOf` and `Wart.Any` are compile errors; casts only at named boundaries
+  - docs rewritten to describe the single-path architecture

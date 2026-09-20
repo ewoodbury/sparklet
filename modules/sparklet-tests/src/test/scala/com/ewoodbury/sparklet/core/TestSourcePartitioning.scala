@@ -62,11 +62,11 @@ class TestSourcePartitioning extends AnyFlatSpec with Matchers {
   it should "support execution over empty partitions end to end" in {
     val dc = DistCollection(Seq.empty[(String, Int)], 3)
 
-    dc.collect() shouldEqual Seq.empty
+    dc.collect() shouldEqual Seq.empty[(String, Int)]
     dc.count() shouldEqual 0L
-    dc.map(pair => pair._2).collect() shouldEqual Seq.empty
-    dc.filter(pair => pair._2 > 0).collect() shouldEqual Seq.empty
-    dc.groupByKey.collect() shouldEqual Seq.empty
+    dc.map(pair => pair._2).collect() shouldEqual Seq.empty[Int]
+    dc.filter(pair => pair._2 > 0).collect() shouldEqual Seq.empty[(String, Int)]
+    dc.groupByKey.collect() shouldEqual Seq.empty[(String, Iterable[Int])]
   }
 
   it should "support a single element in many partitions" in {
