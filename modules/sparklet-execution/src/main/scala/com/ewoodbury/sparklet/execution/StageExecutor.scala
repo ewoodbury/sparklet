@@ -243,19 +243,23 @@ final class StageExecutor[F[_]: Sync](
       reduceByKey: ReduceByKeyWideOp[V],
       inputPartitions: Seq[Partition[_]],
   ): F[Seq[Partition[_]]] = {
-    Sync[F].delay {
-      val allData = inputPartitions.flatMap(_.data)
+    // Named erasure boundary: record types are erased in stage transport, but V is known from the
+    // ReduceByKeyWideOp. Grouping keys by equality needs no key type, so the cast to (Any, V) is
+    // safe: only _._2 values are passed to the reduce function, which is typed V.
+    @SuppressWarnings(Array("org.wartremover.warts.Any"))
+    val reduceHandler: Seq[Partition[Any]] => Seq[Partition[Any]] = partitions => {
+      val allData = partitions.flatMap(_.data).asInstanceOf[Seq[(Any, V)]]
       val reduceFunc = reduceByKey.meta.reduceFunc
-      val reducedData =
-        allData.asInstanceOf[Seq[(Any, V)]].groupBy(_._1).map { case (key, pairs) =>
-          val reducedValue = pairs
-            .map(_._2)
-            .reduceOption(reduceFunc)
-            .getOrElse(throw new NoSuchElementException(s"No values found for key $key"))
-          (key, reducedValue)
-        }
+      val reducedData = allData.groupBy(_._1).map { case (key, pairs) =>
+        val reducedValue = pairs
+          .map(_._2)
+          .reduceOption(reduceFunc)
+          .getOrElse(throw new NoSuchElementException(s"No values found for key $key"))
+        (key, reducedValue)
+      }
       Seq(Partition(reducedData.toSeq))
     }
+    Sync[F].delay(reduceHandler(inputPartitions.asInstanceOf[Seq[Partition[Any]]]))
   }
 
   /**
