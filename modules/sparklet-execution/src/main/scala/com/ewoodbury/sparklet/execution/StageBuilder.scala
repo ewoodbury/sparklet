@@ -19,7 +19,16 @@ import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
  * boundaries for wide transformations.
  */
 object StageBuilder:
-  /** Describes how a stage's output is partitioned. */
+
+  /**
+   * Describes how a stage's output is partitioned.
+   *
+   * `byKey = true` means all elements with equal keys are guaranteed to be in the same partition
+   * AND the data was written through the key hash partitioner. It is set only by true shuffle
+   * stages (groupByKey, reduceByKey, partitionBy, join, cogroup) and by bypassed local operations
+   * chained after such a stage; narrow transformations merely preserve it. It must not be inferred
+   * merely because records happen to be emitted in a stable order.
+   */
   final case class Partitioning(byKey: Boolean, numPartitions: Int)
 
   /**
@@ -30,9 +39,8 @@ object StageBuilder:
       stage: Stage[_, _],
       inputSources: Seq[InputSource], // What this stage reads from
       isShuffleStage: Boolean,
-      shuffleOperation: Option[
-        Plan[_],
-      ], // The original Plan for shuffle stages, used by StageExecutor to dispatch execution
+      /** For shuffle stages, the wide operation this stage executes. */
+      wideOp: Option[WideOp],
       outputPartitioning: Option[Partitioning],
   )
 
@@ -79,10 +87,8 @@ object StageBuilder:
       ops: Vector[Operation[Any, Any]],
       inputSources: Seq[InputSource],
       isShuffle: Boolean,
-      shuffleMeta: Option[WideOp], // Use WideOp instead of Plan for better structure
-      originalPlan: Option[
-        Plan[_],
-      ], // Original Plan for shuffle stages, kept for execution dispatch
+      /** Set exactly when `isShuffle` is true: the wide operation this stage executes. */
+      shuffleMeta: Option[WideOp],
       outputPartitioning: Option[Partitioning],
   )
 
@@ -158,7 +164,7 @@ object StageBuilder:
         stage = stage,
         inputSources = builder.inputSources,
         isShuffleStage = builder.isShuffle,
-        shuffleOperation = builder.originalPlan,
+        wideOp = builder.shuffleMeta,
         outputPartitioning = builder.outputPartitioning,
       )
     }
@@ -359,7 +365,7 @@ object StageBuilder:
     graph.stages.values.foreach { stageInfo =>
       if (stageInfo.isShuffleStage) {
         // Shuffle stages should have shuffle operation metadata
-        if (stageInfo.shuffleOperation.isEmpty) {
+        if (stageInfo.wideOp.isEmpty) {
           throw new IllegalStateException(
             s"Shuffle stage ${stageInfo.id} has no shuffle operation metadata",
           )
@@ -456,35 +462,6 @@ object StageBuilder:
               "This indicates a concurrent modification or internal error.",
           )
       }
-    }
-  }
-
-  /**
-   * Centralized factory for converting Plan nodes to Operation instances with controlled type
-   * erasure. This consolidates all Plan->Operation conversions to minimize casting throughout
-   * buildStagesFromPlan.
-   */
-  private object OperationFactoryUnsafe {
-    def fromPlan(plan: Plan[_]): Operation[Any, Any] = plan match {
-      case Plan.MapOp(_, f) => MapOp(f.asInstanceOf[Any => Any])
-      case Plan.FilterOp(_, p) => FilterOp(p.asInstanceOf[Any => Boolean])
-      case Plan.FlatMapOp(_, f) => FlatMapOp(f.asInstanceOf[Any => IterableOnce[Any]])
-      case Plan.DistinctOp(_) => DistinctOp[Any]()
-      case Plan.KeysOp(_) => KeysOp[Any, Any]().asInstanceOf[Operation[Any, Any]]
-      case Plan.ValuesOp(_) => ValuesOp[Any, Any]().asInstanceOf[Operation[Any, Any]]
-      case Plan.MapValuesOp(_, f) =>
-        MapValuesOp[Any, Any, Any](f.asInstanceOf[Any => Any]).asInstanceOf[Operation[Any, Any]]
-      case Plan.FilterKeysOp(_, p) =>
-        FilterKeysOp[Any, Any](p.asInstanceOf[Any => Boolean]).asInstanceOf[Operation[Any, Any]]
-      case Plan.FilterValuesOp(_, p) =>
-        FilterValuesOp[Any, Any](p.asInstanceOf[Any => Boolean]).asInstanceOf[Operation[Any, Any]]
-      case Plan.FlatMapValuesOp(_, f) =>
-        FlatMapValuesOp[Any, Any, Any](f.asInstanceOf[Any => IterableOnce[Any]])
-          .asInstanceOf[Operation[Any, Any]]
-      case Plan.MapPartitionsOp(_, f) =>
-        MapPartitionsOp(f.asInstanceOf[Iterator[Any] => Iterator[Any]])
-      case _ =>
-        throw new UnsupportedOperationException(s"Cannot create operation from plan: $plan")
     }
   }
 
@@ -656,7 +633,6 @@ object StageBuilder:
             inputSources = Seq(SourceInput(source.partitions)),
             isShuffle = false,
             shuffleMeta = None,
-            originalPlan = Some(source),
             outputPartitioning =
               Some(Partitioning(byKey = false, numPartitions = source.partitions.size)),
           ),
@@ -669,7 +645,7 @@ object StageBuilder:
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          OperationFactoryUnsafe.fromPlan(plan),
+          Operation.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -680,7 +656,7 @@ object StageBuilder:
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          OperationFactoryUnsafe.fromPlan(plan),
+          Operation.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -691,7 +667,7 @@ object StageBuilder:
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          OperationFactoryUnsafe.fromPlan(plan),
+          Operation.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -702,7 +678,7 @@ object StageBuilder:
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          OperationFactoryUnsafe.fromPlan(plan),
+          Operation.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -713,7 +689,7 @@ object StageBuilder:
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          OperationFactoryUnsafe.fromPlan(plan),
+          Operation.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -724,7 +700,7 @@ object StageBuilder:
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          OperationFactoryUnsafe.fromPlan(plan),
+          Operation.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -735,7 +711,7 @@ object StageBuilder:
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          OperationFactoryUnsafe.fromPlan(plan),
+          Operation.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -746,7 +722,7 @@ object StageBuilder:
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          OperationFactoryUnsafe.fromPlan(plan),
+          Operation.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -757,7 +733,7 @@ object StageBuilder:
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          OperationFactoryUnsafe.fromPlan(plan),
+          Operation.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -768,7 +744,7 @@ object StageBuilder:
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          OperationFactoryUnsafe.fromPlan(plan),
+          Operation.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -779,7 +755,7 @@ object StageBuilder:
         val resultId = appendOperation(
           ctx,
           sourceStageId,
-          OperationFactoryUnsafe.fromPlan(plan),
+          Operation.fromPlan(plan),
           builderMap,
           dependencies,
         )
@@ -799,7 +775,6 @@ object StageBuilder:
             inputSources = Seq(StageOutput(leftStageId), StageOutput(rightStageId)),
             isShuffle = false,
             shuffleMeta = None,
-            originalPlan = Some(plan): Option[Plan[_]],
             outputPartitioning = None, // Union doesn't preserve partitioning
           ),
         )
@@ -837,7 +812,6 @@ object StageBuilder:
             ),
             builderMap,
             dependencies,
-            Some(groupByKey),
           )
           (shuffleId, Some(groupByKey))
         }
@@ -871,7 +845,6 @@ object StageBuilder:
             ),
             builderMap,
             dependencies,
-            Some(reduceByKey),
           )
           (shuffleId, Some(reduceByKey))
         }
@@ -886,11 +859,11 @@ object StageBuilder:
             SortWideOpMeta(
               numPartitions = n,
               keyFunc = sortBy.keyFunc,
+              ordering = sortBy.ordering,
             ),
           ),
           builderMap,
           dependencies,
-          Some(sortBy),
         )
         (shuffleId, Some(sortBy))
 
@@ -919,7 +892,6 @@ object StageBuilder:
             ),
             builderMap,
             dependencies,
-            Some(pby),
           )
           (shuffleId, Some(pby))
         }
@@ -949,7 +921,6 @@ object StageBuilder:
             ),
             builderMap,
             dependencies,
-            Some(rep),
           )
           (shuffleId, Some(rep))
         }
@@ -979,7 +950,6 @@ object StageBuilder:
             ),
             builderMap,
             dependencies,
-            Some(coal),
           )
           (shuffleId, Some(coal))
         }
@@ -1002,7 +972,6 @@ object StageBuilder:
           ),
           builderMap,
           dependencies,
-          Some(joinOp),
         )
         (shuffleId, Some(joinOp))
 
@@ -1023,7 +992,6 @@ object StageBuilder:
           ),
           builderMap,
           dependencies,
-          Some(cogroupOp),
         )
         (shuffleId, Some(cogroupOp))
     }
@@ -1052,7 +1020,6 @@ object StageBuilder:
         inputSources = Seq(StageOutput(sourceStageId)),
         isShuffle = false,
         shuffleMeta = None,
-        originalPlan = None,
         outputPartitioning = updatePartitioning(sourceBuilder.outputPartitioning, op),
       )
       putNewBuilder(builderMap, newBuilder)
@@ -1087,7 +1054,6 @@ object StageBuilder:
           inputSources = Seq(StageOutput(sourceStageId)),
           isShuffle = false,
           shuffleMeta = None,
-          originalPlan = None,
           outputPartitioning = updatePartitioning(sourceBuilder.outputPartitioning, op),
         )
         putNewBuilder(builderMap, newBuilder)
@@ -1107,7 +1073,6 @@ object StageBuilder:
       wideOp: WideOp,
       builderMap: mutable.Map[StageId, StageDraft],
       dependencies: mutable.Map[StageId, mutable.Set[StageId]],
-      originalPlan: Option[Plan[_]] = None,
   ): StageId = {
     val shuffleStageId = ctx.freshId()
 
@@ -1164,7 +1129,6 @@ object StageBuilder:
         inputSources = shuffleInputSources,
         isShuffle = true,
         shuffleMeta = Some(wideOp),
-        originalPlan = originalPlan,
         outputPartitioning = outputPartitioning,
       ),
     )

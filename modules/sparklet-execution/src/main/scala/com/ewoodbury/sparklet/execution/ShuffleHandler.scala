@@ -4,7 +4,7 @@ import cats.effect.kernel.Sync
 import cats.syntax.all.*
 import com.typesafe.scalalogging.StrictLogging
 
-import com.ewoodbury.sparklet.core.{Partition, Plan, ShuffleId, SparkletConf, StageId}
+import com.ewoodbury.sparklet.core.{Partition, ShuffleId, SparkletConf, StageId}
 import com.ewoodbury.sparklet.runtime.api.{Partitioner, ShuffleService}
 
 /**
@@ -62,18 +62,18 @@ final class ShuffleHandler[F[_]: Sync](
       dependentSortByStageId: StageId,
   ): F[ShuffleId] =
     Sync[F].delay {
-      stageGraph.stages(dependentSortByStageId).shuffleOperation match {
-        case Some(sortBy: Plan.SortByOp[a, s]) =>
-          given Ordering[s] = sortBy.ordering
-          handleSortByRangePartitionedOutputTyped[a, s](
+      stageGraph.stages(dependentSortByStageId).wideOp match {
+        case Some(op @ SortByWideOp(meta)) =>
+          handleSortByRangePartitionedOutputTyped(
             stageInfo,
             results,
-            stageGraph,
-            dependentSortByStageId,
-            sortBy,
+            meta.numPartitions,
+            op,
           )
         case _ =>
-          throw new IllegalStateException("Expected SortByOp for dependent stage but found none")
+          throw new IllegalStateException(
+            s"Stage ${dependentSortByStageId.toInt} is not a sortBy stage",
+          )
       }
     }
 
@@ -87,21 +87,15 @@ final class ShuffleHandler[F[_]: Sync](
   private def handleSortByRangePartitionedOutputTyped[A, S](
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],
-      stageGraph: StageBuilder.StageGraph,
-      dependentSortByStageId: StageId,
-      sortBy: Plan.SortByOp[A, S],
-  )(using ordering: Ordering[S]): ShuffleId = {
-    // Determine partition count for the dependent sort stage
-    val expectedN = stageGraph
-      .stages(dependentSortByStageId)
-      .inputSources
-      .collectFirst { case StageBuilder.ShuffleInput(_, _, n) =>
-        n
-      }
-      .getOrElse(SparkletConf.get.defaultShufflePartitions)
+      numPartitions: Int,
+      sortBy: SortByWideOp[A, S],
+  ): ShuffleId = {
+    val ordering: Ordering[S] = sortBy.meta.ordering
+    val expectedN = numPartitions
+    given Ordering[S] = ordering
 
     val elements: Seq[A] = results.flatMap(partition => partition.data.asInstanceOf[Iterable[A]])
-    val keys: Seq[S] = elements.map(sortBy.keyFunc)
+    val keys: Seq[S] = elements.map(sortBy.meta.keyFunc)
 
     val sample = takeKeySample(keys)
     val cutPoints = computeCutPoints(sample, expectedN)
@@ -137,7 +131,7 @@ final class ShuffleHandler[F[_]: Sync](
         val buf = scala.collection.mutable.ArrayBuffer.empty[(S, A)]
         while (it.hasNext) {
           val a = it.next()
-          buf += ((sortBy.keyFunc(a), a))
+          buf += ((sortBy.meta.keyFunc(a), a))
         }
         Partition(buf.toSeq)
       }
@@ -176,7 +170,7 @@ final class ShuffleHandler[F[_]: Sync](
       val step = sorted.size.toDouble / P
       (1 to cutCount).map { i =>
         val idx = math.min(sorted.size - 1, math.max(0, math.ceil(i * step).toInt - 1))
-        sorted(idx) // Now safe because sorted is a Vector and idx is clamped
+        sorted(idx) // idx is clamped to the sample bounds
       }.toVector
     }
   }

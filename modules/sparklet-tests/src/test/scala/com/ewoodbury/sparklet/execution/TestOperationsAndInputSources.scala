@@ -196,7 +196,7 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     val finalStage = stageGraph.stages(stageGraph.finalStageId)
     finalStage.isShuffleStage shouldBe true
     finalStage.outputPartitioning.map(_.byKey) shouldBe Some(true)
-    finalStage.shuffleOperation.isDefined shouldBe true
+    finalStage.wideOp.isDefined shouldBe true
   }
 
   it should "build groupByKey with bypass shuffle optimization when already partitioned" in {

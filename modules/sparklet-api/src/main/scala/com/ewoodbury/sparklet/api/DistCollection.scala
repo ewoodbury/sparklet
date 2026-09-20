@@ -22,6 +22,15 @@ final case class DistCollection[A](plan: Plan[A]):
   // --- Helper to view the plan ---
   override def toString: String = s"DistCollection(plan = $plan)"
 
+  /**
+   * The single erasure point for key-value plan refinement. `Plan` is invariant, so the
+   * `A =:= (K, V)` evidence cannot be applied substitutionally and the cast is required; it is
+   * safe because every caller provides that evidence.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def kvPlan[K, V](using ev: A =:= (K, V)): Plan[(K, V)] =
+    this.plan.asInstanceOf[Plan[(K, V)]]
+
   // --- Basic Transformations ---
 
   /**
@@ -86,7 +95,7 @@ final case class DistCollection[A](plan: Plan[A]):
    * configured partitioner into `numPartitions` partitions.
    */
   def partitionBy[K, V](numPartitions: Int)(using ev: A =:= (K, V)): DistCollection[(K, V)] =
-    DistCollection(Plan.PartitionByOp(this.plan.asInstanceOf[Plan[(K, V)]], numPartitions))
+    DistCollection(Plan.PartitionByOp(kvPlan, numPartitions))
 
   // --- Key-Value Transformations ---
 
@@ -95,35 +104,35 @@ final case class DistCollection[A](plan: Plan[A]):
    * DistCollection representing the keys. Does not trigger computation.
    */
   def keys[K, V](using ev: A =:= (K, V)): DistCollection[K] =
-    DistCollection(Plan.KeysOp(this.plan.asInstanceOf[Plan[(K, V)]]))
+    DistCollection(Plan.KeysOp(kvPlan))
 
   /**
    * Transformation: Extracts the values from the elements in the collection. Returns a new
    * DistCollection representing the values. Does not trigger computation.
    */
   def values[K, V](using ev: A =:= (K, V)): DistCollection[V] =
-    DistCollection(Plan.ValuesOp(this.plan.asInstanceOf[Plan[(K, V)]]))
+    DistCollection(Plan.ValuesOp(kvPlan))
 
   /**
    * Transformation: Applies a function to the values of the elements in the collection. Returns a
    * new DistCollection representing the result of the map. Does not trigger computation.
    */
   def mapValues[K, V, B](f: V => B)(using ev: A =:= (K, V)): DistCollection[(K, B)] =
-    DistCollection(Plan.MapValuesOp(this.plan.asInstanceOf[Plan[(K, V)]], f))
+    DistCollection(Plan.MapValuesOp(kvPlan, f))
 
   /**
    * Transformation: Filters the elements of the collection by the keys. Returns a new
    * DistCollection representing the filtered result. Does not trigger computation.
    */
   def filterKeys[K, V](p: K => Boolean)(using ev: A =:= (K, V)): DistCollection[(K, V)] =
-    DistCollection(Plan.FilterKeysOp(this.plan.asInstanceOf[Plan[(K, V)]], p))
+    DistCollection(Plan.FilterKeysOp(kvPlan, p))
 
   /**
    * Transformation: Filters the elements of the collection by the values. Returns a new
    * DistCollection representing the filtered result. Does not trigger computation.
    */
   def filterValues[K, V](p: V => Boolean)(using ev: A =:= (K, V)): DistCollection[(K, V)] =
-    DistCollection(Plan.FilterValuesOp(this.plan.asInstanceOf[Plan[(K, V)]], p))
+    DistCollection(Plan.FilterValuesOp(kvPlan, p))
 
   /**
    * Transformation: Applies a function to the values of the elements in the collection. Returns a
@@ -132,7 +141,7 @@ final case class DistCollection[A](plan: Plan[A]):
   def flatMapValues[K, V, B](f: V => IterableOnce[B])(using
       ev: A =:= (K, V),
   ): DistCollection[(K, B)] =
-    DistCollection(Plan.FlatMapValuesOp(this.plan.asInstanceOf[Plan[(K, V)]], f))
+    DistCollection(Plan.FlatMapValuesOp(kvPlan, f))
 
   // --- Wide Transformations (require shuffles) ---
 
@@ -141,7 +150,7 @@ final case class DistCollection[A](plan: Plan[A]):
    * DistCollection representing the grouped data. Does not trigger computation.
    */
   def groupByKey[K, V](using ev: A =:= (K, V)): DistCollection[(K, Iterable[V])] =
-    DistCollection(Plan.GroupByKeyOp(this.plan.asInstanceOf[Plan[(K, V)]]))
+    DistCollection(Plan.GroupByKeyOp(kvPlan))
 
   /**
    * Transformation: Reduces values by key using the provided function, requiring a shuffle
@@ -149,7 +158,7 @@ final case class DistCollection[A](plan: Plan[A]):
    * computation.
    */
   def reduceByKey[K, V](op: (V, V) => V)(using ev: A =:= (K, V)): DistCollection[(K, V)] =
-    DistCollection(Plan.ReduceByKeyOp(this.plan.asInstanceOf[Plan[(K, V)]], op))
+    DistCollection(Plan.ReduceByKeyOp(kvPlan, op))
 
   /**
    * Transformation: Sorts the collection by the specified key function, requiring a shuffle
@@ -167,7 +176,7 @@ final case class DistCollection[A](plan: Plan[A]):
   def join[K, V, W](other: DistCollection[(K, W)])(using
       ev: A =:= (K, V),
   ): DistCollection[(K, (V, W))] =
-    DistCollection(Plan.JoinOp(this.plan.asInstanceOf[Plan[(K, V)]], other.plan, None))
+    DistCollection(Plan.JoinOp(kvPlan, other.plan, None))
 
   /**
    * Transformation: Joins this collection with another collection by key using shuffle-hash join.
@@ -178,7 +187,7 @@ final case class DistCollection[A](plan: Plan[A]):
   ): DistCollection[(K, (V, W))] =
     DistCollection(
       Plan.JoinOp(
-        this.plan.asInstanceOf[Plan[(K, V)]],
+        kvPlan,
         other.plan,
         Some(Plan.JoinStrategy.ShuffleHash),
       ),
@@ -193,7 +202,7 @@ final case class DistCollection[A](plan: Plan[A]):
   ): DistCollection[(K, (V, W))] =
     DistCollection(
       Plan.JoinOp(
-        this.plan.asInstanceOf[Plan[(K, V)]],
+        kvPlan,
         other.plan,
         Some(Plan.JoinStrategy.SortMerge),
       ),
@@ -208,7 +217,7 @@ final case class DistCollection[A](plan: Plan[A]):
   ): DistCollection[(K, (V, W))] =
     DistCollection(
       Plan.JoinOp(
-        this.plan.asInstanceOf[Plan[(K, V)]],
+        kvPlan,
         other.plan,
         Some(Plan.JoinStrategy.Broadcast),
       ),
@@ -222,7 +231,7 @@ final case class DistCollection[A](plan: Plan[A]):
   def cogroup[K, V, W](other: DistCollection[(K, W)])(using
       ev: A =:= (K, V),
   ): DistCollection[(K, (Iterable[V], Iterable[W]))] =
-    DistCollection(Plan.CoGroupOp(this.plan.asInstanceOf[Plan[(K, V)]], other.plan))
+    DistCollection(Plan.CoGroupOp(kvPlan, other.plan))
 
   // --- Actions ---
 

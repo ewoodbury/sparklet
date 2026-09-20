@@ -16,7 +16,7 @@ class TestGlobalSort extends AnyFlatSpec with Matchers {
     val ds = toDistCollection(Seq(5, 3, 9, 1, 7)).sortBy(identity)
 
     val graph = StageBuilder.buildStageGraph(ds.plan)
-    val sortStageInfoOpt = graph.stages.values.find(_.shuffleOperation.exists(_.isInstanceOf[Plan.SortByOp[_, _]]))
+    val sortStageInfoOpt = graph.stages.values.find(_.wideOp.exists(_.isInstanceOf[SortByWideOp[_, _]]))
     sortStageInfoOpt.isDefined shouldBe true
     val sortStageInfo = sortStageInfoOpt.get
 
