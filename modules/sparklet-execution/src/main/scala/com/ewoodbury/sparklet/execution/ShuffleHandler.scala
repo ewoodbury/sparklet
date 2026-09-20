@@ -88,6 +88,8 @@ final class ShuffleHandler[F[_]: Sync](
       "org.wartremover.warts.MutableDataStructures",
     ),
   )
+  // Named erasure boundary: results travel as Partition[_]; the sortBy wide op describes their
+  // record type (A) and sort key type (S), so the casts below recover exactly those types.
   private def handleSortByRangePartitionedOutputTyped[A, S](
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],

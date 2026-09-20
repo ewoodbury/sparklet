@@ -6,12 +6,7 @@ import org.scalatest.matchers.should.Matchers
 import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
 
 // Hand-built graphs use existential StageInfo values the production types erase.
-@SuppressWarnings(
-  Array(
-    "org.wartremover.warts.SeqApply",
-    "org.wartremover.warts.Any",
-  ),
-)
+@SuppressWarnings(Array("org.wartremover.warts.Any"))
 class TestStageGraphValidation extends AnyFlatSpec with Matchers {
 
   private def stageInfo(
@@ -99,7 +94,8 @@ class TestStageGraphValidation extends AnyFlatSpec with Matchers {
   it should "reject a missing final stage" in {
     val g = graph(stages = Seq(stageInfo(0)), finalStageId = StageId(7))
 
-    an[IllegalStateException] should be thrownBy StageBuilder.validateStageGraph(g)
+    val e = the[IllegalStateException] thrownBy StageBuilder.validateStageGraph(g)
+    e.getMessage should include("Final stage ID")
   }
 
   it should "reject a dependency on a missing stage" in {
@@ -129,7 +125,8 @@ class TestStageGraphValidation extends AnyFlatSpec with Matchers {
       finalStageId = StageId(0),
     )
 
-    an[IllegalStateException] should be thrownBy StageBuilder.validateStageGraph(g)
+    val e = the[IllegalStateException] thrownBy StageBuilder.validateStageGraph(g)
+    e.getMessage should include("self-cycle")
   }
 
   it should "reject a cycle" in {
@@ -194,7 +191,50 @@ class TestStageGraphValidation extends AnyFlatSpec with Matchers {
       finalStageId = StageId(2),
     )
 
-    an[IllegalStateException] should be thrownBy StageBuilder.validateStageGraph(g)
+    val e = the[IllegalStateException] thrownBy StageBuilder.validateStageGraph(g)
+    e.getMessage should include("without side markers")
+  }
+
+  it should "reject a shuffle stage built on a ChainedStage" in {
+    val chained = Stage.ChainedStage(Stage.map((x: Int) => x), Stage.map((x: Int) => x))
+    val g = graph(
+      stages = Seq(
+        stageInfo(0),
+        StageBuilder.StageInfo(
+          id = StageId(1),
+          stage = chained,
+          inputSources = Seq(shuffleInput(0)),
+          isShuffleStage = true,
+          wideOp = Some(groupByWideOp()),
+          outputPartitioning = None,
+        ),
+      ),
+      dependencies = Map(StageId(1) -> Set(StageId(0))),
+      finalStageId = StageId(1),
+    )
+
+    val e = the[IllegalStateException] thrownBy StageBuilder.validateStageGraph(g)
+    e.getMessage should include("ChainedStage")
+  }
+
+  it should "reject a two-input shuffle stage whose inputs are not both ShuffleInputs" in {
+    val g = graph(
+      stages = Seq(
+        stageInfo(0),
+        stageInfo(1),
+        stageInfo(
+          2,
+          inputSources = Seq(shuffleInput(0, Some(StageBuilder.Side.Left)), StageBuilder.StageOutput(StageId(1))),
+          isShuffleStage = true,
+          wideOp = Some(JoinWideOp(SimpleWideOpMeta(kind = WideOpKind.Join, numPartitions = 4))),
+        ),
+      ),
+      dependencies = Map(StageId(2) -> Set(StageId(0), StageId(1))),
+      finalStageId = StageId(2),
+    )
+
+    val e = the[IllegalStateException] thrownBy StageBuilder.validateStageGraph(g)
+    e.getMessage should include("ShuffleInputs")
   }
 
   it should "reject a multi-input shuffle stage with duplicate side markers" in {

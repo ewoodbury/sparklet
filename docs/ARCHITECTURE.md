@@ -114,8 +114,9 @@ removed: it could not safely reconstruct arbitrary user functions. Retry is hone
 - `sortBy` produces a globally ordered result (sampling-based range partitioning + k-way merge).
 - `union` concatenates left then right.
 - `groupBy`-family outputs group by key equality; record order inside groups follows input order.
-- Wide operations other than joins collapse to a single output partition today — see the
-  limitations in TODO.md.
+- Aggregation and sort wide ops (`groupByKey`/`reduceByKey`/`cogroup`/`sortBy`) collapse to a
+  single output partition today; `join`/`cogroup`-style multi-input ops keep per-partition
+  parallelism, as do `repartition`/`coalesce`/`partitionBy` — see the limitations in TODO.md.
 
 ## Testing notes
 

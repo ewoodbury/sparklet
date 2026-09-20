@@ -16,7 +16,6 @@ import com.ewoodbury.sparklet.runtime.api.{ShuffleService, TaskScheduler}
  * graph expects. Safe because every task in a submission produces the same record type as the
  * stage it belongs to.
  */
-@SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 final class JoinExecutor[F[_]: Sync](
     shuffle: ShuffleService,
     scheduler: TaskScheduler[F],
@@ -61,7 +60,9 @@ final class JoinExecutor[F[_]: Sync](
   /**
    * Execute broadcast-hash join by broadcasting the smaller dataset.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Any"))
+  @SuppressWarnings(
+    Array("org.wartremover.warts.AsInstanceOf", "org.wartremover.warts.Any"),
+  )
   def executeBroadcastHashJoin(
       leftShuffleId: ShuffleId,
       rightShuffleId: ShuffleId,
@@ -88,6 +89,7 @@ final class JoinExecutor[F[_]: Sync](
           isRightLocal = true,
         )
       }
+      // Erasure boundary: every task in the submission produces the stage's record type
       scheduler.submit(tasks).map(_.asInstanceOf[Seq[Partition[_]]])
     } else {
       // Broadcast right side, iterate over left side
@@ -107,6 +109,7 @@ final class JoinExecutor[F[_]: Sync](
           isRightLocal = false,
         )
       }
+      // Erasure boundary: every task in the submission produces the stage's record type
       scheduler.submit(tasks).map(_.asInstanceOf[Seq[Partition[_]]])
     }
   }
@@ -114,7 +117,9 @@ final class JoinExecutor[F[_]: Sync](
   /**
    * Execute sort-merge join by sorting both sides before merging.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Any"))
+  @SuppressWarnings(
+    Array("org.wartremover.warts.AsInstanceOf", "org.wartremover.warts.Any"),
+  )
   def executeSortMergeJoin(
       leftShuffleId: ShuffleId,
       rightShuffleId: ShuffleId,
@@ -138,7 +143,9 @@ final class JoinExecutor[F[_]: Sync](
   /**
    * Execute shuffle-hash join (the original implementation).
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Any"))
+  @SuppressWarnings(
+    Array("org.wartremover.warts.AsInstanceOf", "org.wartremover.warts.Any"),
+  )
   def executeShuffleHashJoin(
       leftShuffleId: ShuffleId,
       rightShuffleId: ShuffleId,

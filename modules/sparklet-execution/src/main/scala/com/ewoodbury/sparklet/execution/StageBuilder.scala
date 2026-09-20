@@ -21,11 +21,6 @@ import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
     "org.wartremover.warts.RedundantAsInstanceOf",
   ),
 )
-
-/**
- * Builds stage execution graphs from plans, handling both narrow transformations and shuffle
- * boundaries for wide transformations.
- */
 object StageBuilder:
 
   /**
@@ -192,11 +187,6 @@ object StageBuilder:
   /**
    * Validates StageGraph invariants to catch errors early. Checks for consistency issues that
    * could cause runtime failures.
-   */
-  /**
-   * Validates structural and logical invariants of a stage graph. Called on every
-   * `buildStageGraph` result; exposed to the test suite so each rejection mode can be exercised
-   * directly with hand-built graphs.
    */
   private[execution] def validateStageGraph(graph: StageGraph): Unit = {
     // 1. finalStageId exists in stages map
