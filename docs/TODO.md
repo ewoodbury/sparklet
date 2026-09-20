@@ -3,46 +3,29 @@
 ## Project 4 - Hygiene, Fault Tolerance, and Reliability
 
 ### Phase 0: Architecture and Foundations
-- [x] Unify StageBuilder between execution and planner modules and improve design
-  - Why: Prevent divergence between two builders; single source of truth for stage graph semantics. Current: `modules/sparklet-execution/.../StageBuilder.scala`, `modules/sparklet-planner/.../StageBuilder.scala`.
-  - Benefit: Easier feature evolution, less code drift, consistent optimization rules.
-- [x] Single wide-op predicate (`PlanWide.isWide`) — remove duplicate shuffle detection logic
-  - Why: Currently duplicated logic risks inconsistent scheduling decisions. Current detection scattered in `DAGScheduler.scala`, `StageBuilder.containsShuffleOperations`.
-  - Benefit: Deterministic shuffle boundary detection & simpler maintenance.
-- [x] Remove unsafe `isInstanceOf` casts in stage fusion logic
-  - Why: Current reliance on runtime casts risks ClassCastException. Casts in `StageExecutor` (todo), `ShuffleHandler` (todo), `StageBuilder` (done).
-  - Benefit: Safer, more maintainable code; easier reasoning about stage types.
+Status after the Phase 1 execution cleanup (Milestones 1-4, PRs #10/#11/#13/#14):
+- [x] Unify StageBuilder between execution and planner modules and improve design (single builder in sparklet-execution; no planner module exists)
+- [x] Single wide-op predicate (`PlanWide.isWide`) — single source of truth for shuffle detection
+- [x] Eliminate legacy narrow-only path; route all execution through the unified DAG scheduler
+- [x] Remove legacy stage fusion casts: `Executor.createTasks`, `buildStages`, legacy adapter deleted; runtime dispatch no longer inspects `Plan`
+- [x] Centralize shuffle write policy with explicit `ShuffleWriteReason` ADT (tested priority selection)
+- [x] Erasure enforcement: `Wart.AsInstanceOf`/`Wart.Any` are compile errors; casts only at named boundaries (superseded the broader "remove all casts" framing — named boundaries are the accepted model)
+- [x] Consolidate wide-op detection & shuffle decision utilities into `PlanWide` + `Operation.canBypassShuffle` + `ShuffleWriteReason`
 - [ ] Enrich partition metadata (`PartitioningInfo`): partitioner, distribution type, ordering tag
-  - Why: Present metadata (`byKey`, count) insufficient to decide shuffle reuse / ordering guarantees. Current minimal `Partitioning` in `StageBuilder.scala`.
-  - Benefit: Enables shuffle reuse, join strategy selection, sort/order correctness checks.
-- [ ] Eliminate legacy narrow-only path; route all execution through unified DAG scheduler
-  - Why: Dual execution paths increase complexity & bug surface. Current legacy path in `Executor.createTasks` + `StageBuilder.buildStagesRecursiveOld`.
-  - Benefit: Single tested path, simpler debugging, unlocks uniform metrics & recovery.
-- [ ] Introduce typed `StageOp` / `StageChain` to remove `Any` + unsafe casts in stage fusion
-  - Why: Current fusion relies on `asInstanceOf`, risking runtime ClassCast failures. Casts in `StageBuilder.buildStagesRecursive` & stage chaining helpers.
-  - Benefit: Compile-time safety, easier reasoning about pipelines, better IDE support.
-- [ ] Centralize shuffle write policy with explicit `ShuffleWriteReason` ADT for logging & recovery
-  - Why: Shuffle emission rationale is implicit/scattered. Current logic fragments: `ExecutionPlanner.writeShuffleIfNeeded`, `StageExecutor` shuffle handling.
-  - Benefit: Transparent diagnostics, future adaptive execution hook points.
+  - Why: `Partitioning(byKey, count)` insufficient to decide shuffle reuse / ordering guarantees. Benefit: enables shuffle reuse, join strategy selection, sort correctness checks.
+- [ ] Introduce typed `StageOp` / `StageChain` to remove the remaining erasure-heavy handlers
+  - Why: stage transport is still `Partition[_]`-erased; handlers in StageExecutor/ShuffleHandler carry documented casts. Benefit: compile-time safety through the executor.
 - [ ] Strengthen `InputSource` typing (add `DataDescriptor` or parametric types) to reduce casts
-  - Why: `InputSource` loses element type, forcing casts downstream. Current untyped ADT in `StageBuilder.scala`.
-  - Benefit: Type-safe stage wiring, earlier error detection, cleaner executor code.
-- [ ] Add dedicated physical stage kinds (`ShuffleJoinStage`, `GlobalSortStage`) instead of generic identity placeholders
-  - Why: Wide ops currently represented by generic stages with hidden semantics. Current placeholders: shuffle stages created with generic `Stage[_,_]` in `StageBuilder.createShuffleStage`; join/sort logic partly in `StageExecutor`.
-  - Benefit: Encapsulated execution logic, clearer metrics, pluggable strategies.
-- [ ] Consolidate wide-op detection & shuffle decision utilities into a single module (planner)
-  - Why: Related logic fragmented across scheduler, builder, planner. Current: `DAGScheduler.requiresDAGScheduling`, `StageBuilder.containsShuffleOperations`, planner heuristics.
-  - Benefit: Central policy surface, easier optimization insertion (e.g., stage coalescing).
+- [ ] Add dedicated physical stage kinds (`ShuffleJoinStage`, `GlobalSortStage`) instead of identity placeholders
 - [ ] Prepare physical plan abstraction layer (scaffold `PhysicalPlan` nodes) ahead of optimizer work
-  - Why: Direct Plan->Stage mapping blocks future rule-based optimization. Current direct translation in `StageBuilder`; no `PhysicalPlan` layer yet.
-  - Benefit: Enables projection/predicate pushdown, cost-based selection, adaptive re-planning.
+  - Benefit: enables projection/predicate pushdown, cost-based selection, adaptive re-planning.
 
 ### Phase 3: Advanced Recovery & Speculative Execution
-- [x] Deterministic recompute from lineage on task failure
-  - [x] Complete implementation of `LineageRecoveryManager.recoverFailedTask`
-  - [x] Full integration with execution module for task reconstruction
-  - [ ] Recovery of complex operations (joins, aggregations, etc.) (skip for now)
-- [ ] Speculative execution for slow tasks (optional, will skip for now)
+- [x] Task retry with exponential backoff (`RetryPolicy` + `TaskExecutionWrapper`), tested through `TaskScheduler.submit`
+- [x] Lineage recovery removed (Milestone 2): it could not safely reconstruct arbitrary user
+  functions and was unreachable from the supported path. Any future recovery must retain
+  executable plan/stage lineage, not operation-name strings.
+- [ ] Speculative execution for slow tasks
 - [ ] Graceful handling of executor crashes
   - [ ] Task reassignment to healthy executors
   - [ ] Partial result preservation and continuation
@@ -50,6 +33,19 @@
   - [ ] Inject artificial failures in integration tests
   - [ ] Chaos engineering approach to fault tolerance validation
   - [ ] Performance impact analysis under failure conditions
+
+### Optimization (near-term, after Phase 1 cleanup)
+Known gaps in the current engine, roughly by expected impact (see ARCHITECTURE.md):
+- [ ] Widen aggregation outputs: `groupByKey`/`reduceByKey`/`cogroup`/`sortBy` currently
+  collapse to one output partition (joins already run per-partition in parallel)
+- [ ] Map-side combine for `reduceByKey` (shuffle partial aggregates instead of raw records)
+- [ ] Cross-branch dedup (structural hashing / CSE): reusing a DistCollection in two places
+  recomputes it; at most one shuffle write per stage (diamond hazard)
+- [ ] Predicate/projection pushdown via the `PhysicalPlan` layer
+- [ ] True typed sort-merge join (current implementation groups by key with a hash-code
+  ordering; correct by key equality, not a real merge)
+- [ ] Benchmark harness (measure planning overhead, iterator overhead, shuffle cost,
+  scheduling overhead, allocation pressure separately)
 
 ### Phase 4: Production Hardening & Observability (FUTURE)
 - [ ] Circuit breaker pattern for persistent failures

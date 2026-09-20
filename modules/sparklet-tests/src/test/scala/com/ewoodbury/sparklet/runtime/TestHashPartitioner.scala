@@ -5,6 +5,8 @@ import org.scalatest.matchers.should.Matchers
 
 import com.ewoodbury.sparklet.runtime.local.HashPartitioner
 
+// Test fixtures mix Int and java.lang.Integer to exercise negative hash codes.
+@SuppressWarnings(Array("org.wartremover.warts.Any"))
 class TestHashPartitioner extends AnyFlatSpec with Matchers {
 
   private val partitioner = new HashPartitioner

@@ -4,6 +4,14 @@ import scala.collection.mutable
 
 import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
 
+/**
+ * Builds stage execution graphs from plans, handling both narrow transformations and shuffle
+ * boundaries for wide transformations.
+ *
+ * Named erasure boundary: plan element types are erased when operations are accumulated into
+ * stages, and materialization casts back to the closure types the executor runs. Safe because Plan
+ * and Operation carry the same types for any given pipeline position.
+ */
 @SuppressWarnings(
   Array(
     "org.wartremover.warts.Any",
@@ -13,11 +21,6 @@ import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
     "org.wartremover.warts.RedundantAsInstanceOf",
   ),
 )
-
-/**
- * Builds stage execution graphs from plans, handling both narrow transformations and shuffle
- * boundaries for wide transformations.
- */
 object StageBuilder:
 
   /**
@@ -185,7 +188,7 @@ object StageBuilder:
    * Validates StageGraph invariants to catch errors early. Checks for consistency issues that
    * could cause runtime failures.
    */
-  private def validateStageGraph(graph: StageGraph): Unit = {
+  private[execution] def validateStageGraph(graph: StageGraph): Unit = {
     // 1. finalStageId exists in stages map
     if (!graph.stages.contains(graph.finalStageId)) {
       val availableStages = graph.stages.keys.toSeq.sorted.mkString(", ")

@@ -31,6 +31,9 @@ final class DAGScheduler[F[_]: Sync](
    * Executes a plan and returns the final stage's output with partition boundaries preserved.
    * Callers should flatten only at the outermost boundary so partition-aware consumers (such as
    * aggregate) can operate per partition.
+   *
+   * Named erasure boundary: stage results are stored as `Partition[_]`; the final stage produced
+   * plan type A by construction of the graph, so the cast is safe.
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def executePartitions[A](plan: Plan[A]): F[Seq[Partition[A]]] =

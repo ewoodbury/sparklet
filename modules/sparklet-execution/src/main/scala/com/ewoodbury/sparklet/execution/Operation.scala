@@ -107,7 +107,9 @@ object Operation {
    * operation retains its real types, so execution is type-correct even though the compiler cannot
    * verify it here.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  @SuppressWarnings(
+    Array("org.wartremover.warts.AsInstanceOf", "org.wartremover.warts.Any"),
+  )
   private[execution] def fromPlan(plan: Plan[_]): Operation[Any, Any] = plan match {
     case Plan.MapOp(_, f) => MapOp(f.asInstanceOf[Any => Any])
     case Plan.FilterOp(_, p) => FilterOp(p.asInstanceOf[Any => Boolean])

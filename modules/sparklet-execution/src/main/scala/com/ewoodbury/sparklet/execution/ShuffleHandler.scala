@@ -19,7 +19,9 @@ final class ShuffleHandler[F[_]: Sync](
    * Handles shuffle output with improved type safety. The cast is necessary as the results from
    * `executeStage` are untyped, but we centralize it here with clear documentation.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
+  @SuppressWarnings(
+    Array("org.wartremover.warts.MutableDataStructures", "org.wartremover.warts.AsInstanceOf"),
+  )
   def handleShuffleOutput(
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],
@@ -30,7 +32,9 @@ final class ShuffleHandler[F[_]: Sync](
    * Writes key-value results to the shuffle service, hash-partitioned by key into `numPartitions`
    * partitions. Used when downstream stages assume key partitioning.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
+  @SuppressWarnings(
+    Array("org.wartremover.warts.MutableDataStructures", "org.wartremover.warts.AsInstanceOf"),
+  )
   def handleKeyedOutput(
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],
@@ -84,6 +88,8 @@ final class ShuffleHandler[F[_]: Sync](
       "org.wartremover.warts.MutableDataStructures",
     ),
   )
+  // Named erasure boundary: results travel as Partition[_]; the sortBy wide op describes their
+  // record type (A) and sort key type (S), so the casts below recover exactly those types.
   private def handleSortByRangePartitionedOutputTyped[A, S](
       stageInfo: StageBuilder.StageInfo,
       results: Seq[Partition[_]],
@@ -180,7 +186,11 @@ final class ShuffleHandler[F[_]: Sync](
    * Unit value and delegating to the shuffle service's partitioner.
    */
   @SuppressWarnings(
-    Array("org.wartremover.warts.MutableDataStructures", "org.wartremover.warts.Any"),
+    Array(
+      "org.wartremover.warts.MutableDataStructures",
+      "org.wartremover.warts.Any",
+      "org.wartremover.warts.AsInstanceOf",
+    ),
   )
   def handleRepartitionOrCoalesceOutput(
       stageInfo: StageBuilder.StageInfo,

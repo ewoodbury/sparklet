@@ -6,7 +6,17 @@ import java.util.concurrent.atomic.AtomicInteger
 import com.ewoodbury.sparklet.core.BroadcastId
 import com.ewoodbury.sparklet.runtime.api.BroadcastService
 
-@SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
+/**
+ * Named erasure boundary: the storage is keyed by id, not by element type, so retrieval casts back
+ * to the caller's T. Safe because a BroadcastId is only ever handed out together with data of the
+ * matching element type.
+ */
+@SuppressWarnings(
+  Array(
+    "org.wartremover.warts.MutableDataStructures",
+    "org.wartremover.warts.AsInstanceOf",
+  ),
+)
 final class LocalBroadcastService extends BroadcastService:
   // Thread-safe storage for broadcast variables
   private val storage = new ConcurrentHashMap[BroadcastId, Seq[_]]()
