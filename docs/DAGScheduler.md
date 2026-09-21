@@ -36,8 +36,7 @@ sequenceDiagram
         EP->>SE: getInputPartitionsForStage
         Note over SE: SourceInput -> original partitions<br/>StageOutput -> prior stage results (no shuffle)<br/>ShuffleInput -> readPartition per index
         EP->>SE: executeStage
-        SE->>SCH: narrow: StageTask per partition (parallel)
-        SE->>SE: shuffle: dispatch on WideOp
+        SE->>SCH: StageTask / join / cogroup task per partition (parallel)
         EP->>EP: writeShuffleIfNeeded (ShuffleWriteReason)
         EP->>SH: write keyed / range-partitioned output
     end
@@ -51,11 +50,11 @@ core `Plan` nodes:
 
 | WideOp | Execution |
 |---|---|
-| `GroupByKeyWideOp` | Read all shuffle partitions, group by key (single output partition) |
-| `ReduceByKeyWideOp[V]` | Group by key, apply the typed reduce function |
-| `SortByWideOp[A, S]` | Per-partition sort + k-way merge using the meta's `ordering` |
+| `GroupByKeyWideOp` | `Stage.groupByKeyLocal` as one `StageTask` per shuffle partition |
+| `ReduceByKeyWideOp[V]` | `Stage.reduceByKeyLocal` as one `StageTask` per shuffle partition |
+| `SortByWideOp[A, S]` | `Stage.sortLocal` as one `StageTask` per range partition; collect concatenates in order |
 | `JoinWideOp` | Side-tagged dual shuffle read; strategy per `SimpleWideOpMeta.joinStrategy` or auto-selection |
-| `CoGroupWideOp` | Dual shuffle read, group both sides, union of keys |
+| `CoGroupWideOp` | `CogroupTask` per co-located left/right shuffle partition |
 | `RepartitionWideOp` / `CoalesceWideOp` | Unwrap `(element, Unit)` pairs written by the repartition shuffle |
 | `PartitionByWideOp` | Identity pass-through — the key-hash partitioning happened in the shuffle write |
 
@@ -82,9 +81,3 @@ order-independence.
 thresholds (`broadcastJoinThreshold`, `enableSortMergeJoin`), sort sampling
 (`sortSamplePerPartition`, `sortMaxSample`), and retry behavior (`maxTaskRetries`,
 `baseRetryDelayMs`, `maxRetryDelayMs`). Runtime components come from `SparkletRuntime`.
-
-## Known parallelism limitation
-
-`GroupByKey`/`ReduceByKey`/`CoGroup`/`SortBy` handlers read all shuffle partitions and emit a
-single output partition; joins execute per-partition in parallel. Widening the aggregation
-outputs is planned with the physical-stage redesign.

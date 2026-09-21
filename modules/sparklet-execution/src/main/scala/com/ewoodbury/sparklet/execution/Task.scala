@@ -39,6 +39,12 @@ object Task extends StrictLogging:
       rightData: Seq[(K, R)],
   ): SortMergeJoinTask[K, L, R] = SortMergeJoinTask(leftData, rightData)
 
+  /** Creates a per-partition cogroup task over two co-partitioned inputs. */
+  def createCogroupTask[K, L, R](
+      leftData: Seq[(K, L)],
+      rightData: Seq[(K, R)],
+  ): CogroupTask[K, L, R] = CogroupTask(leftData, rightData)
+
   /** A task that executes a complete stage (chain of narrow transformations) on a partition. */
   case class StageTask[A, B](
       partition: Partition[A],
@@ -47,6 +53,30 @@ object Task extends StrictLogging:
     override def run(): Partition[B] = {
       taskLogger.debug(s"[${Thread.currentThread().getName}] StageTask on partition")
       stage.execute(partition)
+    }
+
+  /**
+   * A per-partition cogroup task over two co-partitioned inputs. Includes keys present on either
+   * side, with an empty sequence for a missing side.
+   */
+  final case class CogroupTask[K, L, R](
+      leftData: Seq[(K, L)],
+      rightData: Seq[(K, R)],
+  ) extends RunnableTask[Any, (K, (Iterable[L], Iterable[R]))]:
+    override def run(): Partition[(K, (Iterable[L], Iterable[R]))] = {
+      taskLogger.debug(s"[${Thread.currentThread().getName}] CogroupTask on partition")
+      val leftGrouped = leftData.groupMap(_._1)(_._2)
+      val rightGrouped = rightData.groupMap(_._1)(_._2)
+      val result = (leftGrouped.keySet union rightGrouped.keySet).iterator.map { key =>
+        (
+          key,
+          (
+            leftGrouped.getOrElse(key, Seq.empty[L]),
+            rightGrouped.getOrElse(key, Seq.empty[R]),
+          ),
+        )
+      }.toSeq
+      Partition(result)
     }
 
   /** A per-partition shuffle-hash inner join task that joins two co-partitioned inputs. */

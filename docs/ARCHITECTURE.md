@@ -41,8 +41,7 @@ DistCollection action
   -> TopologicalSort                     (execution order)
   -> ExecutionPlanner.runStages          (per stage:)
        StageExecutor.getInputPartitions  (SourceInput | StageOutput | ShuffleInput)
-       StageExecutor.executeStage        (narrow: StageTask per partition via TaskScheduler SPI
-                                          shuffle: WideOp dispatch)
+       StageExecutor.executeStage        (WideOp dispatch; one task per partition via TaskScheduler)
        ExecutionPlanner.writeShuffleIfNeeded (ShuffleWriteReason decides the write shape)
   -> final stage partitions, flattened only at the action boundary
 ```
@@ -111,12 +110,13 @@ removed: it could not safely reconstruct arbitrary user functions. Retry is hone
 ## Ordering guarantees
 
 - `collect`/`take`/`count` preserve partition order and within-partition order.
-- `sortBy` produces a globally ordered result (sampling-based range partitioning + k-way merge).
+- `sortBy` produces a globally ordered result: sampling-based range partitioning, a local sort
+  per range partition, and concatenation in partition order. There is no driver-side merge.
 - `union` concatenates left then right.
 - `groupBy`-family outputs group by key equality; record order inside groups follows input order.
-- Aggregation and sort wide ops (`groupByKey`/`reduceByKey`/`cogroup`/`sortBy`) collapse to a
-  single output partition today; `join`/`cogroup`-style multi-input ops keep per-partition
-  parallelism, as do `repartition`/`coalesce`/`partitionBy`.
+- `groupByKey`/`reduceByKey`/`cogroup`/`sortBy` keep one output partition per shuffle partition
+  and run as one task per partition, matching joins, `repartition`, `coalesce`, and `partitionBy`.
+  A given key of a keyed aggregation lives in exactly one output partition.
 
 ## Testing notes
 
@@ -131,8 +131,6 @@ removed: it could not safely reconstruct arbitrary user functions. Retry is hone
 
 Roadmap and sequencing are tracked externally; the headline items:
 
-- `groupByKey`/`reduceByKey`/`cogroup`/`sortBy` collapse to one output partition (joins keep
-  per-partition parallelism).
 - No map-side combine for `reduceByKey` (full records are shuffled).
 - No cross-branch dedup: reusing a `DistCollection` in two places recomputes it; at most one
   shuffle write per stage.

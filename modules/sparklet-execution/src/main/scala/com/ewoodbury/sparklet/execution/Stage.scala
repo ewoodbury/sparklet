@@ -2,7 +2,6 @@ package com.ewoodbury.sparklet.execution
 
 import com.ewoodbury.sparklet.core.Partition
 
-@SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
 /**
  * Represents a stage: a sequence of narrow transformations that can be executed together. Each
  * stage operates on partitions independently without requiring shuffles.
@@ -111,33 +110,35 @@ object Stage {
   }
 
   /**
-   * Local keyed groupBy on a single partition. Used when upstream is already correctly
-   * key-partitioned and downstream groupByKey can be executed without a shuffle.
+   * Local keyed groupBy on a single partition. Used for shuffle-bypass groupByKey and as the
+   * per-partition operator of a groupByKey shuffle stage (input is already key-partitioned).
+   * `groupMap` is a single pass; value order inside each group follows input order.
    */
   def groupByKeyLocal[K, V]: Stage[(K, V), (K, Iterable[V])] = {
     SingleOpStage { p =>
-      val grouped = p.data.iterator.toSeq.groupBy(_._1).view.mapValues(_.map(_._2)).toSeq
-      Partition(grouped)
+      Partition(p.data.groupMap(_._1)(_._2).toSeq)
     }
   }
 
   /**
-   * Local keyed reduce on a single partition. Used when upstream is already correctly
-   * key-partitioned and downstream reduceByKey can be executed without a shuffle.
+   * Local keyed reduce on a single partition. Used for shuffle-bypass reduceByKey and as the
+   * per-partition operator of a reduceByKey shuffle stage (input is already key-partitioned).
+   * `groupMapReduce` is a single pass; a key with one value is returned unchanged.
    */
   def reduceByKeyLocal[K, V](op: (V, V) => V): Stage[(K, V), (K, V)] = {
     SingleOpStage { p =>
-      val reduced = p.data.iterator.toSeq
-        .groupBy(_._1)
-        .map { case (k, pairs) =>
-          val v = pairs
-            .map(_._2)
-            .reduceOption(op)
-            .getOrElse(throw new NoSuchElementException(s"No values found for key $k"))
-          (k, v)
-        }
-        .toSeq
-      Partition(reduced)
+      Partition(p.data.groupMapReduce(_._1)(_._2)(op).toSeq)
+    }
+  }
+
+  /**
+   * Local sort of a range-partitioned `(sortKey, element)` partition, emitting elements in sort
+   * key order. Used by the sortBy shuffle stage; concatenating these partitions in index order
+   * yields a globally ordered result.
+   */
+  def sortLocal[S, A](ordering: Ordering[S]): Stage[(S, A), A] = {
+    SingleOpStage { p =>
+      Partition(p.data.toSeq.sortBy(_._1)(ordering).map(_._2))
     }
   }
 
