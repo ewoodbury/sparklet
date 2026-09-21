@@ -156,6 +156,10 @@ final case class DistCollection[A](plan: Plan[A]):
    * Transformation: Reduces values by key using the provided function, requiring a shuffle
    * operation. Returns a new DistCollection representing the reduced data. Does not trigger
    * computation.
+   *
+   * `op` must be associative and commutative. Sparklet may combine values within each mapper
+   * partition before the shuffle and again after; applying `op` in a different grouping must not
+   * change the result.
    */
   def reduceByKey[K, V](op: (V, V) => V)(using ev: A =:= (K, V)): DistCollection[(K, V)] =
     DistCollection(Plan.ReduceByKeyOp(kvPlan, op))

@@ -40,10 +40,46 @@ final class ShuffleHandler[F[_]: Sync](
       results: Seq[Partition[_]],
       numPartitions: Int,
   ): F[ShuffleId] =
+    writeKeyed(stageInfo, results.asInstanceOf[Seq[Partition[(Any, Any)]]], numPartitions)
+
+  /**
+   * Map-side combine for reduceByKey: locally reduce each mapper partition, then hash-partition
+   * the partials. Does not mutate `results` (a diamond parent may still be read as StageOutput).
+   */
+  @SuppressWarnings(
+    Array(
+      "org.wartremover.warts.MutableDataStructures",
+      "org.wartremover.warts.AsInstanceOf",
+      "org.wartremover.warts.Any",
+    ),
+  )
+  def handleCombinedKeyedOutput(
+      stageInfo: StageBuilder.StageInfo,
+      results: Seq[Partition[_]],
+      numPartitions: Int,
+      reduceFunc: (Any, Any) => Any,
+  ): F[ShuffleId] = {
+    val keyed = results.asInstanceOf[Seq[Partition[(Any, Any)]]]
+    val combined =
+      keyed.map(partition => Stage.reduceByKeyLocal[Any, Any](reduceFunc).execute(partition))
+    writeKeyed(stageInfo, combined, numPartitions)
+  }
+
+  @SuppressWarnings(
+    Array(
+      "org.wartremover.warts.MutableDataStructures",
+      "org.wartremover.warts.AsInstanceOf",
+      "org.wartremover.warts.Any",
+    ),
+  )
+  private def writeKeyed(
+      stageInfo: StageBuilder.StageInfo,
+      keyedResults: Seq[Partition[(Any, Any)]],
+      numPartitions: Int,
+  ): F[ShuffleId] =
     Sync[F].delay {
-      val keyValueResults = results.asInstanceOf[Seq[Partition[(Any, Any)]]]
       val shuffleData = shuffle.partitionByKey[Any, Any](
-        data = keyValueResults,
+        data = keyedResults,
         numPartitions = numPartitions,
         partitioner = partitioner,
       )

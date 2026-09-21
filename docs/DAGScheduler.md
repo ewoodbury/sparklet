@@ -70,7 +70,9 @@ dependent iteration order:
 1. `DownstreamSortBy` — range partitioned (sampling + cut points) so global order survives.
 2. `DownstreamPartitionBy(n)` — key-hashed into the partitionBy target count.
 3. `DownstreamRepartition(n)` — written into the target count as `(element, Unit)` pairs.
-4. `DownstreamShuffle` — default keyed write.
+4. `DownstreamReduceByKey(n, op)` — every dependent is the same `reduceByKey`; each mapper
+   partition is locally reduced, then the partials are key-hashed.
+5. `DownstreamShuffle` — default keyed write.
 
 The reason is logged with every write. `TestShuffleWriteReason` pins the priority and its
 order-independence.
