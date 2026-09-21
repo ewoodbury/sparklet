@@ -18,7 +18,6 @@ import com.ewoodbury.sparklet.runtime.api.{ShuffleService, TaskScheduler}
   Array(
     "org.wartremover.warts.Any",
     "org.wartremover.warts.AsInstanceOf",
-    "org.wartremover.warts.MutableDataStructures",
     "org.wartremover.warts.Equals",
   ),
 )
@@ -131,6 +130,49 @@ final class StageExecutor[F[_]: Sync](
   }
 
   /**
+   * Submits one `StageTask` per input partition and returns results in input order. Shared by
+   * narrow stages and by shuffle stages whose wide op is a per-partition local operator.
+   */
+  private def executePerPartition[A, B](
+      partitions: Seq[Partition[A]],
+      stage: Stage[A, B],
+  ): F[Seq[Partition[_]]] = {
+    val tasks = partitions.map(partition => Task.StageTask(partition, stage))
+    scheduler.submit(tasks).map(_.asInstanceOf[Seq[Partition[_]]])
+  }
+
+  /**
+   * Resolves the left/right shuffle ids and partition count for a two-input shuffle stage.
+   */
+  private def resolveBinaryShuffleInputs(
+      stageInfo: StageBuilder.StageInfo,
+      stageToShuffleId: Map[StageId, ShuffleId],
+      operationName: String,
+  ): (ShuffleId, ShuffleId, Int) = {
+    val shuffleInputs = stageInfo.inputSources.collect { case s: StageBuilder.ShuffleInput =>
+      s
+    }
+    def requireSide(side: StageBuilder.Side): StageBuilder.ShuffleInput =
+      shuffleInputs
+        .find(_.side.contains(side))
+        .getOrElse(
+          throw new IllegalStateException(
+            s"$operationName missing $side input for stage ${stageInfo.id.toInt}",
+          ),
+        )
+    def requireShuffleId(input: StageBuilder.ShuffleInput): ShuffleId =
+      stageToShuffleId.getOrElse(
+        input.stageId,
+        throw new IllegalStateException(
+          s"Missing shuffle id for $operationName upstream stage ${input.stageId.toInt}",
+        ),
+      )
+    val leftInput = requireSide(StageBuilder.Side.Left)
+    val rightInput = requireSide(StageBuilder.Side.Right)
+    (requireShuffleId(leftInput), requireShuffleId(rightInput), leftInput.numPartitions)
+  }
+
+  /**
    * Type-safe handler for join operations.
    */
   private def executeJoinOperation(
@@ -138,38 +180,9 @@ final class StageExecutor[F[_]: Sync](
       joinOp: JoinWideOp,
       stageToShuffleId: Map[StageId, ShuffleId],
   ): F[Seq[Partition[_]]] = {
-    val shuffleInputs = stageInfo.inputSources.collect { case s: StageBuilder.ShuffleInput =>
-      s
-    }
-    val leftInput = shuffleInputs
-      .find(_.side.contains(StageBuilder.Side.Left))
-      .getOrElse(
-        throw new IllegalStateException(
-          s"Join missing Left input for stage ${stageInfo.id.toInt}",
-        ),
-      )
-    val rightInput = shuffleInputs
-      .find(_.side.contains(StageBuilder.Side.Right))
-      .getOrElse(
-        throw new IllegalStateException(
-          s"Join missing Right input for stage ${stageInfo.id.toInt}",
-        ),
-      )
-    val leftShuffleId = stageToShuffleId.getOrElse(
-      leftInput.stageId,
-      throw new IllegalStateException(
-        s"Missing shuffle id for Left upstream stage ${leftInput.stageId.toInt}",
-      ),
-    )
-    val rightShuffleId = stageToShuffleId.getOrElse(
-      rightInput.stageId,
-      throw new IllegalStateException(
-        s"Missing shuffle id for Right upstream stage ${rightInput.stageId.toInt}",
-      ),
-    )
-    val numPartitions = leftInput.numPartitions
+    val (leftShuffleId, rightShuffleId, numPartitions) =
+      resolveBinaryShuffleInputs(stageInfo, stageToShuffleId, "Join")
 
-    // Determine join strategy
     val strategy =
       joinOp.meta.joinStrategy.getOrElse(
         joinExecutor.selectJoinStrategy(leftShuffleId, rightShuffleId),
@@ -188,143 +201,60 @@ final class StageExecutor[F[_]: Sync](
   }
 
   /**
-   * Type-safe handler for SortBy operations.
+   * Local sort of each range-partitioned `(sortKey, element)` partition. Concatenating the results
+   * in partition order is globally ordered; there is no driver-side merge.
    */
   private def executeSortByOperation[A, S](
       sortBy: SortByWideOp[A, S],
       inputPartitions: Seq[Partition[_]],
   ): F[Seq[Partition[_]]] = {
-    Sync[F].delay {
-      val meta = sortBy.meta
-      // Input for sort is key-value pairs of (sortKey, element)
-      val typedPartitions = inputPartitions.asInstanceOf[Seq[Partition[(S, A)]]]
-      implicit val ord: Ordering[S] = meta.ordering
-
-      // Sort within each partition by key
-      val sortedIters: Seq[Iterator[(S, A)]] =
-        typedPartitions.map(p => p.data.toSeq.sortBy(_._1)(ord).iterator)
-
-      // K-way merge across partitions to ensure global order
-      import scala.collection.mutable
-      case class Head(idx: Int, pair: (S, A))
-      implicit val heapOrd: Ordering[Head] = Ordering.by(_.pair._1)
-      val heap = mutable.PriorityQueue.empty[Head](heapOrd.reverse)
-      sortedIters.zipWithIndex.foreach { case (it, i) =>
-        if (it.hasNext) heap.enqueue(Head(i, it.next()))
-      }
-      val buffers = sortedIters.toArray
-
-      val merged = mutable.ArrayBuffer[A]()
-      while (heap.nonEmpty) {
-        val h = heap.dequeue()
-        merged += h.pair._2
-        val i = h.idx
-        if (buffers(i).hasNext) heap.enqueue(Head(i, buffers(i).next()))
-      }
-
-      Seq(Partition(merged.toSeq))
-    }
+    val typedPartitions = inputPartitions.asInstanceOf[Seq[Partition[(S, A)]]]
+    executePerPartition(typedPartitions, Stage.sortLocal[S, A](sortBy.meta.ordering))
   }
 
   /**
-   * Type-safe handler for GroupByKey operations.
+   * Per-partition groupByKey. Input partitions are already key-hashed, so this is the same
+   * operator as the shuffle-bypass path.
    */
   private def executeGroupByKeyOperation(
       inputPartitions: Seq[Partition[_]],
   ): F[Seq[Partition[_]]] = {
-    Sync[F].delay {
-      val allData = inputPartitions.flatMap(_.data).asInstanceOf[Seq[(Any, Any)]]
-      val groupedData = allData.groupBy(_._1).map { case (key, pairs) =>
-        (key, pairs.map(_._2))
-      }
-      Seq(Partition(groupedData.toSeq)).asInstanceOf[Seq[Partition[Any]]]
-    }
+    val typedPartitions = inputPartitions.asInstanceOf[Seq[Partition[(Any, Any)]]]
+    executePerPartition(typedPartitions, Stage.groupByKeyLocal[Any, Any])
   }
 
   /**
-   * Type-safe handler for ReduceByKey operations.
+   * Per-partition reduceByKey. Named erasure boundary: stage transport erases record types, but V
+   * is known from ReduceByKeyWideOp; only values reach the typed reduce function.
    */
   private def executeReduceByKeyOperation[V](
       reduceByKey: ReduceByKeyWideOp[V],
       inputPartitions: Seq[Partition[_]],
   ): F[Seq[Partition[_]]] = {
-    // Named erasure boundary: record types are erased in stage transport, but V is known from the
-    // ReduceByKeyWideOp. Grouping keys by equality needs no key type, so the cast to (Any, V) is
-    // safe: only _._2 values are passed to the reduce function, which is typed V.
-    @SuppressWarnings(Array("org.wartremover.warts.Any"))
-    val reduceHandler: Seq[Partition[Any]] => Seq[Partition[Any]] = partitions => {
-      val allData = partitions.flatMap(_.data).asInstanceOf[Seq[(Any, V)]]
-      val reduceFunc = reduceByKey.meta.reduceFunc
-      val reducedData = allData.groupBy(_._1).map { case (key, pairs) =>
-        val reducedValue = pairs
-          .map(_._2)
-          .reduceOption(reduceFunc)
-          .getOrElse(throw new NoSuchElementException(s"No values found for key $key"))
-        (key, reducedValue)
-      }
-      Seq(Partition(reducedData.toSeq))
-    }
-    Sync[F].delay(reduceHandler(inputPartitions.asInstanceOf[Seq[Partition[Any]]]))
+    val typedPartitions = inputPartitions.asInstanceOf[Seq[Partition[(Any, V)]]]
+    executePerPartition(
+      typedPartitions,
+      Stage.reduceByKeyLocal[Any, V](reduceByKey.meta.reduceFunc),
+    )
   }
 
   /**
-   * Type-safe handler for CoGroup operations.
+   * Per-partition cogroup of co-located left/right shuffle partitions.
    */
   private def executeCoGroupOperation(
       stageInfo: StageBuilder.StageInfo,
       stageToShuffleId: Map[StageId, ShuffleId],
   ): F[Seq[Partition[_]]] = {
-    Sync[F].delay {
-      val shuffleInputs = stageInfo.inputSources.collect { case s: StageBuilder.ShuffleInput =>
-        s
-      }
-      val leftInput = shuffleInputs
-        .find(_.side.contains(StageBuilder.Side.Left))
-        .getOrElse(
-          throw new IllegalStateException(
-            s"Cogroup missing Left input for stage ${stageInfo.id.toInt}",
-          ),
-        )
-      val rightInput = shuffleInputs
-        .find(_.side.contains(StageBuilder.Side.Right))
-        .getOrElse(
-          throw new IllegalStateException(
-            s"Cogroup missing Right input for stage ${stageInfo.id.toInt}",
-          ),
-        )
-      val leftShuffleId = stageToShuffleId.getOrElse(
-        leftInput.stageId,
-        throw new IllegalStateException(
-          s"Missing shuffle id for Left upstream stage ${leftInput.stageId.toInt}",
-        ),
-      )
-      val rightShuffleId = stageToShuffleId.getOrElse(
-        rightInput.stageId,
-        throw new IllegalStateException(
-          s"Missing shuffle id for Right upstream stage ${rightInput.stageId.toInt}",
-        ),
-      )
-      val numPartitions = leftInput.numPartitions
-      val leftData = (0 until numPartitions).flatMap { partitionId =>
-        shuffle.readPartition[Any, Any](leftShuffleId, PartitionId(partitionId)).data
-      }
-      val rightData = (0 until numPartitions).flatMap { partitionId =>
-        shuffle.readPartition[Any, Any](rightShuffleId, PartitionId(partitionId)).data
-      }
-
-      // Group left and right data by key
-      val leftByKey = leftData.groupBy(_._1)
-      val rightByKey = rightData.groupBy(_._1)
-
-      // Perform cogroup - include all keys from both sides
-      val allKeys = leftByKey.keySet ++ rightByKey.keySet
-      val cogroupedData = allKeys.map { key =>
-        val leftValues = leftByKey.getOrElse(key, Seq.empty).map(_._2)
-        val rightValues = rightByKey.getOrElse(key, Seq.empty).map(_._2)
-        (key, (leftValues, rightValues))
-      }
-      Seq(Partition(cogroupedData.toSeq))
+    val (leftShuffleId, rightShuffleId, numPartitions) =
+      resolveBinaryShuffleInputs(stageInfo, stageToShuffleId, "Cogroup")
+    val tasks = (0 until numPartitions).map { partitionId =>
+      val leftData =
+        shuffle.readPartition[Any, Any](leftShuffleId, PartitionId(partitionId)).data.toSeq
+      val rightData =
+        shuffle.readPartition[Any, Any](rightShuffleId, PartitionId(partitionId)).data.toSeq
+      Task.createCogroupTask[Any, Any, Any](leftData, rightData)
     }
+    scheduler.submit(tasks).map(_.asInstanceOf[Seq[Partition[_]]])
   }
 
   /**
@@ -348,7 +278,5 @@ final class StageExecutor[F[_]: Sync](
       inputPartitions: Seq[Partition[A]],
       @annotation.unused stageToShuffleId: Map[StageId, ShuffleId],
   ): F[Seq[Partition[_]]] = {
-    val stage = stageInfo.stage.asInstanceOf[Stage[A, B]]
-    val tasks = inputPartitions.map { partition => Task.StageTask(partition, stage) }
-    scheduler.submit(tasks).map(_.asInstanceOf[Seq[Partition[_]]])
+    executePerPartition(inputPartitions, stageInfo.stage.asInstanceOf[Stage[A, B]])
   }
