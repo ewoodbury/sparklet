@@ -116,7 +116,7 @@ removed: it could not safely reconstruct arbitrary user functions. Retry is hone
 - `groupBy`-family outputs group by key equality; record order inside groups follows input order.
 - Aggregation and sort wide ops (`groupByKey`/`reduceByKey`/`cogroup`/`sortBy`) collapse to a
   single output partition today; `join`/`cogroup`-style multi-input ops keep per-partition
-  parallelism, as do `repartition`/`coalesce`/`partitionBy` — see the limitations in TODO.md.
+  parallelism, as do `repartition`/`coalesce`/`partitionBy`.
 
 ## Testing notes
 
@@ -129,7 +129,7 @@ removed: it could not safely reconstruct arbitrary user functions. Retry is hone
 
 ## Known limitations (deferred work)
 
-Details and sequencing in `TODO.md`; the headline items:
+Roadmap and sequencing are tracked externally; the headline items:
 
 - `groupByKey`/`reduceByKey`/`cogroup`/`sortBy` collapse to one output partition (joins keep
   per-partition parallelism).
