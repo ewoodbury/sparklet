@@ -57,6 +57,8 @@ object ShuffleWriteReason:
   private def reduceByKeyCombine(
       shuffleDependents: Seq[StageBuilder.StageInfo],
   ): Option[ShuffleWriteReason] = {
+    // A shuffle dependent with wideOp = None fails this check and falls through to a raw keyed
+    // write. That is intentional: combine is only legal when every dependent is a typed reduce.
     val everyDependentIsReduceByKey =
       shuffleDependents.nonEmpty &&
         shuffleDependents.forall(_.wideOp.exists(_.isInstanceOf[ReduceByKeyWideOp[_]]))
@@ -70,6 +72,10 @@ object ShuffleWriteReason:
         if reduceOps.forall(op => (op.meta.reduceFunc: AnyRef) eq canonical) then
           // Named erasure: V is existential on ReduceByKeyWideOp[_]; the functions are the same
           // reference, so the runtime shape (V, V) => V is identical for every dependent.
+          // Width: all ReduceByKeyWideOp nodes today take defaultShufflePartitions at build
+          // time, so first.meta.numPartitions matches every dependent's ShuffleInput width.
+          // If that ever diverges, the write would use this count while a later dependent
+          // still reads its own meta.numPartitions.
           Some(
             DownstreamReduceByKey(
               first.meta.numPartitions,

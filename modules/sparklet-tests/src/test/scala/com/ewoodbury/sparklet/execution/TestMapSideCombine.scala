@@ -105,6 +105,9 @@ class TestMapSideCombine extends AnyFlatSpec with Matchers with BeforeAndAfterEa
   }
 
   it should "not combine a parent that also feeds groupByKey" in {
+    // StageBuilder still recomputes a shared DistCollection per branch, so this public-API
+    // diamond is correct even without the write-reason guard. The guard itself is pinned in
+    // TestShuffleWriteReason ("skip combine for a groupByKey plus reduceByKey diamond").
     val base = DistCollection(Seq("a" -> 1, "a" -> 2, "a" -> 3), 1)
     val groupedSizes = base.groupByKey.map { case (key, values) => (key, values.size) }
     val reduced = base.reduceByKey[String, Int](_ + _)
