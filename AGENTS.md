@@ -12,7 +12,7 @@ Environment
 
 Commands (fast feedback loop)
 - Iterate on one suite: `make test-one T=com.ewoodbury.sparklet.core.TestActionContracts` (substitute the suite you changed).
-- Full suite before declaring anything done: `make test` (258 tests, ~30s).
+- Full suite before declaring anything done: `make test` (268 tests, ~30s).
 - Lint fix / lint check: `make lint` / `make test-lint`. Always run `make lint` before committing; it rewrites formatting.
 - Run all three gates before opening or updating a PR.
 

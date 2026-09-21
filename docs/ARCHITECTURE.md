@@ -73,8 +73,9 @@ Narrow-only plans compile to a one-stage graph and flow through the same path as
 `ExecutionPlanner` writes a stage's output only when a dependent stage is a shuffle stage, and
 the write shape is a value: `ShuffleWriteReason.forDependents` picks, by priority — sortBy
 (range partitioned to preserve global order), then partitionBy (key-hashed into its target
-count), then repartition/coalesce, then a generic keyed write. Shuffle IDs come from the
-`ShuffleService`, never from stage IDs.
+count), then repartition/coalesce, then a combine-then-hash write when every dependent is the
+same `reduceByKey`, then a generic keyed write. Shuffle IDs come from the `ShuffleService`,
+never from stage IDs. `reduceByKey`'s function is treated as associative and commutative.
 
 ## Type erasure policy
 
@@ -131,7 +132,6 @@ removed: it could not safely reconstruct arbitrary user functions. Retry is hone
 
 Roadmap and sequencing are tracked externally; the headline items:
 
-- No map-side combine for `reduceByKey` (full records are shuffled).
 - No cross-branch dedup: reusing a `DistCollection` in two places recomputes it; at most one
   shuffle write per stage.
 - No rule-based logical optimizer (predicate/projection pushdown) — the `PhysicalPlan` layer

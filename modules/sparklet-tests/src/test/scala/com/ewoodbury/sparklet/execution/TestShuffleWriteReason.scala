@@ -66,6 +66,14 @@ class TestShuffleWriteReason extends AnyFlatSpec with Matchers {
       ),
     )
 
+  private def reduceByStage(id: Int, reduceFunc: (Int, Int) => Int): StageBuilder.StageInfo =
+    simpleWideStage(
+      id,
+      ReduceByKeyWideOp(
+        ReduceWideOpMeta(numPartitions = 4, reduceFunc = reduceFunc),
+      ),
+    )
+
   "ShuffleWriteReason.forDependents" should "prefer sortBy regardless of dependent order" in {
     val sortByFirst = Seq(sortByStage(1, 8), partitionByStage(2, 3))
     val sortByLast = Seq(partitionByStage(2, 3), sortByStage(1, 8))
@@ -92,6 +100,41 @@ class TestShuffleWriteReason extends AnyFlatSpec with Matchers {
     val dependents = Seq(groupByStage(1))
 
     ShuffleWriteReason.forDependents(dependents) shouldBe ShuffleWriteReason.DownstreamShuffle
+  }
+
+  it should "select a combine write when every dependent is the same reduceByKey" in {
+    val add = (a: Int, b: Int) => a + b
+    val dependents = Seq(reduceByStage(1, add), reduceByStage(2, add))
+
+    ShuffleWriteReason.forDependents(dependents) match {
+      case ShuffleWriteReason.DownstreamReduceByKey(n, fn) =>
+        n shouldBe 4
+        (fn: AnyRef) should be theSameInstanceAs add
+      case other => fail(s"expected DownstreamReduceByKey, got $other")
+    }
+  }
+
+  it should "skip combine when reduceByKey functions differ by reference" in {
+    val add = (a: Int, b: Int) => a + b
+    val alsoAdd = (a: Int, b: Int) => a + b
+    val dependents = Seq(reduceByStage(1, add), reduceByStage(2, alsoAdd))
+
+    ShuffleWriteReason.forDependents(dependents) shouldBe ShuffleWriteReason.DownstreamShuffle
+  }
+
+  it should "skip combine for a groupByKey plus reduceByKey diamond" in {
+    val add = (a: Int, b: Int) => a + b
+    val dependents = Seq(groupByStage(1), reduceByStage(2, add))
+
+    ShuffleWriteReason.forDependents(dependents) shouldBe ShuffleWriteReason.DownstreamShuffle
+  }
+
+  it should "prefer partitionBy over reduceByKey combine" in {
+    val add = (a: Int, b: Int) => a + b
+    val dependents = Seq(reduceByStage(1, add), partitionByStage(2, 3))
+
+    ShuffleWriteReason.forDependents(dependents) shouldBe
+      ShuffleWriteReason.DownstreamPartitionBy(3)
   }
 
   it should "fall back to a generic keyed write when no dependent carries a wide op" in {

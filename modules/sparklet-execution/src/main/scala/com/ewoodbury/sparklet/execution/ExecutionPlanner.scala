@@ -17,8 +17,8 @@ object ShuffleWriteReason:
   /**
    * Selects the write reason for a stage whose dependents include shuffle stages. SortBy wins
    * regardless of dependent order because range partitioning is the only scheme change; among the
-   * rest, partitionBy (key-hash into its own count) beats repartition/coalesce; otherwise the
-   * output is written with the default keyed write.
+   * rest, partitionBy (key-hash into its own count) beats repartition/coalesce; then a combine
+   * write if every dependent is the same reduceByKey; otherwise the default keyed write.
    */
   private[execution] def forDependents(
       shuffleDependents: Seq[StageBuilder.StageInfo],
@@ -35,7 +35,55 @@ object ShuffleWriteReason:
         case op: RepartitionWideOp => DownstreamRepartition(op.meta.numPartitions)
         case op: CoalesceWideOp => DownstreamRepartition(op.meta.numPartitions)
       }
-      partitionBy.orElse(repartition).getOrElse(DownstreamShuffle)
+      partitionBy
+        .orElse(repartition)
+        .orElse(reduceByKeyCombine(shuffleDependents))
+        .getOrElse(DownstreamShuffle)
+    }
+  }
+
+  /**
+   * Combine-then-hash is only legal when every shuffle dependent is `ReduceByKeyWideOp` with the
+   * same reduce function (reference equality). A mixed diamond (groupByKey + reduceByKey) must
+   * write raw records so the groupByKey side still sees every value.
+   */
+  @SuppressWarnings(
+    Array(
+      "org.wartremover.warts.AsInstanceOf",
+      "org.wartremover.warts.Any",
+      "org.wartremover.warts.Equals",
+    ),
+  )
+  private def reduceByKeyCombine(
+      shuffleDependents: Seq[StageBuilder.StageInfo],
+  ): Option[ShuffleWriteReason] = {
+    // A shuffle dependent with wideOp = None fails this check and falls through to a raw keyed
+    // write. That is intentional: combine is only legal when every dependent is a typed reduce.
+    val everyDependentIsReduceByKey =
+      shuffleDependents.nonEmpty &&
+        shuffleDependents.forall(_.wideOp.exists(_.isInstanceOf[ReduceByKeyWideOp[_]]))
+    if !everyDependentIsReduceByKey then None
+    else {
+      val reduceOps = shuffleDependents.flatMap(_.wideOp).collect {
+        case op: ReduceByKeyWideOp[_] => op
+      }
+      reduceOps.headOption.flatMap { first =>
+        val canonical: AnyRef = first.meta.reduceFunc
+        if reduceOps.forall(op => (op.meta.reduceFunc: AnyRef) eq canonical) then
+          // Named erasure: V is existential on ReduceByKeyWideOp[_]; the functions are the same
+          // reference, so the runtime shape (V, V) => V is identical for every dependent.
+          // Width: all ReduceByKeyWideOp nodes today take defaultShufflePartitions at build
+          // time, so first.meta.numPartitions matches every dependent's ShuffleInput width.
+          // If that ever diverges, the write would use this count while a later dependent
+          // still reads its own meta.numPartitions.
+          Some(
+            DownstreamReduceByKey(
+              first.meta.numPartitions,
+              first.meta.reduceFunc.asInstanceOf[(Any, Any) => Any],
+            ),
+          )
+        else None
+      }
     }
   }
 
@@ -50,6 +98,17 @@ object ShuffleWriteReason:
 
   /** A downstream repartition/coalesce reads this output; written into its target count. */
   final case class DownstreamRepartition(numPartitions: Int) extends ShuffleWriteReason
+
+  /**
+   * Every shuffle dependent is the same `reduceByKey`; mapper partitions are locally reduced
+   * before the keyed shuffle write. Named erasure: the reduce function is `(V, V) => V` at the
+   * WideOp; V is recovered at the shuffle-write boundary.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Any"))
+  final case class DownstreamReduceByKey(
+      numPartitions: Int,
+      reduceFunc: (Any, Any) => Any,
+  ) extends ShuffleWriteReason
 
 /**
  * Planner for coordinating stage execution.
@@ -128,6 +187,8 @@ final class ExecutionPlanner[F[_]: Sync](
               shuffleHandler.handleKeyedOutput(stageInfo, results, n)
             case ShuffleWriteReason.DownstreamRepartition(n) =>
               shuffleHandler.handleRepartitionOrCoalesceOutput(stageInfo, results, n)
+            case ShuffleWriteReason.DownstreamReduceByKey(n, reduceFunc) =>
+              shuffleHandler.handleCombinedKeyedOutput(stageInfo, results, n, reduceFunc)
             case ShuffleWriteReason.DownstreamShuffle =>
               shuffleHandler.handleShuffleOutput(stageInfo, results)
             case ShuffleWriteReason.DownstreamSortBy =>
