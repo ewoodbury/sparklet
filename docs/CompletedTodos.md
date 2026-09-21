@@ -1,8 +1,8 @@
 # Completed Todos
 
 Historical record of completed work. Entries describing modules, APIs, or behavior that no
-longer exist are marked superseded; see ARCHITECTURE.md for the current system and TODO.md for
-current work.
+longer exist are marked superseded; see ARCHITECTURE.md for the current system and known
+limitations. Deferred work is tracked in the external roadmap.
 
 ## Project 1 — Foundation & Hygiene
 - [x] Central config (`SparkletConf`)
@@ -18,7 +18,7 @@ current work.
   - [x] Use concurrent map with thread locks
   - [x] Re-enable `Test / parallelExecution := true` when safe
   - SUPERSEDED: tests stay sequential while `SparkletConf`/`SparkletRuntime` are process-global;
-    parallelism returns with dependency injection (see TODO.md)
+    parallelism returns with dependency injection (deferred)
 - [x] Union correctness
   - [x] Implement union as true concatenation of inputs (not “pick left”)
 - [x] Explicit join/cogroup inputs
@@ -64,7 +64,7 @@ current work.
   - [x] Add tests to cover all join strategies, and test automatic join strategy decisions
   - NOTE: the sort-merge join implementation groups by key with a hash-code-based ordering
     rather than consuming a real sort order; correctness is by key equality, not by merge.
-    A true typed sort-merge join is deferred (see TODO.md).
+    A true typed sort-merge join is deferred.
 
 ## Project 4 - Hygiene, Fault Tolerance, and Reliability
 

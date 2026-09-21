@@ -87,4 +87,4 @@ thresholds (`broadcastJoinThreshold`, `enableSortMergeJoin`), sort sampling
 
 `GroupByKey`/`ReduceByKey`/`CoGroup`/`SortBy` handlers read all shuffle partitions and emit a
 single output partition; joins execute per-partition in parallel. Widening the aggregation
-outputs is planned with the physical-stage redesign (see TODO.md).
+outputs is planned with the physical-stage redesign.
