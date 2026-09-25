@@ -61,7 +61,15 @@ Narrow-only plans compile to a one-stage graph and flow through the same path as
 - Shuffle bypass: when upstream partitioning metadata already matches the wide operation's
   requirement (`Operation.canBypassShuffle`), the operation is appended as a local no-op instead
   of creating a shuffle stage. Example: `partitionBy(4)` then `groupByKey` (default 4) is a local
-  group.
+  group. Bypass reads distribution, not layout: keyed ops require `Distribution.Hash` at the
+  target width; `repartition` skips a shuffle for any other distribution with that width.
+- `PartitioningInfo` is distribution, ordering, and layout. This path emits `Layout.BoxedRows`.
+  Sources are `Unknown(width)`. Keyed shuffles are `Hash`. `sortBy` is `Range` plus `Sorted`;
+  `map`, `flatMap`, and `mapPartitions` drop both. A repartition or coalesce shuffle is also
+  `Unknown`: the writer hashes the element, which is not pair-key hash and not round-robin. A
+  bypassed repartition does not move rows, so it keeps the upstream description. Hash and range
+  keys are `Seq(0)`, the logical key, not a schema column. `RoundRobin` and `Singleton` are not
+  emitted yet.
 - Narrow work after a shuffle reads the upstream stage's output in memory (`StageOutput`) — no
   extra shuffle or materialization round-trip.
 - The graph is validated (existence, acyclicity, reachability, partitioning sanity,

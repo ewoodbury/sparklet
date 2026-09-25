@@ -62,18 +62,15 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     rightShuffle.side shouldBe Some(Side.Right)
   }
 
-  "Partitioning propagation" should "be defined for all operation types" in {
-    // Test that we can create partitioning metadata for various operations
-    // This test ensures the Partitioning case class works as expected
-    import StageBuilder.Partitioning
+  "Partitioning propagation" should "be defined for hash and unknown distributions" in {
+    val keyedPartitioning = PartitioningInfo.hash(8)
+    val unknownPartitioning = PartitioningInfo.unknown(4)
 
-    val keyedPartitioning = Partitioning(byKey = true, numPartitions = 8)
-    val nonKeyedPartitioning = Partitioning(byKey = false, numPartitions = 4)
-
-    keyedPartitioning.byKey shouldBe true
+    keyedPartitioning.distribution shouldBe Distribution.Hash(8, PartitioningInfo.RowKeyOrdinals)
     keyedPartitioning.numPartitions shouldBe 8
-    nonKeyedPartitioning.byKey shouldBe false
-    nonKeyedPartitioning.numPartitions shouldBe 4
+    unknownPartitioning.distribution shouldBe Distribution.Unknown(4)
+    unknownPartitioning.numPartitions shouldBe 4
+    keyedPartitioning.layout shouldBe Layout.BoxedRows
   }
 
   "Shuffle boundary detection" should "be handled via stage building" in {
@@ -171,7 +168,7 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     val stage = stageGraph.stages(stageGraph.finalStageId)
     stage.isShuffleStage shouldBe false
     stage.inputSources shouldBe Seq(StageBuilder.SourceInput(createSource().partitions))
-    stage.outputPartitioning.map(_.byKey) shouldBe Some(false)
+    stage.outputPartitioning.map(_.distribution) shouldBe Some(Distribution.Unknown(1))
   }
 
   it should "build narrow chain with partitioning metadata carry-over" in {
@@ -198,7 +195,7 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     stageGraph.stages.size shouldBe 2 // source stage + shuffle stage
     val finalStage = stageGraph.stages(stageGraph.finalStageId)
     finalStage.isShuffleStage shouldBe true
-    finalStage.outputPartitioning.map(_.byKey) shouldBe Some(true)
+    finalStage.outputPartitioning.map(_.isHashPartitioned(defaultPartitions)) shouldBe Some(true)
     finalStage.wideOp.isDefined shouldBe true
   }
 
@@ -384,7 +381,7 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     stageGraph.stages.size shouldBe 3
     val finalStage = stageGraph.stages(stageGraph.finalStageId)
     finalStage.isShuffleStage shouldBe true
-    finalStage.outputPartitioning.map(_.byKey) shouldBe Some(true)
+    finalStage.outputPartitioning.map(_.isHashPartitioned(defaultPartitions)) shouldBe Some(true)
   }
 
   it should "handle coalesce vs repartition difference" in {
@@ -403,7 +400,7 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
     repartitionGraph.stages(repartitionGraph.finalStageId).isShuffleStage shouldBe true
   }
 
-  it should "handle partitionBy setting byKey true and correct partition count" in {
+  it should "handle partitionBy setting a hash distribution and the requested width" in {
     val source = Plan.MapOp(createSource(), (x: Int) => (x, x * 2))
     val plan = Plan.PartitionByOp(source, 3)
 
@@ -411,7 +408,9 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
 
     val finalStage = stageGraph.stages(stageGraph.finalStageId)
     finalStage.isShuffleStage shouldBe true
-    finalStage.outputPartitioning.map(_.byKey) shouldBe Some(true)
+    finalStage.outputPartitioning.map(_.distribution) shouldBe Some(
+      Distribution.Hash(3, PartitioningInfo.RowKeyOrdinals),
+    )
     finalStage.outputPartitioning.map(_.numPartitions) shouldBe Some(3)
   }
 
@@ -714,11 +713,11 @@ class TestOperationsAndInputSources extends AnyFlatSpec with Matchers:
 
     val stageGraph = StageBuilder.buildStageGraph(plan)
 
-    // The final stage should have valid partitioning (byKey=true, numPartitions>0)
     val finalStage = stageGraph.stages(stageGraph.finalStageId)
     finalStage.outputPartitioning.foreach { p =>
-      p.byKey shouldBe true
+      p.isHashPartitioned(defaultPartitions) shouldBe true
       p.numPartitions should be > 0
+      p.layout shouldBe Layout.BoxedRows
     }
   }
 
