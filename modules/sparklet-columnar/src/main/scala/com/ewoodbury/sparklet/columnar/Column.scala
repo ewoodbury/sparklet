@@ -1,9 +1,11 @@
 package com.ewoodbury.sparklet.columnar
 
 /**
- * One primitive column. `values.length` is the allocated capacity. `length` is the live row count
- * and may be shorter. Slots at `length` and beyond are undefined. A null slot (validity bit clear)
- * stores `0` and must not be read as a value.
+ * One primitive column. The value array and the validity bitmap share one capacity. `length` is
+ * the live row count and may be shorter. Slots at `length` and beyond are undefined.
+ *
+ * A null slot stores `0` and must not be read as a value. A boolean slot is `0` or `1`. `of` does
+ * not scan those conventions: the encoders write them, and a kernel that calls `of` must too.
  *
  * The column keeps the arrays it is given. Callers do not mutate them after publication. Kernels
  * allocate a fresh column for their output.
@@ -26,8 +28,8 @@ object Column:
       s"value capacity $valueCapacity is shorter than length $length",
     )
     require(
-      validity.capacity >= length,
-      s"validity capacity ${validity.capacity} is shorter than length $length",
+      validity.capacity == valueCapacity,
+      s"validity capacity ${validity.capacity} does not match value capacity $valueCapacity",
     )
 
 final class Int32Column private (

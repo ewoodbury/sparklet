@@ -67,6 +67,12 @@ class TestColumnBatch extends AnyFlatSpec with Matchers:
     an[IllegalArgumentException] should be thrownBy column.isValid(2)
   }
 
+  it should "reject a validity bitmap whose capacity differs from the value array" in {
+    an[IllegalArgumentException] should be thrownBy {
+      Int32Column.of(Array(1, 2, 3), Validity.allValid(1), length = 1)
+    }
+  }
+
   "batch construction" should "reject a column that does not match the schema or the row count" in {
     val one = Int32Column(Seq(1))
     val two = Int32Column(Seq(1, 2))

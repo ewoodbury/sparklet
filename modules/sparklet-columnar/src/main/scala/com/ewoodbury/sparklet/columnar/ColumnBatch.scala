@@ -11,13 +11,13 @@ final class ColumnBatch(
 ):
   require(length >= 0, s"length must be >= 0, got $length")
   require(
-    schema.sizeCompare(columns.size) == 0,
+    schema.size == columns.size,
     s"schema width ${schema.size} does not match ${columns.size} columns",
   )
   schema.iterator.zip(columns.iterator).zipWithIndex.foreach { (aligned, ordinal) =>
     val (expected, column) = aligned
     require(
-      column.logicalType.ordinal == expected.ordinal,
+      column.logicalType == expected,
       s"column $ordinal is ${column.logicalType}, schema says $expected",
     )
     require(
