@@ -38,8 +38,9 @@ Input sources:
 - `Range(n, Seq(0))` plus `Sorted` — `sortBy`, kept by `filter` and other ops that do not replace
   the element or reorder the partition. `map`, `flatMap`, and `mapPartitions` drop both. Ascending
   is empty because a row-path `Ordering` does not expose direction.
-- `Unknown(n)` — a source, `repartition`, or `coalesce`. The writer for the last two hashes the
-  element, which is neither pair-key hash nor round-robin, so the only honest claim is the width.
+- `Unknown(n)` — a source, or a repartition/coalesce shuffle. That writer hashes the element
+  (`element.hashCode`), which is neither pair-key hash nor round-robin. A bypassed repartition
+  does not move rows, so it keeps the upstream description instead.
 - `RoundRobin` and `Singleton` are part of the model. The row path does not emit them yet.
 
 Shuffle bypass reads distribution, not layout. Keyed ops bypass only on `Hash` at the target

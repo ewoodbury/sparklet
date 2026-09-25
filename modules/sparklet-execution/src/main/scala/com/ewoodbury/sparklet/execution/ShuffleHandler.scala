@@ -218,8 +218,8 @@ final class ShuffleHandler[F[_]: Sync](
   }
 
   /**
-   * Handles shuffle output for repartition and coalesce operations by keying each element with a
-   * Unit value and delegating to the shuffle service's partitioner.
+   * Repartition and coalesce. The element is the partition key and `()` is the value, so rows
+   * spread by `element.hashCode`, not by a constant and not round-robin.
    */
   @SuppressWarnings(
     Array(
