@@ -1097,8 +1097,8 @@ object StageBuilder:
         }
     }
 
-    // Keyed shuffles are hash. sortBy is range-ordered. repartition is round-robin.
-    // coalesce only changes the width.
+    // Keyed shuffles are hash. sortBy is range-ordered.
+    // repartition and coalesce only promise a width: the writer hashes the element.
     val outputPartitioning = meta.kind match {
       case WideOpKind.GroupByKey | WideOpKind.ReduceByKey | WideOpKind.PartitionBy |
           WideOpKind.Join | WideOpKind.CoGroup =>
@@ -1106,7 +1106,8 @@ object StageBuilder:
       case WideOpKind.SortBy =>
         Some(PartitioningInfo.rangeSorted(meta.numPartitions))
       case WideOpKind.Repartition =>
-        Some(PartitioningInfo.roundRobin(meta.numPartitions))
+        // The writer hashes the element. That is not pair-key hash and not round-robin.
+        Some(PartitioningInfo.unknown(meta.numPartitions))
       case WideOpKind.Coalesce =>
         Some(PartitioningInfo.unknown(meta.numPartitions))
     }
@@ -1136,11 +1137,11 @@ object StageBuilder:
   /**
    * How a narrow operation changes partitioning metadata.
    *
-   * Map, filter, flatMap, mapPartitions, distinct, and the pair-preserving key ops keep the input
-   * description, including ordering. `keys` and `values` drop a hash guarantee because the output
-   * is no longer a pair. Local group and reduce keep the upstream hash they bypassed. Bypassed
-   * `partitionBy` / `repartition` / `coalesce` establish a new description. True shuffle stages
-   * set theirs in `createShuffleStageUnified`. A new [[Operation]] subtype has to be handled here.
+   * Filter and the pair-key ops keep range and ordering: they do not replace the element or
+   * reorder the partition. `map`, `flatMap`, and `mapPartitions` drop both. `keys` and `values`
+   * drop hash as well, because the output is no longer a pair. A bypassed `repartition` is an
+   * identity, so it keeps the upstream description. True shuffle stages set theirs in
+   * `createShuffleStageUnified`. A new [[Operation]] subtype has to be handled here.
    */
   private def updatePartitioning(
       prev: Option[PartitioningInfo],
@@ -1148,21 +1149,26 @@ object StageBuilder:
   ): Option[PartitioningInfo] = {
     val result = op match {
       case _: KeysOp[_, _] | _: ValuesOp[_, _] =>
-        prev.map(_.withoutHashDistribution)
+        prev.map(_.withoutPairDistribution)
+
+      case _: MapOp[_, _] | _: FlatMapOp[_, _] | _: MapPartitionsOp[_, _] =>
+        prev.map(_.withoutRangeOrOrdering)
 
       case pbl: PartitionByLocalOp[_, _] =>
         Some(PartitioningInfo.hash(pbl.numPartitions))
 
       case rep: RepartitionOp[_] =>
-        Some(PartitioningInfo.roundRobin(rep.numPartitions))
+        prev match {
+          case Some(info) if info.numPartitions == rep.numPartitions => Some(info)
+          case _ => Some(PartitioningInfo.unknown(rep.numPartitions))
+        }
 
       case coal: CoalesceOp[_] =>
         Some(PartitioningInfo.unknown(coal.numPartitions))
 
-      case _: MapOp[_, _] | _: FilterOp[_] | _: FlatMapOp[_, _] | _: MapPartitionsOp[_, _] |
-          _: MapValuesOp[_, _, _] | _: FilterKeysOp[_, _] | _: FilterValuesOp[_, _] |
-          _: FlatMapValuesOp[_, _, _] | _: DistinctOp[_] | _: GroupByKeyLocalOp[_, _] |
-          _: ReduceByKeyLocalOp[_, _] =>
+      case _: FilterOp[_] | _: MapValuesOp[_, _, _] | _: FilterKeysOp[_, _] |
+          _: FilterValuesOp[_, _] | _: FlatMapValuesOp[_, _, _] | _: DistinctOp[_] |
+          _: GroupByKeyLocalOp[_, _] | _: ReduceByKeyLocalOp[_, _] =>
         prev
     }
 

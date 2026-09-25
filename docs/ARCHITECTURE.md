@@ -65,9 +65,10 @@ Narrow-only plans compile to a one-stage graph and flow through the same path as
   target width; `repartition` skips a shuffle for any other distribution with that width.
 - `PartitioningInfo` records distribution (`Unknown`, `Singleton`, `Hash`, `Range`,
   `RoundRobin`), an ordering tag, and layout. This path emits `Layout.BoxedRows` only. Sources
-  are `Unknown(width)`. Keyed shuffles are `Hash`. `sortBy` is `Range` plus `Sorted`.
-  `repartition` is `RoundRobin`. `coalesce` keeps `Unknown`. Row-path hash and range keys are
-  `Seq(0)`, the single logical key, not a schema column.
+  are `Unknown(width)`. Keyed shuffles are `Hash`. `sortBy` is `Range` plus `Sorted`, dropped by
+  `map`, `flatMap`, and `mapPartitions`. `repartition` and `coalesce` are `Unknown`: their writer
+  hashes the element, which is not pair-key hash and not round-robin. Row-path hash and range
+  keys are `Seq(0)`, the single logical key, not a schema column.
 - Narrow work after a shuffle reads the upstream stage's output in memory (`StageOutput`) — no
   extra shuffle or materialization round-trip.
 - The graph is validated (existence, acyclicity, reachability, partitioning sanity,

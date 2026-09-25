@@ -44,7 +44,7 @@ class TestPartitioningInfo extends AnyFlatSpec with Matchers:
     val info = finalStage(source(3)).outputPartitioning.get
 
     info.distribution shouldBe Distribution.Unknown(3)
-    info.ordering shouldBe OrderingTag.None
+    info.ordering shouldBe OrderingTag.Unsorted
     info.layout shouldBe Layout.BoxedRows
   }
 
@@ -65,7 +65,7 @@ class TestPartitioningInfo extends AnyFlatSpec with Matchers:
     distributionOf(Plan.CoGroupOp(pairs(1), pairs(1))) shouldBe Distribution.Hash(shuffleN, rowKey)
 
     val info = finalStage(Plan.GroupByKeyOp(pairs(2))).outputPartitioning.get
-    info.ordering shouldBe OrderingTag.None
+    info.ordering shouldBe OrderingTag.Unsorted
     info.layout shouldBe Layout.BoxedRows
   }
 
@@ -78,18 +78,33 @@ class TestPartitioningInfo extends AnyFlatSpec with Matchers:
     info.layout shouldBe Layout.BoxedRows
   }
 
-  it should "keep range and ordering through a following map" in {
-    val plan = Plan.MapOp(
+  it should "drop range and ordering through map and flatMap" in {
+    val sorted = Plan.SortByOp(source(2), (x: Int) => x, Ordering.Int)
+    val mapped = Plan.MapOp(sorted, (x: Int) => x + 1)
+    val flatMapped = Plan.FlatMapOp(sorted, (x: Int) => Seq(x, x))
+
+    finalStage(mapped).outputPartitioning shouldBe Some(PartitioningInfo.unknown(shuffleN))
+    finalStage(flatMapped).outputPartitioning shouldBe Some(PartitioningInfo.unknown(shuffleN))
+  }
+
+  it should "keep range and ordering through filter" in {
+    val plan = Plan.FilterOp(
       Plan.SortByOp(source(2), (x: Int) => x, Ordering.Int),
-      (x: Int) => x + 1,
+      (x: Int) => x > 0,
     )
 
     finalStage(plan).outputPartitioning shouldBe Some(PartitioningInfo.rangeSorted(shuffleN))
   }
 
-  "repartition and coalesce" should "use round-robin and unknown widths" in {
+  it should "keep hash through map" in {
+    val plan = Plan.MapOp(Plan.PartitionByOp(pairs(1), 4), (kv: (Int, Int)) => kv)
+
+    finalStage(plan).outputPartitioning shouldBe Some(PartitioningInfo.hash(4))
+  }
+
+  "repartition and coalesce" should "promise a width and no distribution" in {
     finalStage(Plan.RepartitionOp(source(2), 5)).outputPartitioning shouldBe Some(
-      PartitioningInfo.roundRobin(5),
+      PartitioningInfo.unknown(5),
     )
     finalStage(Plan.CoalesceOp(source(8), 3)).outputPartitioning shouldBe Some(
       PartitioningInfo.unknown(3),
@@ -152,9 +167,9 @@ class TestPartitioningInfo extends AnyFlatSpec with Matchers:
     )
 
     finalStage(sameWidth).isShuffleStage shouldBe false
-    finalStage(sameWidth).outputPartitioning shouldBe Some(PartitioningInfo.roundRobin(4))
+    finalStage(sameWidth).outputPartitioning shouldBe Some(PartitioningInfo.unknown(4))
     finalStage(afterSort).isShuffleStage shouldBe false
-    finalStage(afterSort).outputPartitioning shouldBe Some(PartitioningInfo.roundRobin(shuffleN))
+    finalStage(afterSort).outputPartitioning shouldBe Some(PartitioningInfo.rangeSorted(shuffleN))
   }
 
   it should "still shuffle repartition after a hash of the same width" in {
@@ -162,7 +177,7 @@ class TestPartitioningInfo extends AnyFlatSpec with Matchers:
     val stage = finalStage(plan)
 
     stage.isShuffleStage shouldBe true
-    stage.outputPartitioning shouldBe Some(PartitioningInfo.roundRobin(4))
+    stage.outputPartitioning shouldBe Some(PartitioningInfo.unknown(4))
   }
 
   "validation" should "accept singleton and a positive columnar batch" in {
@@ -170,26 +185,26 @@ class TestPartitioningInfo extends AnyFlatSpec with Matchers:
       lone(
         PartitioningInfo(
           distribution = Distribution.Singleton,
-          ordering = OrderingTag.None,
+          ordering = OrderingTag.Unsorted,
           layout = Layout.Columnar(batchSize = 1024),
         ),
       ),
     )
-    StageBuilder.validateStageGraph(lone(PartitioningInfo.unknown(0)))
   }
 
   it should "reject empty hash keys, non-positive range, and a non-positive batch" in {
     val rejected = Seq(
       PartitioningInfo(
         Distribution.Hash(4, Seq.empty),
-        OrderingTag.None,
+        OrderingTag.Unsorted,
         Layout.BoxedRows,
       ),
       PartitioningInfo(
         Distribution.Range(0, rowKey),
-        OrderingTag.None,
+        OrderingTag.Unsorted,
         Layout.BoxedRows,
       ),
+      PartitioningInfo.unknown(0),
       PartitioningInfo.roundRobin(0),
       PartitioningInfo(
         Distribution.Unknown(1),
@@ -198,7 +213,7 @@ class TestPartitioningInfo extends AnyFlatSpec with Matchers:
       ),
       PartitioningInfo(
         Distribution.Unknown(1),
-        OrderingTag.None,
+        OrderingTag.Unsorted,
         Layout.Columnar(batchSize = 0),
       ),
     )

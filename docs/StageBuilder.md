@@ -35,11 +35,12 @@ Input sources:
 
 - `Hash(n, Seq(0))` — key hash (`groupByKey`, `reduceByKey`, `partitionBy`, join, cogroup), or a
   bypass chained after one. `Seq(0)` is the pair key, not a schema column.
-- `Range(n, Seq(0))` plus `Sorted` — `sortBy`. Ascending is empty because a row-path `Ordering`
-  does not expose direction.
-- `RoundRobin(n)` — `repartition`.
-- `Unknown(n)` — a source, or `coalesce`. The width is known; co-location is not.
-- `Singleton` — one partition holding the whole result. The row path does not emit it yet.
+- `Range(n, Seq(0))` plus `Sorted` — `sortBy`, kept by `filter` and other ops that do not replace
+  the element or reorder the partition. `map`, `flatMap`, and `mapPartitions` drop both. Ascending
+  is empty because a row-path `Ordering` does not expose direction.
+- `Unknown(n)` — a source, `repartition`, or `coalesce`. The writer for the last two hashes the
+  element, which is neither pair-key hash nor round-robin, so the only honest claim is the width.
+- `RoundRobin` and `Singleton` are part of the model. The row path does not emit them yet.
 
 Shuffle bypass reads distribution, not layout. Keyed ops bypass only on `Hash` at the target
 width. `repartition` bypasses on any non-hash distribution with the same width. This is not
@@ -82,7 +83,7 @@ directly by `TestStageGraphValidation`):
 - Stage IDs start at 0 (gaps only warn, to future-proof ID reuse).
 - Shuffle stages carry a `WideOp`; multi-input shuffles have exactly one `Left` and one `Right`
   input with matching partition counts.
-- Partitioning metadata is sane (hash, range, and round-robin widths are positive; counts are
-  bounded; hash and range name at least one key ordinal).
+- Partitioning metadata is sane (every distribution width is positive; counts are bounded; hash
+  and range name at least one key ordinal).
 
 Validation failures are `IllegalStateException` with the stage IDs involved.

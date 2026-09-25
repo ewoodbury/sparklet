@@ -41,19 +41,36 @@ final case class PartitioningInfo(
   }
 
   /**
-   * Drop a hash guarantee when the output is no longer a key-value pair (`keys` / `values`). Other
-   * distributions stay. The elements may still be co-located; bypass only trusts pair-key hash.
+   * Drop a hash guarantee when the output is no longer a key-value pair (`keys` / `values`). Range
+   * and ordering described that pair too, so they go with it. Bypass only trusts pair-key hash.
    */
-  def withoutHashDistribution: PartitioningInfo = distribution match {
-    case Distribution.Hash(n, _) => copy(distribution = Distribution.Unknown(n))
-    case _ => this
+  def withoutPairDistribution: PartitioningInfo = {
+    val widened = distribution match {
+      case Distribution.Hash(n, _) => Distribution.Unknown(n)
+      case Distribution.Range(n, _) => Distribution.Unknown(n)
+      case other => other
+    }
+    copy(distribution = widened, ordering = OrderingTag.Unsorted)
+  }
+
+  /**
+   * Drop range and ordering when an operation can replace the element or reorder the partition
+   * (`map`, `flatMap`, `mapPartitions`). Hash is kept: `partitionBy` then `map` then `groupByKey`
+   * still bypasses, which is the existing contract, not a proof that the key was left alone.
+   */
+  def withoutRangeOrOrdering: PartitioningInfo = {
+    val widened = distribution match {
+      case Distribution.Range(n, _) => Distribution.Unknown(n)
+      case other => other
+    }
+    copy(distribution = widened, ordering = OrderingTag.Unsorted)
   }
 
   /** `None` when this value is safe to put on a stage. */
   def invalidReason: Option[String] = {
     val distributionReason = distribution match {
-      case Distribution.Unknown(n) if n < 0 =>
-        Some(s"Unknown distribution has numPartitions=$n < 0")
+      case Distribution.Unknown(n) if n <= 0 =>
+        Some(s"Unknown distribution has numPartitions=$n <= 0")
       case Distribution.Hash(n, _) if n <= 0 =>
         Some(s"Hash distribution has numPartitions=$n <= 0")
       case Distribution.Hash(_, keys) if keys.isEmpty =>
@@ -108,9 +125,12 @@ enum Distribution:
   case Range(numPartitions: Int, keyOrdinals: Seq[Int])
   case RoundRobin(numPartitions: Int)
 
-/** Order of rows inside the output. Empty `ascending` means the direction is not known. */
+/**
+ * Order of rows inside the output. Named `Unsorted` rather than `None` so it is not read as
+ * `scala.None`. Empty `ascending` means the direction is not known.
+ */
 enum OrderingTag:
-  case None
+  case Unsorted
   case Sorted(keyOrdinals: Seq[Int], ascending: Seq[Boolean])
 
 /** Physical batching of the output. The row engine emits [[Layout.BoxedRows]] only. */
@@ -131,14 +151,14 @@ object PartitioningInfo:
   def unknown(numPartitions: Int): PartitioningInfo =
     PartitioningInfo(
       distribution = Distribution.Unknown(numPartitions),
-      ordering = OrderingTag.None,
+      ordering = OrderingTag.Unsorted,
       layout = Layout.BoxedRows,
     )
 
   def hash(numPartitions: Int): PartitioningInfo =
     PartitioningInfo(
       distribution = Distribution.Hash(numPartitions, RowKeyOrdinals),
-      ordering = OrderingTag.None,
+      ordering = OrderingTag.Unsorted,
       layout = Layout.BoxedRows,
     )
 
@@ -156,6 +176,6 @@ object PartitioningInfo:
   def roundRobin(numPartitions: Int): PartitioningInfo =
     PartitioningInfo(
       distribution = Distribution.RoundRobin(numPartitions),
-      ordering = OrderingTag.None,
+      ordering = OrderingTag.Unsorted,
       layout = Layout.BoxedRows,
     )

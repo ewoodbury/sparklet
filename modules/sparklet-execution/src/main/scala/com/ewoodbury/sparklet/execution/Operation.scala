@@ -151,7 +151,7 @@ object Operation {
         upstreamPartitioning.exists(_.isHashPartitioned(pby.numPartitions))
 
       case rep: Plan.RepartitionOp[_] =>
-        // Old `byKey = false` with a matching width: unknown, range, or round-robin.
+        // Any non-hash width: unknown, range, round-robin, or singleton.
         upstreamPartitioning.exists(_.matchesNonHashWidth(rep.numPartitions))
 
       case _ =>
