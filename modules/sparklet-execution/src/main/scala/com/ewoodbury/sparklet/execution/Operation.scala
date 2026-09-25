@@ -139,23 +139,20 @@ object Operation {
    */
   private[execution] def canBypassShuffle(
       plan: Plan[_],
-      upstreamPartitioning: Option[StageBuilder.Partitioning],
+      upstreamPartitioning: Option[PartitioningInfo],
       conf: com.ewoodbury.sparklet.core.SparkletConf,
   ): Boolean = {
     plan match {
       case _: Plan.GroupByKeyOp[_, _] | _: Plan.ReduceByKeyOp[_, _] =>
-        // Can bypass if already partitioned by key with the default shuffle partition count
-        upstreamPartitioning.exists(p =>
-          p.byKey && p.numPartitions == conf.defaultShufflePartitions,
-        )
+        // Already hash-partitioned at the default shuffle width.
+        upstreamPartitioning.exists(_.isHashPartitioned(conf.defaultShufflePartitions))
 
       case pby: Plan.PartitionByOp[_, _] =>
-        // Can bypass if upstream is already partitioned by key with the target partition count
-        upstreamPartitioning.exists(p => p.byKey && p.numPartitions == pby.numPartitions)
+        upstreamPartitioning.exists(_.isHashPartitioned(pby.numPartitions))
 
       case rep: Plan.RepartitionOp[_] =>
-        // Can bypass if already has the desired partitioning
-        upstreamPartitioning.exists(p => !p.byKey && p.numPartitions == rep.numPartitions)
+        // Old `byKey = false` with a matching width: unknown, range, or round-robin.
+        upstreamPartitioning.exists(_.matchesNonHashWidth(rep.numPartitions))
 
       case _ =>
         // Coalesce and other wide operations cannot bypass shuffle

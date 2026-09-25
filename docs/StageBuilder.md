@@ -19,7 +19,7 @@ case class StageInfo(
   inputSources: Seq[InputSource],
   isShuffleStage: Boolean,
   wideOp: Option[WideOp],             // set exactly when isShuffleStage — the dispatch record
-  outputPartitioning: Option[Partitioning],
+  outputPartitioning: Option[PartitioningInfo],
 )
 ```
 
@@ -30,9 +30,20 @@ Input sources:
 - `ShuffleInput(stageId, side, numPartitions)` — shuffle service read; `side` (`Left`/`Right`)
   disambiguates multi-input operations (join/cogroup).
 
-`Partitioning(byKey, numPartitions)`: `byKey = true` means the data was written through the key
-hash partitioner (true shuffle stages, or bypass-chained local ops after one) — never inferred
-from stable record order. The shuffle-bypass optimization trusts this contract.
+`PartitioningInfo` is distribution, ordering, and layout. The row path always uses
+`Layout.BoxedRows`.
+
+- `Hash(n, Seq(0))` — key hash (`groupByKey`, `reduceByKey`, `partitionBy`, join, cogroup), or a
+  bypass chained after one. `Seq(0)` is the pair key, not a schema column.
+- `Range(n, Seq(0))` plus `Sorted` — `sortBy`. Ascending is empty because a row-path `Ordering`
+  does not expose direction.
+- `RoundRobin(n)` — `repartition`.
+- `Unknown(n)` — a source, or `coalesce`. The width is known; co-location is not.
+- `Singleton` — one partition holding the whole result. The row path does not emit it yet.
+
+Shuffle bypass reads distribution, not layout. Keyed ops bypass only on `Hash` at the target
+width. `repartition` bypasses on any non-hash distribution with the same width. This is not
+inferred from record order.
 
 ## Construction algorithm
 
@@ -71,6 +82,7 @@ directly by `TestStageGraphValidation`):
 - Stage IDs start at 0 (gaps only warn, to future-proof ID reuse).
 - Shuffle stages carry a `WideOp`; multi-input shuffles have exactly one `Left` and one `Right`
   input with matching partition counts.
-- Partitioning metadata is sane (`byKey` implies positive count; counts bounded).
+- Partitioning metadata is sane (hash, range, and round-robin widths are positive; counts are
+  bounded; hash and range name at least one key ordinal).
 
 Validation failures are `IllegalStateException` with the stage IDs involved.

@@ -14,7 +14,7 @@ class TestStageGraphValidation extends AnyFlatSpec with Matchers {
       inputSources: Seq[StageBuilder.InputSource] = Seq.empty,
       isShuffleStage: Boolean = false,
       wideOp: Option[WideOp] = None,
-      outputPartitioning: Option[StageBuilder.Partitioning] = None,
+      outputPartitioning: Option[PartitioningInfo] = None,
   ): StageBuilder.StageInfo =
     StageBuilder.StageInfo(
       id = StageId(id),
@@ -59,7 +59,7 @@ class TestStageGraphValidation extends AnyFlatSpec with Matchers {
           inputSources = Seq(shuffleInput(0)),
           isShuffleStage = true,
           wideOp = Some(groupByWideOp()),
-          outputPartitioning = Some(StageBuilder.Partitioning(byKey = true, numPartitions = 4)),
+          outputPartitioning = Some(PartitioningInfo.hash(4)),
         ),
       ),
       dependencies = Map(StageId(1) -> Set(StageId(0))),
@@ -281,12 +281,10 @@ class TestStageGraphValidation extends AnyFlatSpec with Matchers {
     an[IllegalStateException] should be thrownBy StageBuilder.validateStageGraph(g)
   }
 
-  it should "reject byKey partitioning with a non-positive partition count" in {
+  it should "reject hash partitioning with a non-positive partition count" in {
     val g = graph(
       stages = Seq(
-        stageInfo(0, outputPartitioning =
-          Some(StageBuilder.Partitioning(byKey = true, numPartitions = 0)),
-        ),
+        stageInfo(0, outputPartitioning = Some(PartitioningInfo.hash(0))),
       ),
       finalStageId = StageId(0),
     )
@@ -297,8 +295,9 @@ class TestStageGraphValidation extends AnyFlatSpec with Matchers {
   it should "reject excessively large partition counts" in {
     val g = graph(
       stages = Seq(
-        stageInfo(0, outputPartitioning =
-          Some(StageBuilder.Partitioning(byKey = false, numPartitions = 2000000)),
+        stageInfo(
+          0,
+          outputPartitioning = Some(PartitioningInfo.unknown(PartitioningInfo.MaxPartitions + 1)),
         ),
       ),
       finalStageId = StageId(0),

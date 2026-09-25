@@ -24,18 +24,10 @@ import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf, StageId}
 object StageBuilder:
 
   /**
-   * Describes how a stage's output is partitioned.
-   *
-   * `byKey = true` means all elements with equal keys are guaranteed to be in the same partition
-   * AND the data was written through the key hash partitioner. It is set only by true shuffle
-   * stages (groupByKey, reduceByKey, partitionBy, join, cogroup) and by bypassed local operations
-   * chained after such a stage; narrow transformations merely preserve it. It must not be inferred
-   * merely because records happen to be emitted in a stable order.
-   */
-  final case class Partitioning(byKey: Boolean, numPartitions: Int)
-
-  /**
    * Information about a stage in the execution graph.
+   *
+   * `outputPartitioning` is set by shuffle stages and preserved or updated by narrow ops. It is
+   * not inferred from record order. See [[PartitioningInfo]].
    */
   case class StageInfo(
       id: StageId,
@@ -44,7 +36,7 @@ object StageBuilder:
       isShuffleStage: Boolean,
       /** For shuffle stages, the wide operation this stage executes. */
       wideOp: Option[WideOp],
-      outputPartitioning: Option[Partitioning],
+      outputPartitioning: Option[PartitioningInfo],
   )
 
   /**
@@ -92,7 +84,7 @@ object StageBuilder:
       isShuffle: Boolean,
       /** Set exactly when `isShuffle` is true: the wide operation this stage executes. */
       shuffleMeta: Option[WideOp],
-      outputPartitioning: Option[Partitioning],
+      outputPartitioning: Option[PartitioningInfo],
   )
 
   // Per-build context to generate monotonically increasing stage IDs without global/shared state
@@ -247,16 +239,9 @@ object StageBuilder:
     // 8. Partitioning metadata consistency
     graph.stages.values.foreach { stageInfo =>
       stageInfo.outputPartitioning.foreach { partitioning =>
-        // byKey implies numPartitions > 0
-        if (partitioning.byKey && partitioning.numPartitions <= 0) {
+        partitioning.invalidReason.foreach { reason =>
           throw new IllegalStateException(
-            s"Stage ${stageInfo.id} has byKey=true but numPartitions=${partitioning.numPartitions} <= 0",
-          )
-        }
-        // numPartitions should be reasonable (not excessively large)
-        if (partitioning.numPartitions > 1000000) {
-          throw new IllegalStateException(
-            s"Stage ${stageInfo.id} has excessively large numPartitions=${partitioning.numPartitions}",
+            s"Stage ${stageInfo.id} has invalid partitioning: $reason",
           )
         }
       }
@@ -636,8 +621,7 @@ object StageBuilder:
             inputSources = Seq(SourceInput(source.partitions)),
             isShuffle = false,
             shuffleMeta = None,
-            outputPartitioning =
-              Some(Partitioning(byKey = false, numPartitions = source.partitions.size)),
+            outputPartitioning = Some(PartitioningInfo.unknown(source.partitions.size)),
           ),
         )
         (stageId, Some(source))
@@ -1113,15 +1097,18 @@ object StageBuilder:
         }
     }
 
-    // Determine output partitioning based on operation type
+    // Keyed shuffles are hash. sortBy is range-ordered. repartition is round-robin.
+    // coalesce only changes the width.
     val outputPartitioning = meta.kind match {
       case WideOpKind.GroupByKey | WideOpKind.ReduceByKey | WideOpKind.PartitionBy |
           WideOpKind.Join | WideOpKind.CoGroup =>
-        Some(Partitioning(byKey = true, numPartitions = meta.numPartitions))
+        Some(PartitioningInfo.hash(meta.numPartitions))
       case WideOpKind.SortBy =>
-        Some(Partitioning(byKey = false, numPartitions = meta.numPartitions))
-      case WideOpKind.Repartition | WideOpKind.Coalesce =>
-        Some(Partitioning(byKey = false, numPartitions = meta.numPartitions))
+        Some(PartitioningInfo.rangeSorted(meta.numPartitions))
+      case WideOpKind.Repartition =>
+        Some(PartitioningInfo.roundRobin(meta.numPartitions))
+      case WideOpKind.Coalesce =>
+        Some(PartitioningInfo.unknown(meta.numPartitions))
     }
 
     putNewBuilder(
@@ -1147,90 +1134,48 @@ object StageBuilder:
   // --- Metadata helpers ---
 
   /**
-   * Updates output partitioning based on a narrow operation's transformation semantics.
+   * How a narrow operation changes partitioning metadata.
    *
-   * This function centralizes the logic for how each operation type affects partitioning metadata,
-   * ensuring consistent behavior across the stage building process.
-   *
-   * **Operation Categories and Effects:**
-   *
-   *   1. **Preserve completely**: MapOp, FilterOp, FlatMapOp, MapPartitionsOp
-   *      - Maintains both `byKey` status and `numPartitions`
-   *   2. **Preserve count, modify key awareness**:
-   *      - KeysOp: Sets `byKey = false` (output is key-only, not key-value pairs)
-   *      - ValuesOp: Sets `byKey = false` (output is value-only)
-   *      - MapValuesOp, FilterKeysOp, FilterValuesOp, FlatMapValuesOp: Preserve both
-   *   3. **Key awareness conditional**: DistinctOp
-   *      - Preserves `byKey = true` if input was key-partitioned
-   *      - Sets `byKey = false` otherwise
-   *   4. **Local bypass operations**: GroupByKeyLocalOp, ReduceByKeyLocalOp
-   *      - Preserve existing partitioning (no shuffle occurred)
-   *   5. **Bypassed wide operations**: Establish new partitioning based on operation semantics;
-   *      true shuffle stages set their output partitioning in `createShuffleStageUnified` instead
-   *
-   * @param prev
-   *   Previous partitioning metadata from the upstream stage
-   * @param op
-   *   The operation being applied to transform the data
-   * @return
-   *   Updated partitioning metadata reflecting the operation's effect
-   *
-   * @note
-   *   This method handles the operations that can be appended to narrow stages. If a new operation
-   *   is added to the Operation ADT, this method must be updated to handle it.
+   * Map, filter, flatMap, mapPartitions, distinct, and the pair-preserving key ops keep the input
+   * description, including ordering. `keys` and `values` drop a hash guarantee because the output
+   * is no longer a pair. Local group and reduce keep the upstream hash they bypassed. Bypassed
+   * `partitionBy` / `repartition` / `coalesce` establish a new description. True shuffle stages
+   * set theirs in `createShuffleStageUnified`. A new [[Operation]] subtype has to be handled here.
    */
   private def updatePartitioning(
-      prev: Option[Partitioning],
+      prev: Option[PartitioningInfo],
       op: Operation[Any, Any],
-  ): Option[Partitioning] = {
+  ): Option[PartitioningInfo] = {
     val result = op match {
-      // Narrow operations that preserve partitioning completely
-      case _: MapOp[_, _] | _: FilterOp[_] | _: FlatMapOp[_, _] | _: MapPartitionsOp[_, _] =>
-        prev
-
-      // Operations that preserve partition count but may affect key awareness
-      case _: KeysOp[_, _] =>
-        // Keys keeps byKey=false because output is key-only set
-        prev.map(p => p.copy(byKey = false))
-
-      case _: ValuesOp[_, _] =>
-        // Values clears byKey because output is value-only
-        prev.map(p => p.copy(byKey = false))
-
-      case _: MapValuesOp[_, _, _] | _: FilterKeysOp[_, _] | _: FilterValuesOp[_, _] |
-          _: FlatMapValuesOp[_, _, _] =>
-        // These preserve the partitioning structure
-        prev
-
-      case _: DistinctOp[_] =>
-        /* Distinct clears byKey unless previous was byKey (preserves key-based partitioning for
-         * key-value data) */
-        prev.map(p => if (p.byKey) p else p.copy(byKey = false))
-
-      // Local (bypassed) operations preserve or establish key-based partitioning
-      case _: GroupByKeyLocalOp[_, _] | _: ReduceByKeyLocalOp[_, _] =>
-        prev
+      case _: KeysOp[_, _] | _: ValuesOp[_, _] =>
+        prev.map(_.withoutHashDistribution)
 
       case pbl: PartitionByLocalOp[_, _] =>
-        Some(Partitioning(byKey = true, numPartitions = pbl.numPartitions))
+        Some(PartitioningInfo.hash(pbl.numPartitions))
 
       case rep: RepartitionOp[_] =>
-        Some(Partitioning(byKey = false, numPartitions = rep.numPartitions))
+        Some(PartitioningInfo.roundRobin(rep.numPartitions))
 
       case coal: CoalesceOp[_] =>
-        Some(Partitioning(byKey = false, numPartitions = coal.numPartitions))
+        Some(PartitioningInfo.unknown(coal.numPartitions))
+
+      case _: MapOp[_, _] | _: FilterOp[_] | _: FlatMapOp[_, _] | _: MapPartitionsOp[_, _] |
+          _: MapValuesOp[_, _, _] | _: FilterKeysOp[_, _] | _: FilterValuesOp[_, _] |
+          _: FlatMapValuesOp[_, _, _] | _: DistinctOp[_] | _: GroupByKeyLocalOp[_, _] |
+          _: ReduceByKeyLocalOp[_, _] =>
+        prev
     }
 
-    // Validation: ensure result is sensible
     result.foreach { partitioning =>
       require(
         partitioning.numPartitions > 0,
         s"Invalid partitioning from operation $op: numPartitions must be > 0, got ${partitioning.numPartitions}",
       )
-      require(
-        partitioning.numPartitions <= 1000000,
-        s"Invalid partitioning from operation $op: numPartitions ${partitioning.numPartitions} exceeds reasonable limit",
-      )
+      partitioning.invalidReason.foreach { reason =>
+        throw new IllegalArgumentException(
+          s"Invalid partitioning from operation $op: $reason",
+        )
+      }
     }
 
     result
