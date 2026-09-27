@@ -112,10 +112,7 @@ object KernelStudy:
     }
 
   private def sizeSweep(): Unit =
-    val sizes = Array(1000, 10000, 100000, 1000000, 10000000, 100000000)
-    var index = 0
-    while (index < sizes.length) {
-      val rows = sizes(index)
+    Array(1000, 10000, 100000, 1000000, 10000000, 100000000).foreach { rows =>
       val data = generate(rows)
       val batch = batchOf(data, 0)
       val expected = oracleFilterProject(data, 0, 0)
@@ -131,42 +128,30 @@ object KernelStudy:
         emit(s"distcollection-n$rows", rows, expected.sum, expected.count) {
           rowsPath.aggregate(0L)((sum, value) => sum + value, (left, right) => left + right)
         }
-      index += 1
     }
 
   private def selectivity(data: Array[Int]): Unit =
-    val bounds = Array(-1000001, -500000, 0, 500000, 900000, 1000000)
-    var index = 0
-    while (index < bounds.length) {
-      val bound = bounds(index)
+    Array(-1000001, -500000, 0, 500000, 900000, 1000000).foreach { bound =>
       val batch = batchOf(data, 0)
       val expected = oracleFilterProject(data, bound, 0)
       val greater = new Greater(bound)
       emit(s"select-bound$bound", data.length, expected.sum, expected.count) {
         kernelFilterProject(batch, greater)
       }
-      index += 1
     }
 
   private def nulls(data: Array[Int]): Unit =
-    val percents = Array(0, 10, 50, 90)
-    var index = 0
-    while (index < percents.length) {
-      val percent = percents(index)
+    Array(0, 10, 50, 90).foreach { percent =>
       val batch = batchOf(data, percent)
       val expected = oracleFilterProject(data, 0, percent)
       val greater = new Greater(0)
       emit(s"nulls-$percent", data.length, expected.sum, expected.count) {
         kernelFilterProject(batch, greater)
       }
-      index += 1
     }
 
   private def width(data: Array[Int]): Unit =
-    val widths = Array(1, 4, 16)
-    var index = 0
-    while (index < widths.length) {
-      val columns = widths(index)
+    Array(1, 4, 16).foreach { columns =>
       val batch = wideBatch(data, columns)
       val expected = oracleFilter(data, 0, 0)
       val greater = new Greater(0)
@@ -175,14 +160,10 @@ object KernelStudy:
         hold = filtered
         sumPresent(filtered)
       }
-      index += 1
     }
 
   private def morsels(data: Array[Int]): Unit =
-    val sizes = Array(1000, 10000, 100000, 1000000)
-    var index = 0
-    while (index < sizes.length) {
-      val batchSize = sizes(index)
+    Array(1000, 10000, 100000, 1000000).foreach { batchSize =>
       val batches = chunks(data, batchSize)
       val expected = oracleFilterProject(data, 0, 0)
       val greater = new Greater(0)
@@ -195,7 +176,6 @@ object KernelStudy:
         }
         sum
       }
-      index += 1
     }
 
   private def expressions(data: Array[Int], batch: ColumnBatch): Unit =
@@ -213,23 +193,19 @@ object KernelStudy:
 
   private def emit(name: String, rows: Int, checksum: Long, survivors: Int)(body: => Long): Unit =
     System.err.println(s"run $name")
-    var round = 0
-    while (round < warmup) {
+    (0 until warmup).foreach { _ =>
       val got = body
       require(got == checksum, s"$name warmup checksum $got != $checksum")
-      round += 1
     }
     val samples = new Array[Long](measure)
     val allocBefore = allocatedBytes
     val gcBefore = gcMillis
-    round = 0
-    while (round < measure) {
+    (0 until measure).foreach { round =>
       val start = System.nanoTime()
       val got = body
       val elapsed = System.nanoTime() - start
       require(got == checksum, s"$name checksum $got != $checksum")
       samples(round) = elapsed
-      round += 1
     }
     val allocDelta = allocatedBytes - allocBefore
     val allocPerCall = if (allocDelta >= 0L) allocDelta / measure.toLong else -1L

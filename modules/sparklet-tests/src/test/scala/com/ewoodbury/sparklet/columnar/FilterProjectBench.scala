@@ -45,17 +45,15 @@ object FilterProjectBench:
     val rowSum = rowsPath.aggregate(0L)((sum, value) => sum + value, _ + _)
     require(rowSum == expected.sum && rowsPath.count() == expected.count.toLong, s"row sum $rowSum")
 
-    var round = 0
-    while (round < warmup) {
+    (0 until warmup).foreach { _ =>
       runColumnar(batch)
       rowsPath.aggregate(0L)((sum, value) => sum + value, _ + _)
-      round += 1
+      ()
     }
 
     val columnarNs = new Array[Long](measure)
     val rowNs = new Array[Long](measure)
-    var sample = 0
-    while (sample < measure) {
+    (0 until measure).foreach { sample =>
       val columnarStart = System.nanoTime()
       val columnar = runColumnar(batch)
       val columnarElapsed = System.nanoTime() - columnarStart
@@ -70,7 +68,6 @@ object FilterProjectBench:
       val rowElapsed = System.nanoTime() - rowStart
       require(summed == expected.sum, s"row sum $summed")
       rowNs(sample) = rowElapsed
-      sample += 1
     }
 
     val columnarMedian = median(columnarNs)
