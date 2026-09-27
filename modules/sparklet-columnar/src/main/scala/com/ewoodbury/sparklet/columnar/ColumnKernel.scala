@@ -1,0 +1,403 @@
+package com.ewoodbury.sparklet.columnar
+
+/**
+ * Filter and project over primitive columns.
+ *
+ * Filter builds a selection of rows whose predicate column is present and passes the predicate.
+ * Nulls are dropped, and the predicate is not called on them. Survivors stay in input order. Every
+ * column is compacted. The output capacity is the input live length, and the output length is the
+ * survivor count.
+ *
+ * Project maps one column and shares the others. A null stays null, the new slot stores `0`, and
+ * the function is not called. The mapped column reuses the input validity bitmap, so null
+ * positions do not change. Callers do not mutate a published bitmap.
+ *
+ * Loops keep the row index in a `var` so the bodies stay allocation-free. Each primitive has its
+ * own loop so the copy stays monomorphic.
+ */
+@SuppressWarnings(Array("org.wartremover.warts.Var"))
+object ColumnKernel:
+
+  trait Int32Predicate:
+    def apply(value: Int): Boolean
+
+  trait Int64Predicate:
+    def apply(value: Long): Boolean
+
+  trait Float64Predicate:
+    def apply(value: Double): Boolean
+
+  trait BoolPredicate:
+    def apply(value: Boolean): Boolean
+
+  trait Int32Map:
+    def apply(value: Int): Int
+
+  trait Int64Map:
+    def apply(value: Long): Long
+
+  trait Float64Map:
+    def apply(value: Double): Double
+
+  trait BoolMap:
+    def apply(value: Boolean): Boolean
+
+  def filterInt32(batch: ColumnBatch, ordinal: Int, predicate: Int32Predicate): ColumnBatch =
+    val column = asInt32(columnAt(batch, ordinal), ordinal)
+    if (batch.columns.length == 1) then
+      val scanned = scanInt32(column, predicate, record = false, selection = noSelection)
+      publish(batch, scanned.column, scanned.count)
+    else
+      val selection = new Array[Int](batch.length)
+      val scanned = scanInt32(column, predicate, record = true, selection = selection)
+      assemble(batch, ordinal, scanned.column, selection, scanned.count)
+
+  def filterInt64(batch: ColumnBatch, ordinal: Int, predicate: Int64Predicate): ColumnBatch =
+    val column = asInt64(columnAt(batch, ordinal), ordinal)
+    if (batch.columns.length == 1) then
+      val scanned = scanInt64(column, predicate, record = false, selection = noSelection)
+      publish(batch, scanned.column, scanned.count)
+    else
+      val selection = new Array[Int](batch.length)
+      val scanned = scanInt64(column, predicate, record = true, selection = selection)
+      assemble(batch, ordinal, scanned.column, selection, scanned.count)
+
+  def filterFloat64(
+      batch: ColumnBatch,
+      ordinal: Int,
+      predicate: Float64Predicate,
+  ): ColumnBatch =
+    val column = asFloat64(columnAt(batch, ordinal), ordinal)
+    if (batch.columns.length == 1) then
+      val scanned = scanFloat64(column, predicate, record = false, selection = noSelection)
+      publish(batch, scanned.column, scanned.count)
+    else
+      val selection = new Array[Int](batch.length)
+      val scanned = scanFloat64(column, predicate, record = true, selection = selection)
+      assemble(batch, ordinal, scanned.column, selection, scanned.count)
+
+  def filterBool(batch: ColumnBatch, ordinal: Int, predicate: BoolPredicate): ColumnBatch =
+    val column = asBool(columnAt(batch, ordinal), ordinal)
+    if (batch.columns.length == 1) then
+      val scanned = scanBool(column, predicate, record = false, selection = noSelection)
+      publish(batch, scanned.column, scanned.count)
+    else
+      val selection = new Array[Int](batch.length)
+      val scanned = scanBool(column, predicate, record = true, selection = selection)
+      assemble(batch, ordinal, scanned.column, selection, scanned.count)
+
+  def projectInt32(batch: ColumnBatch, ordinal: Int, mapper: Int32Map): ColumnBatch =
+    replace(batch, ordinal, mapInt32(asInt32(columnAt(batch, ordinal), ordinal), mapper))
+
+  def projectInt64(batch: ColumnBatch, ordinal: Int, mapper: Int64Map): ColumnBatch =
+    replace(batch, ordinal, mapInt64(asInt64(columnAt(batch, ordinal), ordinal), mapper))
+
+  def projectFloat64(batch: ColumnBatch, ordinal: Int, mapper: Float64Map): ColumnBatch =
+    replace(batch, ordinal, mapFloat64(asFloat64(columnAt(batch, ordinal), ordinal), mapper))
+
+  def projectBool(batch: ColumnBatch, ordinal: Int, mapper: BoolMap): ColumnBatch =
+    replace(batch, ordinal, mapBool(asBool(columnAt(batch, ordinal), ordinal), mapper))
+
+  private val noSelection: Array[Int] = Array.emptyIntArray
+
+  private final case class Scanned(column: Column, count: Int)
+
+  private inline def scanInt32(
+      column: Int32Column,
+      predicate: Int32Predicate,
+      inline record: Boolean,
+      selection: Array[Int],
+  ): Scanned =
+    val live = column.length
+    val in = column.values
+    val words = column.validity.words
+    val out = new Array[Int](live)
+    var written = 0
+    var row = 0
+    while (row < live) {
+      if (Validity.isSet(words, row)) then
+        val value = in(row)
+        if (predicate(value)) then
+          inline if (record) then selection(written) = row
+          out(written) = value
+          written += 1
+      row += 1
+    }
+    val built = Int32Column.of(out, Validity.prefixValid(live, written), written)
+    Scanned(built, written)
+
+  private inline def scanInt64(
+      column: Int64Column,
+      predicate: Int64Predicate,
+      inline record: Boolean,
+      selection: Array[Int],
+  ): Scanned =
+    val live = column.length
+    val in = column.values
+    val words = column.validity.words
+    val out = new Array[Long](live)
+    var written = 0
+    var row = 0
+    while (row < live) {
+      if (Validity.isSet(words, row)) then
+        val value = in(row)
+        if (predicate(value)) then
+          inline if (record) then selection(written) = row
+          out(written) = value
+          written += 1
+      row += 1
+    }
+    val built = Int64Column.of(out, Validity.prefixValid(live, written), written)
+    Scanned(built, written)
+
+  private inline def scanFloat64(
+      column: Float64Column,
+      predicate: Float64Predicate,
+      inline record: Boolean,
+      selection: Array[Int],
+  ): Scanned =
+    val live = column.length
+    val in = column.values
+    val words = column.validity.words
+    val out = new Array[Double](live)
+    var written = 0
+    var row = 0
+    while (row < live) {
+      if (Validity.isSet(words, row)) then
+        val value = in(row)
+        if (predicate(value)) then
+          inline if (record) then selection(written) = row
+          out(written) = value
+          written += 1
+      row += 1
+    }
+    val built = Float64Column.of(out, Validity.prefixValid(live, written), written)
+    Scanned(built, written)
+
+  private inline def scanBool(
+      column: BoolColumn,
+      predicate: BoolPredicate,
+      inline record: Boolean,
+      selection: Array[Int],
+  ): Scanned =
+    val live = column.length
+    val in = column.values
+    val words = column.validity.words
+    val out = new Array[Byte](live)
+    var written = 0
+    var row = 0
+    while (row < live) {
+      if (Validity.isSet(words, row)) then
+        val value = in(row) != 0
+        if (predicate(value)) then
+          inline if (record) then selection(written) = row
+          out(written) = if (value) 1.toByte else 0.toByte
+          written += 1
+      row += 1
+    }
+    val built = BoolColumn.of(out, Validity.prefixValid(live, written), written)
+    Scanned(built, written)
+
+  private def mapInt32(column: Int32Column, mapper: Int32Map): Int32Column =
+    val live = column.length
+    val in = column.values
+    val words = column.validity.words
+    val out = new Array[Int](in.length)
+    var row = 0
+    while (row < live) {
+      if (Validity.isSet(words, row)) then out(row) = mapper(in(row))
+      row += 1
+    }
+    Int32Column.of(out, column.validity, live)
+
+  private def mapInt64(column: Int64Column, mapper: Int64Map): Int64Column =
+    val live = column.length
+    val in = column.values
+    val words = column.validity.words
+    val out = new Array[Long](in.length)
+    var row = 0
+    while (row < live) {
+      if (Validity.isSet(words, row)) then out(row) = mapper(in(row))
+      row += 1
+    }
+    Int64Column.of(out, column.validity, live)
+
+  private def mapFloat64(column: Float64Column, mapper: Float64Map): Float64Column =
+    val live = column.length
+    val in = column.values
+    val words = column.validity.words
+    val out = new Array[Double](in.length)
+    var row = 0
+    while (row < live) {
+      if (Validity.isSet(words, row)) then out(row) = mapper(in(row))
+      row += 1
+    }
+    Float64Column.of(out, column.validity, live)
+
+  private def mapBool(column: BoolColumn, mapper: BoolMap): BoolColumn =
+    val live = column.length
+    val in = column.values
+    val words = column.validity.words
+    val out = new Array[Byte](in.length)
+    var row = 0
+    while (row < live) {
+      if (Validity.isSet(words, row)) then
+        out(row) = if (mapper(in(row) != 0)) 1.toByte else 0.toByte
+      row += 1
+    }
+    BoolColumn.of(out, column.validity, live)
+
+  private def assemble(
+      batch: ColumnBatch,
+      ordinal: Int,
+      predicateColumn: Column,
+      selection: Array[Int],
+      count: Int,
+  ): ColumnBatch =
+    require(selection.length >= count, s"selection ${selection.length} shorter than $count rows")
+    val capacity = batch.length
+    val columns = Vector.tabulate(batch.columns.length) { index =>
+      if (index == ordinal) then predicateColumn
+      else compact(columnAt(batch, index), selection, count, capacity)
+    }
+    new ColumnBatch(batch.schema, columns, count)
+
+  private def compact(
+      column: Column,
+      selection: Array[Int],
+      count: Int,
+      capacity: Int,
+  ): Column =
+    column match
+      case int32: Int32Column => compactInt32(int32, selection, count, capacity)
+      case int64: Int64Column => compactInt64(int64, selection, count, capacity)
+      case float64: Float64Column => compactFloat64(float64, selection, count, capacity)
+      case bool: BoolColumn => compactBool(bool, selection, count, capacity)
+
+  private def compactInt32(
+      column: Int32Column,
+      selection: Array[Int],
+      count: Int,
+      capacity: Int,
+  ): Int32Column =
+    val in = column.values
+    val srcWords = column.validity.words
+    val out = new Array[Int](capacity)
+    val dstWords = Validity.allocate(capacity)
+    var index = 0
+    while (index < count) {
+      val row = selection(index)
+      if (Validity.isSet(srcWords, row)) then
+        out(index) = in(row)
+        Validity.setBit(dstWords, index)
+      index += 1
+    }
+    Int32Column.of(out, Validity.fromWords(dstWords, capacity), count)
+
+  private def compactInt64(
+      column: Int64Column,
+      selection: Array[Int],
+      count: Int,
+      capacity: Int,
+  ): Int64Column =
+    val in = column.values
+    val srcWords = column.validity.words
+    val out = new Array[Long](capacity)
+    val dstWords = Validity.allocate(capacity)
+    var index = 0
+    while (index < count) {
+      val row = selection(index)
+      if (Validity.isSet(srcWords, row)) then
+        out(index) = in(row)
+        Validity.setBit(dstWords, index)
+      index += 1
+    }
+    Int64Column.of(out, Validity.fromWords(dstWords, capacity), count)
+
+  private def compactFloat64(
+      column: Float64Column,
+      selection: Array[Int],
+      count: Int,
+      capacity: Int,
+  ): Float64Column =
+    val in = column.values
+    val srcWords = column.validity.words
+    val out = new Array[Double](capacity)
+    val dstWords = Validity.allocate(capacity)
+    var index = 0
+    while (index < count) {
+      val row = selection(index)
+      if (Validity.isSet(srcWords, row)) then
+        out(index) = in(row)
+        Validity.setBit(dstWords, index)
+      index += 1
+    }
+    Float64Column.of(out, Validity.fromWords(dstWords, capacity), count)
+
+  private def compactBool(
+      column: BoolColumn,
+      selection: Array[Int],
+      count: Int,
+      capacity: Int,
+  ): BoolColumn =
+    val in = column.values
+    val srcWords = column.validity.words
+    val out = new Array[Byte](capacity)
+    val dstWords = Validity.allocate(capacity)
+    var index = 0
+    while (index < count) {
+      val row = selection(index)
+      if (Validity.isSet(srcWords, row)) then
+        out(index) = if (in(row) != 0) 1.toByte else 0.toByte
+        Validity.setBit(dstWords, index)
+      index += 1
+    }
+    BoolColumn.of(out, Validity.fromWords(dstWords, capacity), count)
+
+  private def publish(batch: ColumnBatch, column: Column, count: Int): ColumnBatch =
+    new ColumnBatch(batch.schema, Vector(column), count)
+
+  private def replace(batch: ColumnBatch, ordinal: Int, column: Column): ColumnBatch =
+    val columns = Vector.tabulate(batch.columns.length) { index =>
+      if (index == ordinal) then column else columnAt(batch, index)
+    }
+    new ColumnBatch(batch.schema, columns, batch.length)
+
+  private def columnAt(batch: ColumnBatch, ordinal: Int): Column =
+    batch.columns.lift(ordinal).getOrElse {
+      throw new IllegalArgumentException(
+        s"ordinal $ordinal outside width ${batch.columns.length}",
+      )
+    }
+
+  private def asInt32(column: Column, ordinal: Int): Int32Column =
+    column match
+      case int32: Int32Column => int32
+      case other =>
+        throw new IllegalArgumentException(
+          s"column $ordinal is ${other.logicalType}, expected Int32",
+        )
+
+  private def asInt64(column: Column, ordinal: Int): Int64Column =
+    column match
+      case int64: Int64Column => int64
+      case other =>
+        throw new IllegalArgumentException(
+          s"column $ordinal is ${other.logicalType}, expected Int64",
+        )
+
+  private def asFloat64(column: Column, ordinal: Int): Float64Column =
+    column match
+      case float64: Float64Column => float64
+      case other =>
+        throw new IllegalArgumentException(
+          s"column $ordinal is ${other.logicalType}, expected Float64",
+        )
+
+  private def asBool(column: Column, ordinal: Int): BoolColumn =
+    column match
+      case bool: BoolColumn => bool
+      case other =>
+        throw new IllegalArgumentException(
+          s"column $ordinal is ${other.logicalType}, expected Bool",
+        )
