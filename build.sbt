@@ -97,6 +97,13 @@ lazy val `sparklet-execution` = (project in file("modules/sparklet-execution"))
   )
   .dependsOn(`sparklet-api`, `sparklet-core`, `sparklet-runtime`)
 
+// Column batches. No dependency on the logical plan or the row executor.
+lazy val `sparklet-columnar` = (project in file("modules/sparklet-columnar"))
+  .settings(
+    name := "sparklet-columnar",
+    commonSettings
+  )
+
 // Test module aggregating all tests
 lazy val `sparklet-tests` = (project in file("modules/sparklet-tests"))
   .settings(
@@ -104,7 +111,7 @@ lazy val `sparklet-tests` = (project in file("modules/sparklet-tests"))
     commonSettings,
     libraryDependencies ++= Seq(scalatest % Test, ceTesting % Test)
   )
-  .dependsOn(`sparklet-api`, `sparklet-execution`, `sparklet-runtime`)
+  .dependsOn(`sparklet-api`, `sparklet-execution`, `sparklet-runtime`, `sparklet-columnar`)
 
 // Root aggregator
 lazy val root = (project in file("."))
@@ -113,6 +120,7 @@ lazy val root = (project in file("."))
     `sparklet-core`,
     `sparklet-runtime`,
     `sparklet-execution`,
+    `sparklet-columnar`,
     `sparklet-tests`
   )
   .settings(

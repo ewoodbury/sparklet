@@ -12,10 +12,12 @@ split, and type erasure confined to named boundaries.
 | `sparklet-core` | `Plan` ADT, `PlanWide`, `Partition`, `SparkletConf`, `ExecutionService` SPI, IDs. |
 | `sparklet-execution` | The compiler and runtime: `StageBuilder`, `Stage`, `Operation`/`WideOp`, `DAGScheduler`, `ExecutionPlanner`, `StageExecutor`, `ShuffleHandler`, `JoinExecutor`, `Task`. |
 | `sparklet-runtime` | Execution SPIs (`TaskScheduler`, `ShuffleService`, `Partitioner`, `BroadcastService`) and local in-memory implementations. |
+| `sparklet-columnar` | Primitive column batches and encoders. Execution does not call it yet. |
 | `sparklet-tests` | Aggregated ScalaTest suite (sequential by design; see Testing notes). |
 
-Dependency direction: `api -> core`; `execution -> api, core, runtime`; `runtime -> core`. The
-logical layer cannot name physical types — the split is enforced by the build.
+Dependency direction: `api -> core`; `execution -> api, core, runtime`; `runtime -> core`;
+`columnar` depends on nothing. The logical layer cannot name physical types — the split is
+enforced by the build.
 
 ## Logical vs physical
 
