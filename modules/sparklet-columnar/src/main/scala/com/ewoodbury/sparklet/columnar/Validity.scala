@@ -1,5 +1,7 @@
 package com.ewoodbury.sparklet.columnar
 
+import java.util.Arrays
+
 /**
  * Presence bits for a column. Bit 0 of word 0 is row 0. A set bit means the value is present; a
  * clear bit means null. The payload array is not consulted for a null row.
@@ -19,7 +21,7 @@ object Validity:
   def allValid(capacity: Int): Validity =
     require(capacity >= 0, s"capacity must be >= 0, got $capacity")
     val words = new Array[Long](wordCount(capacity))
-    java.util.Arrays.fill(words, -1L)
+    Arrays.fill(words, -1L)
     val tail = capacity & 63
     if (tail != 0) then words(words.length - 1) = (1L << tail) - 1L
     new Validity(words, capacity)
