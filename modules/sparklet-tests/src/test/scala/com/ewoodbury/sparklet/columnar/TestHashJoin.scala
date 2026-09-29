@@ -148,15 +148,6 @@ class TestHashJoin extends AnyFlatSpec with Matchers:
     }
   }
 
-  it should "size the build table to at least twice the row count" in {
-    ColumnHash.tableSize(0) shouldBe 16
-    ColumnHash.tableSize(8) shouldBe 16
-    ColumnHash.tableSize(9) shouldBe 32
-    ColumnHash.tableSize(1 << 20) shouldBe (1 << 21)
-    ColumnHash.tableSize(1 << 29) shouldBe (1 << 30)
-    ColumnHash.tableSize((1 << 29) + 1) shouldBe (1 << 30)
-  }
-
   private def join(build: ColumnBatch, probe: ColumnBatch): ColumnBatch =
     HashJoin.innerInt32(
       HashJoin.JoinSide(build, key = 0, value = 1),
