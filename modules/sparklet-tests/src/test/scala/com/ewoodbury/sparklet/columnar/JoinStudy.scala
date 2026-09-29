@@ -33,7 +33,10 @@ object JoinStudy:
     val probe = side(probeRows, buildRows * matchEvery)
     val expected = probeRows.toLong / matchEvery.toLong
     emit(s"join-build$buildRows-probe$probeRows-every$matchEvery", probeRows, expected) {
-      val joined = HashJoin.innerInt32(build, 0, 1, probe, 0, 1)
+      val joined = HashJoin.innerInt32(
+        HashJoin.JoinSide(build, key = 0, value = 1),
+        HashJoin.JoinSide(probe, key = 0, value = 1),
+      )
       joined.length.toLong
     }
 

@@ -17,16 +17,54 @@ class TestHashJoin extends AnyFlatSpec with Matchers:
       .toSeq
       .sorted
 
-    val joined = HashJoin.innerInt32(
+    val joined = join(
       pairs(buildRows.map { case (key, value) => (Some(key), Some(value)) }),
-      0,
-      1,
       pairs(probeRows.map { case (key, value) => (Some(key), Some(value)) }),
-      0,
-      1,
     )
 
-    triples(joined) shouldBe fromEngine
+    sorted(joined) shouldBe fromEngine
+  }
+
+  it should "match the row-path join across collisions and duplicate keys" in {
+    val buildRows = (0 until 3000).map { row =>
+      val key = if (row % 17 == 0) row % 64 else row * 31
+      (key, row)
+    }
+    val probeRows = (0 until 3000).map { row =>
+      val key = if (row % 13 == 0) row % 64 else row * 17
+      (key, -row)
+    }
+    val fromEngine = DistCollection(buildRows, 4)
+      .join(DistCollection(probeRows, 4))
+      .collect()
+      .map { case (key, (buildValue, probeValue)) => (key, Some(buildValue), Some(probeValue)) }
+      .toSeq
+      .sorted
+
+    sorted(
+      join(
+        pairs(buildRows.map { case (key, value) => (Some(key), Some(value)) }),
+        pairs(probeRows.map { case (key, value) => (Some(key), Some(value)) }),
+      ),
+    ) shouldBe fromEngine
+  }
+
+  it should "emit probe order, and newest build rows first within a key" in {
+    val buildRows = Seq(
+      (Some(1), Some(10)),
+      (Some(2), Some(20)),
+      (Some(1), Some(11)),
+      (Some(1), Some(12)),
+    )
+    val probeRows = Seq((Some(2), Some(200)), (Some(1), Some(100)), (Some(2), Some(201)))
+
+    inOrder(join(pairs(buildRows), pairs(probeRows))) shouldBe Seq(
+      (2, Some(20), Some(200)),
+      (1, Some(12), Some(100)),
+      (1, Some(11), Some(100)),
+      (1, Some(10), Some(100)),
+      (2, Some(20), Some(201)),
+    )
   }
 
   it should "preserve null values and drop null keys" in {
@@ -37,7 +75,21 @@ class TestHashJoin extends AnyFlatSpec with Matchers:
       (1, None, None),
       (1, Some(10), None),
     )
-    triples(HashJoin.innerInt32(pairs(buildRows), 0, 1, pairs(probeRows), 0, 1)) shouldBe expected.sorted
+    sorted(join(pairs(buildRows), pairs(probeRows))) shouldBe expected.sorted
+  }
+
+  it should "grow the output and keep value validity past a bitmap word" in {
+    val buildRows = (0 until 80).map { row =>
+      (Some(1), if (row == 9) None else Some(row))
+    }
+    val joined = join(pairs(buildRows), pairs(Seq((Some(1), Some(7)))))
+
+    joined.length shouldBe 80
+    val ordered = inOrder(joined)
+    ordered.map(_._3).distinct shouldBe Seq(Some(7))
+    ordered.map(_._2) shouldBe (79 to 0 by -1).map { row =>
+      if (row == 9) None else Some(row)
+    }
   }
 
   it should "return an empty batch when a side is empty or nothing matches" in {
@@ -45,10 +97,9 @@ class TestHashJoin extends AnyFlatSpec with Matchers:
     val probe = pairs(Seq((Some(2), Some(2))))
     val empty = pairs(Seq.empty)
 
-    HashJoin.innerInt32(empty, 0, 1, build, 0, 1).length shouldBe 0
-    HashJoin.innerInt32(build, 0, 1, empty, 0, 1).length shouldBe 0
-    triples(HashJoin.innerInt32(build, 0, 1, probe, 0, 1)) shouldBe
-      Seq.empty[(Int, Option[Int], Option[Int])]
+    join(empty, build).length shouldBe 0
+    join(build, empty).length shouldBe 0
+    sorted(join(build, probe)) shouldBe Seq.empty[(Int, Option[Int], Option[Int])]
   }
 
   it should "not read past the live length" in {
@@ -67,24 +118,50 @@ class TestHashJoin extends AnyFlatSpec with Matchers:
       1,
     )
 
-    triples(HashJoin.innerInt32(build, 0, 1, probe, 0, 1)).map(_._2) shouldBe Seq(Some(10), Some(11))
+    inOrder(join(build, probe)).map(_._2) shouldBe Seq(Some(11), Some(10))
   }
 
   it should "reject a bad ordinal or a non-int key" in {
     val batch = pairs(Seq((Some(1), Some(1))))
 
-    an[IllegalArgumentException] should be thrownBy HashJoin.innerInt32(batch, 2, 0, batch, 0, 1)
     an[IllegalArgumentException] should be thrownBy {
       HashJoin.innerInt32(
-        new ColumnBatch(Vector(LogicalType.Int64), Vector(Int64Column(Seq(1L))), 1),
-        0,
-        0,
-        batch,
-        0,
-        1,
+        HashJoin.JoinSide(batch, key = 2, value = 0),
+        HashJoin.JoinSide(batch, key = 0, value = 1),
+      )
+    }
+    an[IllegalArgumentException] should be thrownBy {
+      HashJoin.innerInt32(
+        HashJoin.JoinSide(pairs(Seq.empty), key = 2, value = 0),
+        HashJoin.JoinSide(batch, key = 0, value = 1),
+      )
+    }
+    an[IllegalArgumentException] should be thrownBy {
+      HashJoin.innerInt32(
+        HashJoin.JoinSide(
+          new ColumnBatch(Vector(LogicalType.Int64), Vector(Int64Column(Seq(1L))), 1),
+          key = 0,
+          value = 0,
+        ),
+        HashJoin.JoinSide(batch, key = 0, value = 1),
       )
     }
   }
+
+  it should "size the build table to at least twice the row count" in {
+    ColumnHash.tableSize(0) shouldBe 16
+    ColumnHash.tableSize(8) shouldBe 16
+    ColumnHash.tableSize(9) shouldBe 32
+    ColumnHash.tableSize(1 << 20) shouldBe (1 << 21)
+    ColumnHash.tableSize(1 << 29) shouldBe (1 << 30)
+    ColumnHash.tableSize((1 << 29) + 1) shouldBe (1 << 30)
+  }
+
+  private def join(build: ColumnBatch, probe: ColumnBatch): ColumnBatch =
+    HashJoin.innerInt32(
+      HashJoin.JoinSide(build, key = 0, value = 1),
+      HashJoin.JoinSide(probe, key = 0, value = 1),
+    )
 
   private def pairs(rows: Seq[(Option[Int], Option[Int])]): ColumnBatch =
     new ColumnBatch(
@@ -96,16 +173,18 @@ class TestHashJoin extends AnyFlatSpec with Matchers:
       rows.size,
     )
 
-  private def triples(batch: ColumnBatch): Seq[(Int, Option[Int], Option[Int])] =
+  private def sorted(batch: ColumnBatch): Seq[(Int, Option[Int], Option[Int])] =
+    inOrder(batch).sorted
+
+  private def inOrder(batch: ColumnBatch): Seq[(Int, Option[Int], Option[Int])] =
     val keys = int32(batch, 0)
     val buildValues = int32(batch, 1)
     val probeValues = int32(batch, 2)
-    val rows = (0 until batch.length).map { row =>
+    (0 until batch.length).map { row =>
       val buildValue = if (buildValues.isValid(row)) Some(buildValues.values(row)) else None
       val probeValue = if (probeValues.isValid(row)) Some(probeValues.values(row)) else None
       (keys.values(row), buildValue, probeValue)
     }
-    rows.sorted
 
   private def int32(batch: ColumnBatch, ordinal: Int): Int32Column =
     batch.columns.lift(ordinal) match
