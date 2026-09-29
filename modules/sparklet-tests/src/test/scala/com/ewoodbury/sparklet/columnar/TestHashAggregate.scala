@@ -71,10 +71,30 @@ class TestHashAggregate extends AnyFlatSpec with Matchers:
     sums(fused) shouldBe sums(HashAggregate.aggregateInt32(pairs(rows), 0, 1, sumOnly, _ > 0, _ * 10))
   }
 
+  it should "filter a fully dense batch in the sum scan and the measure scan" in {
+    val rows = Seq((Some(1), Some(5)), (Some(1), Some(-1)), (Some(2), Some(3)), (Some(4), Some(-2)))
+    val batch = pairs(rows)
+    val summed = HashAggregate.sumInt32(batch, 0, 1, _ > 0, _ * 10)
+    val filtered = ColumnKernel.filterInt32(batch, 1, _ > 0)
+    val projected = ColumnKernel.projectInt32(filtered, 1, _ * 10)
+
+    sums(summed) shouldBe Map(1 -> Some(50L), 2 -> Some(30L))
+    sums(summed) shouldBe sums(HashAggregate.sumInt32(projected, 0, 1))
+
+    val measured =
+      HashAggregate.aggregateInt32(batch, 0, 1, allMeasures, _ > 0, (value: Int) => value)
+    sums(measured) shouldBe Map(1 -> Some(5L), 2 -> Some(3L))
+    longs(measured, 2) shouldBe Map(1 -> 1L, 2 -> 1L)
+    ints(measured, 3) shouldBe Map(1 -> Some(5), 2 -> Some(3))
+    ints(measured, 4) shouldBe Map(1 -> Some(5), 2 -> Some(3))
+  }
+
   it should "agree with the multi-measure aggregate on sum" in {
     val rows = Seq((Some(1), Some(3)), (Some(1), Some(1)), (Some(1), Some(8)), (Some(4), Some(-2)))
     val batch = pairs(rows)
-    sums(HashAggregate.sumInt32(batch, 0, 1)) shouldBe sums(HashAggregate.aggregateInt32(batch, 0, 1, sumOnly))
+    sums(HashAggregate.sumInt32(batch, 0, 1)) shouldBe sums(
+      HashAggregate.aggregateInt32(batch, 0, 1, allMeasures),
+    )
   }
 
   "measures" should "compute sum, count, min, and max together" in {
