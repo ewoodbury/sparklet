@@ -7,9 +7,9 @@ import com.ewoodbury.sparklet.core.{ExecutionService, Partition, Plan}
 import com.ewoodbury.sparklet.runtime.SparkletRuntime
 
 /**
- * Implementation of ExecutionService that bridges the API to the execution engine. Every plan is
- * compiled into a stage graph and executed through the DAGScheduler; narrow plans simply produce
- * one-stage graphs.
+ * Bridges the API to the execution engine. A bare source returns its partitions. `Int` and
+ * `(Int, Int)` plans that [[ColumnarPlanner]] accepts run on the columnar kernels. Every other
+ * plan is compiled into a stage graph and executed through the DAGScheduler.
  */
 class DefaultExecutionService extends ExecutionService {
 
@@ -22,9 +22,11 @@ class DefaultExecutionService extends ExecutionService {
       s.partitions
 
     case _ =>
-      val rt = SparkletRuntime.get
-      val scheduler = new DAGScheduler[IO](rt.shuffle, rt.scheduler, rt.partitioner)
-      scheduler.executePartitions(plan).unsafeRunSync()
+      ColumnarPlanner.tryRun(plan).getOrElse {
+        val rt = SparkletRuntime.get
+        val scheduler = new DAGScheduler[IO](rt.shuffle, rt.scheduler, rt.partitioner)
+        scheduler.executePartitions(plan).unsafeRunSync()
+      }
   }
 
   def count[A](plan: Plan[A]): Long =

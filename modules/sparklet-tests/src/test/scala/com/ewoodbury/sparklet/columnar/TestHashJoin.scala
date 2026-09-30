@@ -7,7 +7,7 @@ import com.ewoodbury.sparklet.api.DistCollection
 
 class TestHashJoin extends AnyFlatSpec with Matchers:
 
-  "inner join" should "match the row-path join, including duplicate keys" in {
+  "inner join" should "match DistCollection.join, including duplicate keys" in {
     val buildRows = Seq((1, 10), (1, 11), (2, 20), (4, 1), (Int.MinValue, 7), (0, -1))
     val probeRows = Seq((1, 100), (3, 30), (2, 200), (1, 101), (0, 5), (Int.MinValue, 8))
     val fromEngine = DistCollection(buildRows, 4)
@@ -25,7 +25,7 @@ class TestHashJoin extends AnyFlatSpec with Matchers:
     sorted(joined) shouldBe fromEngine
   }
 
-  it should "match the row-path join across collisions and duplicate keys" in {
+  it should "match DistCollection.join across collisions and duplicate keys" in {
     val buildRows = (0 until 3000).map { row =>
       val key = if (row % 17 == 0) row % 64 else row * 31
       (key, row)

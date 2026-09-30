@@ -5,10 +5,12 @@ import java.lang.management.ManagementFactory
 import com.sun.management.ThreadMXBean
 
 import com.ewoodbury.sparklet.api.DistCollection
+import com.ewoodbury.sparklet.core.SparkletConf
 
 /**
  * Profiles the inner hash join. Not a test. The timed region includes the build table and the
- * output batch. Inputs are built beforehand.
+ * output batch. Inputs are built beforehand. The DistCollection join sample opts out of columnar
+ * execution.
  *
  * {{{
  * sbt "sparklet-tests/Test/runMain com.ewoodbury.sparklet.columnar.JoinStudy"
@@ -21,6 +23,7 @@ object JoinStudy:
   private val measure = 5
 
   def main(args: Array[String]): Unit =
+    SparkletConf.set(SparkletConf.get.copy(columnarExecution = false))
     threadBean.foreach(_.setThreadAllocatedMemoryEnabled(true))
     println("hash join study warmup=3 measure=5")
     kernel(buildRows = 50000, probeRows = 50000, matchEvery = 1)
