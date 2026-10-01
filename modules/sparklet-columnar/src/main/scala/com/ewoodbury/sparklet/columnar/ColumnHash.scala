@@ -23,6 +23,23 @@ private[columnar] object ColumnHash:
     val second = (first ^ (first >>> 15)) * 0x846ca68b
     second ^ (second >>> 16)
 
+  /** Every live row is present, and the bitmap has no spare capacity past `length`. */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  def fullyPresent(column: Column): Boolean =
+    val live = column.length
+    if (live != column.validity.capacity) then false
+    else
+      val words = column.validity.words
+      val fullWords = live >>> 6
+      var index = 0
+      var dense = true
+      while (index < fullWords && dense) {
+        if (words(index) != -1L) then dense = false
+        index += 1
+      }
+      val tail = live & 63
+      if (dense && tail != 0) then words(fullWords) == (1L << tail) - 1L else dense
+
   def int32At(batch: ColumnBatch, ordinal: Int): Int32Column =
     asInt32(columnAt(batch, ordinal), ordinal)
 
