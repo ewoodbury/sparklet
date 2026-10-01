@@ -3,10 +3,10 @@ package com.ewoodbury.sparklet.columnar
 /**
  * Hash reduce over `Int32` keys and `Int32` values.
  *
- * The binary operator is the caller's. It is applied as values are inserted, including when a
- * partial group is merged after the exchange, so it has to be associative and commutative.
- * Arithmetic wraps at `Int`. This is the `DistCollection.reduceByKey` kernel. Grouped sums that
- * must not wrap use [[HashAggregate.sumInt32]] and [[HashAggregate.sumInt64]] instead.
+ * The binary operator is the caller's. It is applied as values are inserted, including when
+ * partial groups are merged, so it has to be associative and commutative. Arithmetic wraps at
+ * `Int`. This is the `DistCollection.reduceByKey` kernel. Grouped sums that must not wrap use
+ * [[HashAggregate.sumInt32]] and [[HashAggregate.sumInt64]] instead.
  *
  * Null keys are dropped. A null value is dropped and does not create a group. Output order is
  * first-seen order inside the batch. The table is at least twice the row count, so one batch does
@@ -31,8 +31,8 @@ object HashReduce:
     else reduce(keys, values, op)
 
   /**
-   * Partial-reduce each morsel, exchange on the key, then reduce each bucket. An empty input is
-   * `numPartitions` empty pair batches.
+   * Partial-reduce each morsel, merge those partials per input batch, exchange on the key, then
+   * reduce each bucket. An empty input is `numPartitions` empty pair batches.
    */
   def byKey(
       batches: Vector[ColumnBatch],
@@ -46,11 +46,14 @@ object HashReduce:
     require(batchSize > 0, s"batch size must be positive, got $batchSize")
     if (batches.isEmpty) then Vector.fill(numPartitions)(emptyPairs)
     else
-      val morsels = batches.flatMap(batch => ColumnBatches.slice(batch, batchSize))
-      val partials = MorselScheduler.map(morsels, parallelism) { (_, batch) =>
-        int32(batch, keyOrdinal = 0, valueOrdinal = 1, op)
-      }
-      val buckets = HashExchange.partitionAll(partials, keyOrdinal = 0, numPartitions, parallelism)
+      val combined = PartialCombine.perBatch(
+        batches,
+        batchSize,
+        parallelism,
+        morsel => int32(morsel, keyOrdinal = 0, valueOrdinal = 1, op),
+        partials => int32(partials, keyOrdinal = 0, valueOrdinal = 1, op),
+      )
+      val buckets = HashExchange.partitionAll(combined, keyOrdinal = 0, numPartitions, parallelism)
       MorselScheduler.map(buckets, parallelism) { (_, bucket) =>
         int32(bucket, keyOrdinal = 0, valueOrdinal = 1, op)
       }
