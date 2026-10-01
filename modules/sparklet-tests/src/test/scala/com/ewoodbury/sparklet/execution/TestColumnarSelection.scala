@@ -162,6 +162,35 @@ class TestColumnarSelection extends AnyFlatSpec with Matchers with BeforeAndAfte
     assertHashed(build.join(probe))
   }
 
+  "columnar path" should "match the row path on filter, map, reduceByKey, join, and filterKeys" in {
+    val ints = Seq(1, 2, 3, 4, 5, 6)
+    val pairs = Seq(1 -> 10, 2 -> 20, 1 -> 3, 4 -> 1, 2 -> 5)
+    val build = Seq(1 -> 10, 1 -> 11, 2 -> 20, 4 -> 1)
+    val probe = Seq(1 -> 100, 2 -> 200, 3 -> 30, 1 -> 101)
+
+    def run[A](flag: Boolean)(body: => A): A =
+      SparkletRuntime.get.shuffle.clear()
+      SparkletConf.set(originalConf.copy(columnarExecution = flag))
+      body
+
+    run(true)(DistCollection(ints, 2).filter(_ % 2 == 0).collect()) shouldBe
+      run(false)(DistCollection(ints, 2).filter(_ % 2 == 0).collect())
+    run(true)(DistCollection(ints, 2).map(_ * 2).filter(_ > 5).collect()) shouldBe
+      run(false)(DistCollection(ints, 2).map(_ * 2).filter(_ > 5).collect())
+    run(true)(DistCollection(pairs, 3).reduceByKey[Int, Int](_ + _).collect().toMap) shouldBe
+      run(false)(DistCollection(pairs, 3).reduceByKey[Int, Int](_ + _).collect().toMap)
+    run(true)(DistCollection(pairs, 2).filterKeys[Int, Int](_ % 2 == 0).collect()) shouldBe
+      run(false)(DistCollection(pairs, 2).filterKeys[Int, Int](_ % 2 == 0).collect())
+
+    val columnarJoin = run(true) {
+      DistCollection(build, 2).join(DistCollection(probe, 2)).collect().toSeq.sorted
+    }
+    val rowJoin = run(false) {
+      DistCollection(build, 2).join(DistCollection(probe, 2)).collect().toSeq.sorted
+    }
+    columnarJoin shouldBe rowJoin
+  }
+
   "columnarExecution" should "force the row path when it is false" in {
     SparkletConf.set(SparkletConf.get.copy(columnarExecution = false))
     val filtered = DistCollection(Seq(1, 2, 3, 4), 2).filter(_ % 2 == 0)

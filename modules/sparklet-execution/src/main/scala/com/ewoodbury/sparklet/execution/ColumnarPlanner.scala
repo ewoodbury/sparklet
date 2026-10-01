@@ -140,6 +140,7 @@ object ColumnarPlanner:
           })
         case Columns.Pairs(parts) =>
           val keep = predicate.asInstanceOf[((Int, Int)) => Boolean]
+          // `keep` is `(Int, Int) => Boolean`, so the pair is boxed for the call.
           Columns.Pairs(onEach(parts) { batch =>
             PairKernel.filter(batch, (key, value) => keep((key, value)))
           })
@@ -216,12 +217,12 @@ object ColumnarPlanner:
 
   private def encodeInts(partitions: Seq[Partition[_]]): Vector[ColumnBatch] =
     partitions.map { partition =>
-      BatchCodec.ints(partition.data.asInstanceOf[Iterable[Int]].toSeq)
+      BatchCodec.ints(partition.data.asInstanceOf[Iterable[Int]])
     }.toVector
 
   private def encodePairs(partitions: Seq[Partition[_]]): Vector[ColumnBatch] =
     partitions.map { partition =>
-      BatchCodec.intPairs(partition.data.asInstanceOf[Iterable[(Int, Int)]].toSeq)
+      BatchCodec.intPairs(partition.data.asInstanceOf[Iterable[(Int, Int)]])
     }.toVector
 
   private def decode(columns: Columns): Seq[Partition[_]] = columns match
@@ -230,22 +231,7 @@ object ColumnarPlanner:
     case Columns.Pairs(parts) =>
       parts.map(batch => Partition(BatchCodec.decodeIntPairs(batch)))
     case Columns.Triples(parts) =>
-      parts.map(batch => Partition(decodeTriples(batch)))
-
-  private def decodeTriples(batch: ColumnBatch): Seq[(Int, (Int, Int))] =
-    (batch.columns.lift(0), batch.columns.lift(1), batch.columns.lift(2)) match
-      case (Some(keys: Int32Column), Some(build: Int32Column), Some(probe: Int32Column)) =>
-        Seq.tabulate(batch.length) { row =>
-          require(
-            keys.isValid(row) && build.isValid(row) && probe.isValid(row),
-            s"null join value at row $row",
-          )
-          (keys.values(row), (build.values(row), probe.values(row)))
-        }
-      case _ =>
-        throw new IllegalArgumentException(
-          s"join output is not three Int32 columns: ${batch.schema}",
-        )
+      parts.map(batch => Partition(BatchCodec.decodeIntTriples(batch)))
 
   private def batchSize: Int =
     val size = SparkletConf.get.columnarBatchSize

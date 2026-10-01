@@ -57,7 +57,8 @@ object HashReduce:
 
   private def reduce(keys: Int32Column, values: Int32Column, op: IntBinOp): ColumnBatch =
     val table = new Table(ColumnHash.tableSize(keys.length), op)
-    if (fullyPresent(keys) && fullyPresent(values)) then table.scanDense(keys, values)
+    if (ColumnHash.fullyPresent(keys) && ColumnHash.fullyPresent(values)) then
+      table.scanDense(keys, values)
     else table.scanSparse(keys, values)
     table.compact()
 
@@ -65,21 +66,6 @@ object HashReduce:
     val keys = Int32Column.of(Array.emptyIntArray, Validity.allValid(0), 0)
     val values = Int32Column.of(Array.emptyIntArray, Validity.allValid(0), 0)
     new ColumnBatch(Vector(LogicalType.Int32, LogicalType.Int32), Vector(keys, values), 0)
-
-  private def fullyPresent(column: Column): Boolean =
-    val live = column.length
-    if (live != column.validity.capacity) then false
-    else
-      val words = column.validity.words
-      val fullWords = live >>> 6
-      var index = 0
-      var dense = true
-      while (index < fullWords && dense) {
-        if (words(index) != -1L) then dense = false
-        index += 1
-      }
-      val tail = live & 63
-      if (dense && tail != 0) then words(fullWords) == (1L << tail) - 1L else dense
 
   private final class Table(capacity: Int, op: IntBinOp):
     private val mask: Int = capacity - 1
