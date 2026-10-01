@@ -74,7 +74,8 @@ object HashAggregate:
     if (keys.length == 0) then emptySum
     else
       val table = new GroupTable(ColumnHash.tableSize(keys.length), SumOnly)
-      if (fullyPresent(keys) && fullyPresent(values)) then scanSumLongDense(table, keys, values)
+      if (ColumnHash.fullyPresent(keys) && ColumnHash.fullyPresent(values)) then
+        scanSumLongDense(table, keys, values)
       else scanSumLongSparse(table, keys, values)
       table.compact()
 
@@ -162,7 +163,7 @@ object HashAggregate:
     if (keys.length == 0) then emptySum
     else
       val table = new GroupTable(capacity, SumOnly)
-      if (fullyPresent(keys) && fullyPresent(values)) then
+      if (ColumnHash.fullyPresent(keys) && ColumnHash.fullyPresent(values)) then
         if (filtered) then scanSumDenseFiltered(table, keys, values, keep, map)
         else scanSumDense(table, keys, values)
       else scanSumSparse(table, keys, values, filtered, keep, map)
@@ -185,7 +186,7 @@ object HashAggregate:
       if (keys.length == 0) then empty(schema(aggs))
       else
         val table = new GroupTable(capacity, aggs)
-        if (fullyPresent(keys) && fullyPresent(values)) then
+        if (ColumnHash.fullyPresent(keys) && ColumnHash.fullyPresent(values)) then
           if (filtered) then scanMeasureDenseFiltered(table, keys, values, keep, map)
           else scanMeasureDense(table, keys, values)
         else scanMeasureSparse(table, keys, values, filtered, keep, map)
@@ -481,21 +482,6 @@ object HashAggregate:
         slots = Arrays.copyOf(slots, grown)
       slots(occupied) = slot
       occupied += 1
-
-  private def fullyPresent(column: Column): Boolean =
-    val live = column.length
-    if (live != column.validity.capacity) then false
-    else
-      val words = column.validity.words
-      val fullWords = live >>> 6
-      var index = 0
-      var dense = true
-      while (index < fullWords && dense) {
-        if (words(index) != -1L) then dense = false
-        index += 1
-      }
-      val tail = live & 63
-      if (dense && tail != 0) then words(fullWords) == (1L << tail) - 1L else dense
 
   private def emptySum: ColumnBatch =
     empty(Vector(LogicalType.Int32, LogicalType.Int64))

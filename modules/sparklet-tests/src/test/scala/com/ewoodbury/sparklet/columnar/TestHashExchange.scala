@@ -19,6 +19,32 @@ class TestHashExchange extends AnyFlatSpec with Matchers:
     )
   }
 
+  it should "round-trip nulls across a word boundary and unused capacity" in {
+    val live = 200
+    val capacity = 256
+    val values = Array.tabulate(capacity)(identity)
+    // Bits past `live` are clear. A shift that pulls them in turns a present row into null.
+    val validity = Validity.pack(capacity, row => row < live && row % 7 != 0)
+    val column = Int32Column.of(values, validity, live)
+    val batch = new ColumnBatch(Vector(LogicalType.Int32), Vector(column), live)
+    val expected = (0 until live).map { row =>
+      if (row % 7 == 0) None else Some(row)
+    }
+
+    val sliced = ColumnBatches.slice(batch, batchSize = 70)
+    BatchCodec.decodeNullableInts(ColumnBatches.concat(sliced)) shouldBe expected
+
+    val short = BatchCodec.nullableInts(expected.take(3))
+    val restValues = Array.tabulate(live - 3)(row => row + 3)
+    val restValidity = Validity.pack(live - 3, row => (row + 3) % 7 != 0)
+    val rest = new ColumnBatch(
+      Vector(LogicalType.Int32),
+      Vector(Int32Column.of(restValues, restValidity, live - 3)),
+      live - 3,
+    )
+    BatchCodec.decodeNullableInts(ColumnBatches.concat(Vector(short, rest))) shouldBe expected
+  }
+
   it should "keep a batch that already fits" in {
     val batch = BatchCodec.ints(Seq(1, 2, 3))
 

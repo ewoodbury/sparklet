@@ -15,7 +15,26 @@ class TestColumnPipeline extends AnyFlatSpec with Matchers:
     val once = sums(runSum(batches, parallelism = 1))
     val parallel = sums(runSum(batches, parallelism = 4))
 
-    once shouldBe Map(1 -> 4000000000L, 2 -> 9L, 3 -> 1L, Int.MinValue -> -1L)
+    once shouldBe Map(
+      1 -> Some(4000000000L),
+      2 -> Some(9L),
+      3 -> Some(1L),
+      Int.MinValue -> Some(-1L),
+    )
+    parallel shouldBe once
+  }
+
+  it should "keep a valued partial beside a null partial, and a null sum when every partial is null" in {
+    val batches = Vector(
+      BatchCodec.nullableIntPairs(Seq((Some(1), Some(7)), (Some(2), None))),
+      BatchCodec.nullableIntPairs(Seq((Some(1), None), (Some(2), None), (Some(5), None))),
+      BatchCodec.nullableIntPairs(Seq((Some(5), Some(9)), (Some(3), Some(4)))),
+    )
+
+    val once = sums(runSum(batches, parallelism = 1), requireValues = false)
+    val parallel = sums(runSum(batches, parallelism = 4), requireValues = false)
+
+    once shouldBe Map(1 -> Some(7L), 2 -> None, 5 -> Some(9L), 3 -> Some(4L))
     parallel shouldBe once
   }
 
@@ -25,7 +44,7 @@ class TestColumnPipeline extends AnyFlatSpec with Matchers:
 
     parts.length shouldBe 4
     parts.map(_.length).sum shouldBe 1
-    sums(parts) shouldBe Map(1 -> 5L)
+    sums(parts) shouldBe Map(1 -> Some(5L))
   }
 
   "inner join" should "match one batch join after the exchange" in {
@@ -85,13 +104,18 @@ class TestColumnPipeline extends AnyFlatSpec with Matchers:
       batchSize = 2,
     )
 
-  private def sums(batches: Vector[ColumnBatch]): Map[Int, Long] =
+  private def sums(
+      batches: Vector[ColumnBatch],
+      requireValues: Boolean = true,
+  ): Map[Int, Option[Long]] =
     batches.flatMap { batch =>
       val keys = int32(batch, 0)
       val values = int64(batch, 1)
       (0 until batch.length).map { row =>
-        require(keys.isValid(row) && values.isValid(row))
-        keys.values(row) -> values.values(row)
+        require(keys.isValid(row))
+        if (requireValues) then require(values.isValid(row))
+        val value = if (values.isValid(row)) Some(values.values(row)) else None
+        keys.values(row) -> value
       }
     }.toMap
 

@@ -4,14 +4,13 @@ import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.atomic.AtomicReference
 
 import scala.annotation.tailrec
-import scala.util.control.NonFatal
 
 /**
  * Runs one worker per morsel. Each thread takes indexes from its own deque and steals from the
  * others, so one long morsel does not keep the rest of the queue behind it.
  *
- * Results line up with `morsels`. A worker exception fails the call. `parallelism` of `1` runs on
- * the calling thread.
+ * Results line up with `morsels`. A worker failure, including an `Error`, fails the call with that
+ * throwable. `parallelism` of `1` runs on the calling thread.
  */
 object MorselScheduler:
 
@@ -64,7 +63,7 @@ object MorselScheduler:
             throw new IllegalArgumentException(s"missing morsel $index")
           }
           try slots(index).set(Some(worker(index, batch)))
-          catch case NonFatal(thrown) => failure.compareAndSet(None, Some(thrown))
+          catch case thrown: Throwable => failure.compareAndSet(None, Some(thrown))
           drain(id, deques, slots, failure, morsels, worker)
 
   private def take(

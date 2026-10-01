@@ -143,8 +143,47 @@ object ColumnBatches:
       intoStart: Int,
       length: Int,
   ): Unit =
-    var row = 0
-    while (row < length) {
-      if (Validity.isSet(from.words, fromStart + row)) then Validity.setBit(into, intoStart + row)
-      row += 1
+    var src = fromStart
+    var dst = intoStart
+    var remaining = length
+    val dstShift = dst & 63
+    if (dstShift != 0 && remaining > 0) then
+      val head = math.min(64 - dstShift, remaining)
+      orBits(into, dst, readBits(from.words, src, head))
+      src += head
+      dst += head
+      remaining -= head
+    while (remaining >= 64) {
+      orBits(into, dst, readBits(from.words, src, 64))
+      src += 64
+      dst += 64
+      remaining -= 64
     }
+    if (remaining > 0) then orBits(into, dst, readBits(from.words, src, remaining))
+
+  /**
+   * `width` is 1 to 64. A full word is the source word itself: `1L << 64` is masked to a 1-bit
+   * shift, so it is not a 64-bit mask.
+   */
+  private def readBits(words: Array[Long], bit: Int, width: Int): Long =
+    val wordIndex = bit >>> 6
+    val shift = bit & 63
+    if (shift == 0) then
+      if (width == 64) then words(wordIndex)
+      else words(wordIndex) & ((1L << width) - 1L)
+    else
+      val low = words(wordIndex) >>> shift
+      val lowWidth = 64 - shift
+      if (width <= lowWidth) then low & ((1L << width) - 1L)
+      else
+        val highWidth = width - lowWidth
+        val high = words(wordIndex + 1) & ((1L << highWidth) - 1L)
+        low | (high << lowWidth)
+
+  /**
+   * `chunk` holds `width` low bits, and `bit` starts far enough from the next word to fit them.
+   */
+  private def orBits(words: Array[Long], bit: Int, chunk: Long): Unit =
+    val wordIndex = bit >>> 6
+    val shift = bit & 63
+    words(wordIndex) = words(wordIndex) | (chunk << shift)

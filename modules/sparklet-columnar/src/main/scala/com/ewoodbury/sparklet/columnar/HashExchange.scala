@@ -19,7 +19,7 @@ object HashExchange:
     require(numPartitions > 0, s"numPartitions must be positive, got $numPartitions")
     val keys = ColumnHash.int32At(batch, keyOrdinal)
     val rows = batch.length
-    if (numPartitions == 1 && fullyPresent(keys)) then Vector(batch)
+    if (numPartitions == 1 && ColumnHash.fullyPresent(keys)) then Vector(batch)
     else
       val dest = new Array[Int](rows)
       val counts = new Array[Int](numPartitions)
@@ -62,21 +62,6 @@ object HashExchange:
     buckets.lift(part).getOrElse {
       throw new IllegalArgumentException(s"missing partition $part")
     }
-
-  private def fullyPresent(column: Int32Column): Boolean =
-    val live = column.length
-    if (live != column.validity.capacity) then false
-    else
-      val words = column.validity.words
-      val fullWords = live >>> 6
-      var index = 0
-      var dense = true
-      while (index < fullWords && dense) {
-        if (words(index) != -1L) then dense = false
-        index += 1
-      }
-      val tail = live & 63
-      if (dense && tail != 0) then words(fullWords) == (1L << tail) - 1L else dense
 
   private def scatter(column: Column, dest: Array[Int], counts: Array[Int]): Vector[Column] =
     column match
