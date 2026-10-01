@@ -34,6 +34,36 @@ class TestColumnBatch extends AnyFlatSpec with Matchers:
     BatchCodec.decodeNullableIntPairs(BatchCodec.nullableIntPairs(pairs)) shouldBe pairs
   }
 
+  it should "decode join triples and reject a null without turning it into zero" in {
+    val live = 70
+    val keys = Int32Column.of(Array.tabulate(live + 4)(identity), Validity.allValid(live + 4), live)
+    val build = Int32Column(0 until live)
+    val probe = Int32Column(0 until live)
+    val dense = new ColumnBatch(
+      Vector(LogicalType.Int32, LogicalType.Int32, LogicalType.Int32),
+      Vector(keys, build, probe),
+      live,
+    )
+    val decoded = BatchCodec.decodeIntTriples(dense)
+    decoded.length shouldBe live
+    decoded.lift(65).getOrElse(fail("missing row 65")) shouldBe ((65, (65, 65)))
+
+    val nullBuild = Int32Column.of(
+      Array.tabulate(live)(identity),
+      Validity.pack(live, row => row != 65),
+      live,
+    )
+    val sparse = new ColumnBatch(
+      Vector(LogicalType.Int32, LogicalType.Int32, LogicalType.Int32),
+      Vector(Int32Column(0 until live), nullBuild, Int32Column(0 until live)),
+      live,
+    )
+    val thrown = intercept[IllegalArgumentException] {
+      BatchCodec.decodeIntTriples(sparse)
+    }
+    thrown.getMessage shouldBe "null join value at row 65"
+  }
+
   it should "store zero in a null slot and reject a non-null decode" in {
     val column = Int32Column.fromNullable(Seq(Some(4), None))
     column.isValid(0) shouldBe true

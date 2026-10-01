@@ -32,6 +32,10 @@ final case class SparkletConf(
     baseRetryDelayMs: Long = 1000L,
     /** Maximum backoff delay to prevent excessive waits */
     maxRetryDelayMs: Long = 30000L,
+    /** When true, `Int` and `(Int, Int)` plans run on the columnar kernels. */
+    columnarExecution: Boolean = true,
+    /** Rows per morsel on the columnar path. */
+    columnarBatchSize: Int = 8192,
 ):
 
   /** Builds the task retry policy from this configuration. */

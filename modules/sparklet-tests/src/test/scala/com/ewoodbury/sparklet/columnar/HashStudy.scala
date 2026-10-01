@@ -5,12 +5,14 @@ import java.lang.management.ManagementFactory
 import com.sun.management.ThreadMXBean
 
 import com.ewoodbury.sparklet.api.DistCollection
+import com.ewoodbury.sparklet.core.SparkletConf
 
 /**
  * Profiles one-batch hash aggregation. Not a test.
  *
  * The timed region includes the hash table allocation and the checksum of the groups. Inputs are
- * built beforehand. `fused` applies `value > 0` and `value * 2` inside the aggregate scan. `staged`
+ * built beforehand. The DistCollection `reduceByKey` sample opts out of columnar execution.
+ * `fused` applies `value > 0` and `value * 2` inside the aggregate scan. `staged`
  * does that with `ColumnKernel` and then sums.
  *
  * {{{
@@ -30,6 +32,7 @@ object HashStudy:
     def apply(value: Int): Int = value * 2
 
   def main(args: Array[String]): Unit =
+    SparkletConf.set(SparkletConf.get.copy(columnarExecution = false))
     threadBean.foreach(_.setThreadAllocatedMemoryEnabled(true))
     println("hash aggregate study warmup=3 measure=7")
     val rows = 1000000
