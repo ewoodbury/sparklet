@@ -1,8 +1,8 @@
 # Architecture
 
 Sparklet is a data processing engine inspired by Spark, written in pure functional Scala 3. This
-document describes the system as it exists today: one execution path, a clean logical/physical
-split, and type erasure confined to named boundaries.
+document describes the system as it exists today: a row path and a columnar path for `Int` and
+`(Int, Int)`, a clean logical/physical split, and type erasure confined to named boundaries.
 
 ## Module layout
 
@@ -12,10 +12,10 @@ split, and type erasure confined to named boundaries.
 | `sparklet-core` | `Plan` ADT, `PlanWide`, `Partition`, `SparkletConf`, `ExecutionService` SPI, IDs. |
 | `sparklet-execution` | The compiler and runtime: `StageBuilder`, `Stage`, `Operation`/`WideOp`, `DAGScheduler`, `ExecutionPlanner`, `StageExecutor`, `ShuffleHandler`, `JoinExecutor`, `Task`. |
 | `sparklet-runtime` | Execution SPIs (`TaskScheduler`, `ShuffleService`, `Partitioner`, `BroadcastService`) and local in-memory implementations. |
-| `sparklet-columnar` | Primitive column batches and encoders. Execution does not call it yet. |
+| `sparklet-columnar` | Column batches, vector kernels, hash aggregate and join, and a local hash exchange. |
 | `sparklet-tests` | Aggregated ScalaTest suite (sequential by design; see Testing notes). |
 
-Dependency direction: `api -> core`; `execution -> api, core, runtime`; `runtime -> core`;
+Dependency direction: `api -> core`; `execution -> api, core, runtime, columnar`; `runtime -> core`;
 `columnar` depends on nothing. The logical layer cannot name physical types — the split is
 enforced by the build.
 
@@ -32,24 +32,34 @@ Two vocabularies, separated at the module level:
 The rule: `Plan` is legal in the compiler (`StageBuilder` reads it to compile), illegal in the
 executor (`StageExecutor`/`ShuffleHandler`/`ExecutionPlanner` dispatch only on `WideOp`).
 
-## The execution path (the only one)
+## The execution path
 
 ```text
 DistCollection action
   -> ExecutionService (SPI, registered by the execution module)
   -> DefaultExecutionService
-  -> DAGScheduler.executePartitions
-  -> StageBuilder.buildStageGraph        (plan -> stage graph)
-  -> TopologicalSort                     (execution order)
-  -> ExecutionPlanner.runStages          (per stage:)
-       StageExecutor.getInputPartitions  (SourceInput | StageOutput | ShuffleInput)
-       StageExecutor.executeStage        (WideOp dispatch; one task per partition via TaskScheduler)
-       ExecutionPlanner.writeShuffleIfNeeded (ShuffleWriteReason decides the write shape)
-  -> final stage partitions, flattened only at the action boundary
+       bare Plan.Source: return its partitions
+       ColumnarPlanner.tryRun for an encodable Int or (Int, Int) plan
+       otherwise DAGScheduler.executePartitions
+            -> StageBuilder.buildStageGraph
+            -> TopologicalSort
+            -> ExecutionPlanner.runStages
+                 StageExecutor.getInputPartitions
+                 StageExecutor.executeStage
+                 ExecutionPlanner.writeShuffleIfNeeded
+  -> final partitions, flattened only at the action boundary
 ```
 
-A bare `Plan.Source` short-circuits to its partitions (no tasks needed for identity work).
-Narrow-only plans compile to a one-stage graph and flow through the same path as wide plans.
+A bare `Plan.Source` short-circuits to its partitions. `ColumnarPlanner` runs filter, map,
+filterKeys, filterValues, reduceByKey, and inner join when the values it sees are `Int` or
+`(Int, Int)` and `SparkletConf.columnarExecution` is true (the default). Any other node keeps
+the whole plan on the row path. Narrow columnar ops keep input order and the input partition
+count. `reduceByKey` and `join` hash with `floorMod` into `defaultShufflePartitions`.
+`columnarBatchSize` (default 8192) is the morsel width. Set `columnarExecution` false to force
+the row path.
+
+On the row path, narrow-only plans compile to a one-stage graph and flow through the same path
+as wide plans.
 
 ## Compilation: stages and fusion
 
@@ -65,7 +75,9 @@ Narrow-only plans compile to a one-stage graph and flow through the same path as
   of creating a shuffle stage. Example: `partitionBy(4)` then `groupByKey` (default 4) is a local
   group. Bypass reads distribution, not layout: keyed ops require `Distribution.Hash` at the
   target width; `repartition` skips a shuffle for any other distribution with that width.
-- `PartitioningInfo` is distribution, ordering, and layout. This path emits `Layout.BoxedRows`.
+- `PartitioningInfo` is distribution, ordering, and layout. The row path emits `Layout.BoxedRows`.
+  `ColumnarPlanner.partitioning` reports `Layout.Columnar` for a plan it can run, and `None`
+  otherwise.
   Sources are `Unknown(width)`. Keyed shuffles are `Hash`. `sortBy` is `Range` plus `Sorted`;
   `map`, `flatMap`, and `mapPartitions` drop both. A repartition or coalesce shuffle is also
   `Unknown`: the writer hashes the element, which is not pair-key hash and not round-robin. A
@@ -95,8 +107,8 @@ Policy (compiler-enforced — `Wart.AsInstanceOf` and `Wart.Any` are errors):
 - Casts live only at named erasure boundaries, each with a suppression and a comment explaining
   why the cast is safe: `Operation.fromPlan`, `DistCollection.kvPlan`,
   `StageBuilder`/`StageExecutor`/`JoinExecutor`/`ShuffleHandler` (file-level, documented),
-  `Task.BroadcastHashJoinTask`, `DAGScheduler.executePartitions`, and the storage
-  implementations (`LocalShuffleService`, `LocalBroadcastService`).
+  `Task.BroadcastHashJoinTask`, `DAGScheduler.executePartitions`, `ColumnarPlanner`, and the
+  storage implementations (`LocalShuffleService`, `LocalBroadcastService`).
 - No new cast sites outside these boundaries without a suppression and a justification.
 
 ## Runtime SPIs

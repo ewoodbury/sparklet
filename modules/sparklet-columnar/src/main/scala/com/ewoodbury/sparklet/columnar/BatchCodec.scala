@@ -3,9 +3,18 @@ package com.ewoodbury.sparklet.columnar
 /** Encode Scala sequences into batches, and read those batches back. */
 object BatchCodec:
 
-  def ints(values: Seq[Int]): ColumnBatch =
-    val column = Int32Column(values)
-    batch(column)
+  /** One array fill. `size` then the iterator, so a `Seq` is not copied twice. */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  def ints(values: Iterable[Int]): ColumnBatch =
+    val n = values.size
+    val buffer = new Array[Int](n)
+    val iterator = values.iterator
+    var row = 0
+    while (row < n) {
+      buffer(row) = iterator.next()
+      row += 1
+    }
+    batch(Int32Column.of(buffer, Validity.allValid(n), n))
 
   def nullableInts(values: Seq[Option[Int]]): ColumnBatch =
     batch(Int32Column.fromNullable(values))
@@ -28,13 +37,19 @@ object BatchCodec:
   def nullableBools(values: Seq[Option[Boolean]]): ColumnBatch =
     batch(BoolColumn.fromNullable(values))
 
-  def intPairs(values: Seq[(Int, Int)]): ColumnBatch =
+  /** One fill of each column. `size` then the iterator, so a `Seq` is not copied twice. */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  def intPairs(values: Iterable[(Int, Int)]): ColumnBatch =
     val n = values.size
     val leftValues = new Array[Int](n)
     val rightValues = new Array[Int](n)
-    values.iterator.zipWithIndex.foreach { (pair, row) =>
+    val iterator = values.iterator
+    var row = 0
+    while (row < n) {
+      val pair = iterator.next()
       leftValues(row) = pair._1
       rightValues(row) = pair._2
+      row += 1
     }
     pairBatch(
       Int32Column.of(leftValues, Validity.allValid(n), n),
@@ -121,6 +136,29 @@ object BatchCodec:
       (left.values(row), right.values(row))
     }
 
+  /**
+   * Join rows are `(key, build value, probe value)`. A null stays an error: the decoded `Int`
+   * would otherwise be the stored zero. Live bits are checked by word, then values are read
+   * unchecked. Spare capacity past `length` is ignored.
+   */
+  def decodeIntTriples(batch: ColumnBatch): Seq[(Int, (Int, Int))] =
+    batch.columns match
+      case Seq(keys: Int32Column, build: Int32Column, probe: Int32Column) =>
+        require(
+          keys.length == batch.length && build.length == batch.length && probe.length == batch.length,
+          "join columns disagree on length",
+        )
+        requireLive(keys)
+        requireLive(build)
+        requireLive(probe)
+        Seq.tabulate(batch.length) { row =>
+          (keys.values(row), (build.values(row), probe.values(row)))
+        }
+      case _ =>
+        throw new IllegalArgumentException(
+          s"join output is not three Int32 columns: ${batch.schema}",
+        )
+
   def decodeNullableIntPairs(batch: ColumnBatch): Seq[(Option[Int], Option[Int])] =
     val (left, right) = intPair(batch)
     Seq.tabulate(batch.length) { row =>
@@ -128,6 +166,32 @@ object BatchCodec:
       val rightValue = if (right.isValid(row)) Some(right.values(row)) else None
       (leftValue, rightValue)
     }
+
+  /** Throws once, naming the first clear live bit. Bits at `length` and beyond are not live. */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def requireLive(column: Int32Column): Unit =
+    val live = column.length
+    val words = column.validity.words
+    val fullWords = live >>> 6
+    var index = 0
+    while (index < fullWords) {
+      if (words(index) != -1L) then failNull(words, index << 6, live)
+      index += 1
+    }
+    val tail = live & 63
+    if (tail != 0 && (words(fullWords) & ((1L << tail) - 1L)) != (1L << tail) - 1L) then
+      failNull(words, fullWords << 6, live)
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def failNull(words: Array[Long], from: Int, live: Int): Nothing =
+    var row = from
+    val limit = math.min(live, from + 64)
+    while (row < limit) {
+      if (!Validity.isSet(words, row)) then
+        throw new IllegalArgumentException(s"null join value at row $row")
+      row += 1
+    }
+    throw new IllegalArgumentException(s"null join value at row $from")
 
   private def batch(column: Column): ColumnBatch =
     new ColumnBatch(Vector(column.logicalType), Vector(column), column.length)
