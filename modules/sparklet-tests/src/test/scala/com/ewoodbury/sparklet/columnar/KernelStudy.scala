@@ -8,12 +8,14 @@ import java.util.Arrays
 import com.sun.management.ThreadMXBean
 
 import com.ewoodbury.sparklet.api.DistCollection
+import com.ewoodbury.sparklet.core.SparkletConf
 
 /**
  * One-shot profiles of the unfused Int32 kernels. Not a test, and not a paper figure.
  *
  * Each sample checks a scalar checksum. The timed region includes output allocation and the
- * checksum scan. Inputs are built beforehand. The machine is whatever the process is running on;
+ * checksum scan. Inputs are built beforehand. DistCollection samples opt out of columnar
+ * execution so they stay on the row path. The machine is whatever the process is running on;
  * this laptop's CPU governor is often `powersave`, so absolute rows/s move around.
  *
  * {{{
@@ -45,6 +47,7 @@ object KernelStudy:
     new ColumnBatch(Vector.empty[LogicalType], Vector.empty[Column], 0)
 
   def main(args: Array[String]): Unit =
+    SparkletConf.set(SparkletConf.get.copy(columnarExecution = false))
     val bean = threadBean
     bean.foreach(_.setThreadAllocatedMemoryEnabled(true))
     println(header(bean.isDefined))

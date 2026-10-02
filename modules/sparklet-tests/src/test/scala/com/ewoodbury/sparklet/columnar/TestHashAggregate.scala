@@ -1,11 +1,19 @@
 package com.ewoodbury.sparklet.columnar
 
+import org.scalatest.BeforeAndAfterEach
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.ewoodbury.sparklet.api.DistCollection
+import com.ewoodbury.sparklet.core.SparkletConf
 
-class TestHashAggregate extends AnyFlatSpec with Matchers:
+class TestHashAggregate extends AnyFlatSpec with Matchers with BeforeAndAfterEach:
+
+  private val originalConf = SparkletConf.get
+
+  override def afterEach(): Unit =
+    SparkletConf.set(originalConf)
+    ()
 
   private val sumOnly = HashAggregate.Int32Aggs(sum = true, count = false, min = false, max = false)
   private val allMeasures = HashAggregate.Int32Aggs(sum = true, count = true, min = true, max = true)
@@ -19,6 +27,7 @@ class TestHashAggregate extends AnyFlatSpec with Matchers:
   }
 
   it should "match reduceByKey on ints" in {
+    SparkletConf.set(SparkletConf.get.copy(columnarExecution = false))
     val rows = Seq((1, 10), (1, 7), (2, 3), (Int.MinValue, 1), (0, -2), (-1, 5), (2, 4))
     val fromEngine = DistCollection(rows, 4)
       .reduceByKey((left: Int, right: Int) => left + right)

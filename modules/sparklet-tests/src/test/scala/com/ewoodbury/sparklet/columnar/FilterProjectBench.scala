@@ -1,12 +1,13 @@
 package com.ewoodbury.sparklet.columnar
 
 import com.ewoodbury.sparklet.api.DistCollection
+import com.ewoodbury.sparklet.core.SparkletConf
 
 /**
  * Times unfused Int32 filter (`value > 0`) and project (`value * 2`) against the row path.
  *
  * The timed region includes output allocation. Filter and project stay separate. Inputs are built
- * before the timer. The row collection uses one partition.
+ * before the timer. The row collection uses one partition and opts out of columnar execution.
  *
  * {{{
  * sbt "sparklet-tests/Test/runMain com.ewoodbury.sparklet.columnar.FilterProjectBench 1000000"
@@ -26,6 +27,7 @@ object FilterProjectBench:
     def apply(value: Int): Int = value * 2
 
   def main(args: Array[String]): Unit =
+    SparkletConf.set(SparkletConf.get.copy(columnarExecution = false))
     val rows = arg(args, 0, defaultRows)
     val warmup = arg(args, 1, defaultWarmup)
     val measure = arg(args, 2, defaultMeasure)

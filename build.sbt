@@ -15,9 +15,9 @@ lazy val commonSettings = Seq(
   Test / parallelExecution := false,
   // Type erasure policy: asInstanceOf and Any-inference are compile ERRORS. They are allowed
   // only at named erasure boundaries (Operation.fromPlan, StageBuilder, StageExecutor,
-  // ShuffleHandler, JoinExecutor, DAGScheduler.executePartitions, DistCollection.kvPlan, and the
-  // storage implementations), each carrying a suppression and a comment explaining why the cast
-  // is safe. Do not add new cast sites outside those boundaries.
+  // ShuffleHandler, JoinExecutor, DAGScheduler.executePartitions, DistCollection.kvPlan,
+  // ColumnarPlanner, and the storage implementations), each carrying a suppression and a comment
+  // explaining why the cast is safe. Do not add new cast sites outside those boundaries.
   wartremoverErrors ++= Seq(Wart.AsInstanceOf, Wart.Any),
   wartremoverWarnings ++= Warts.allBut(
     Wart.Any,
@@ -95,7 +95,7 @@ lazy val `sparklet-execution` = (project in file("modules/sparklet-execution"))
     commonSettings,
     libraryDependencies ++= Seq(catsCore, catsEffect, scalaLogging, log4jApi, log4jCore, log4jSlf4j, disruptor)
   )
-  .dependsOn(`sparklet-api`, `sparklet-core`, `sparklet-runtime`)
+  .dependsOn(`sparklet-api`, `sparklet-core`, `sparklet-runtime`, `sparklet-columnar`)
 
 // Column batches. No dependency on the logical plan or the row executor.
 lazy val `sparklet-columnar` = (project in file("modules/sparklet-columnar"))

@@ -38,6 +38,52 @@ class TestColumnPipeline extends AnyFlatSpec with Matchers:
     parallel shouldBe once
   }
 
+  it should "merge a null partial with a valued partial inside one batch" in {
+    val batch = BatchCodec.nullableIntPairs(
+      Seq(
+        (Some(1), Some(7)),
+        (Some(2), Some(1)),
+        (Some(1), None),
+        (Some(2), None),
+        (Some(3), None),
+        (Some(3), None),
+      ),
+    )
+
+    val once = sums(runSum(Vector(batch), parallelism = 1), requireValues = false)
+    val parallel = sums(runSum(Vector(batch), parallelism = 4), requireValues = false)
+
+    once shouldBe Map(1 -> Some(7L), 2 -> Some(1L), 3 -> None)
+    parallel shouldBe once
+  }
+
+  it should "meet a null partial and a valued partial in one bucket" in {
+    val batches = Vector(
+      BatchCodec.nullableIntPairs(Seq((Some(1), None), (Some(2), None))),
+      BatchCodec.nullableIntPairs(Seq((Some(1), Some(7)), (Some(2), None))),
+    )
+
+    val once = sums(runSum(batches, parallelism = 1), requireValues = false)
+    val parallel = sums(runSum(batches, parallelism = 4), requireValues = false)
+
+    once shouldBe Map(1 -> Some(7L), 2 -> None)
+    parallel shouldBe once
+  }
+
+  it should "return one empty batch per partition when the input is empty" in {
+    val parts = ColumnPipeline.sumByKey(
+      Vector.empty,
+      keyOrdinal = 0,
+      valueOrdinal = 1,
+      numPartitions = 4,
+      parallelism = 2,
+      batchSize = 8,
+    )
+
+    parts.length shouldBe 4
+    parts.map(_.length) shouldBe Seq(0, 0, 0, 0)
+  }
+
   it should "keep an output bucket per partition, including empty ones" in {
     val batches = Vector(BatchCodec.intPairs(Seq((1, 4), (1, 1))))
     val parts = runSum(batches, parallelism = 2)
