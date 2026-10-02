@@ -5,15 +5,15 @@ package com.ewoodbury.sparklet.columnar
  *
  * Filter builds a selection of rows whose predicate column passes the predicate. For ints, longs,
  * floats, and bools, nulls are dropped and the predicate is not called. A string filter calls the
- * predicate on null slots, and a null may survive. Survivors stay in input order. Every column is
- * compacted. The output capacity is the input live length, and the output length is the survivor
- * count. A string filter keeps the input dictionary.
+ * predicate on every row, including an empty cell, and an empty cell may survive. Survivors stay
+ * in input order. Every column is compacted. The output capacity is the input live length, and the
+ * output length is the survivor count. A string filter keeps the input dictionary.
  *
  * Project maps one column and shares the others. For the primitive columns, a null stays null, the
  * new slot stores `0`, and the function is not called. The mapped column reuses the input validity
- * bitmap, so null positions do not change. A string project calls the function on null slots,
- * stores a null result as null, and builds a new dictionary. Callers do not mutate a published
- * bitmap.
+ * bitmap, so null positions do not change. A string project calls the function on every row,
+ * stores an empty result as an empty cell, and builds a new dictionary. Callers do not mutate a
+ * published bitmap.
  *
  * Primitive loops keep the row index in a `var` so the bodies stay allocation-free. Each primitive
  * has its own loop so the copy stays monomorphic.
@@ -46,10 +46,10 @@ object ColumnKernel:
     def apply(value: Boolean): Boolean
 
   trait Utf8Predicate:
-    def apply(value: String): Boolean
+    def apply(value: Option[String]): Boolean
 
   trait Utf8Map:
-    def apply(value: String): String
+    def apply(value: Option[String]): Option[String]
 
   def filterInt32(batch: ColumnBatch, ordinal: Int, predicate: Int32Predicate): ColumnBatch =
     val column = asInt32(columnAt(batch, ordinal), ordinal)
@@ -299,29 +299,26 @@ object ColumnKernel:
     }
     BoolColumn.of(out, column.validity, live)
 
-  @SuppressWarnings(Array("org.wartremover.warts.Null", "org.wartremover.warts.Var"))
   private def mapUtf8(column: DictUtf8Column, mapper: Utf8Map): DictUtf8Column =
     val live = column.length
     val capacity = column.codes.length
     val out = new Array[Int](capacity)
     val dstWords = Validity.allocate(capacity)
-    val builder = new DictUtf8Column.Builder
-    var row = 0
-    while (row < live) {
+    val words = (0 until live).foldLeft(DictUtf8Column.Words.empty) { (words, row) =>
       mapper(utf8Value(column, row)) match
-        case null => ()
-        case text =>
-          out(row) = builder.code(text)
+        case Some(text) =>
+          val (next, code) = words.intern(text)
+          out(row) = code
           Validity.setBit(dstWords, row)
-      row += 1
+          next
+        case None => words
     }
-    DictUtf8Column.of(builder.result(), out, Validity.fromWords(dstWords, capacity), live)
+    DictUtf8Column.of(words.toArray, out, Validity.fromWords(dstWords, capacity), live)
 
-  /** A null slot is passed as null. The dictionary is not indexed for that row. */
-  @SuppressWarnings(Array("org.wartremover.warts.Null"))
-  private def utf8Value(column: DictUtf8Column, row: Int): String =
-    if (Validity.isSet(column.validity.words, row)) then column.dictionary(column.codes(row))
-    else null
+  /** An empty cell does not index the dictionary. */
+  private def utf8Value(column: DictUtf8Column, row: Int): Option[String] =
+    if (Validity.isSet(column.validity.words, row)) then Some(column.dictionary(column.codes(row)))
+    else None
 
   private def assemble(
       batch: ColumnBatch,

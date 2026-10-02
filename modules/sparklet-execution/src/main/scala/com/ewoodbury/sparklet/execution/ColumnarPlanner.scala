@@ -1,5 +1,7 @@
 package com.ewoodbury.sparklet.execution
 
+import scala.annotation.tailrec
+
 import com.ewoodbury.sparklet.columnar.*
 import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf}
 
@@ -25,7 +27,6 @@ import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf}
   Array(
     "org.wartremover.warts.Any",
     "org.wartremover.warts.AsInstanceOf",
-    "org.wartremover.warts.Null",
     "org.wartremover.warts.Throw",
   ),
 )
@@ -131,20 +132,26 @@ object ColumnarPlanner:
     if (partitions.isEmpty) then None
     else
       val values = partitions.iterator.flatMap(_.data.iterator)
-      values.nextOption() match
-        case Some(_: Int) => Some(SourceKind.Ints)
-        case Some((_: Int, _: Int)) => Some(SourceKind.Pairs)
-        case Some(_: String) => Some(SourceKind.Strings)
-        case Some(null) =>
-          values
-            .dropWhile {
-              case null => true
-              case _ => false
-            }
-            .nextOption() match
-            case Some(_: String) => Some(SourceKind.Strings)
-            case _ => None
-        case _ => None
+      values.nextOption().flatMap(value => classify(value, values))
+
+  /** The first present value selects the kind. A leading empty cell can only witness a string. */
+  private def classify(value: Any, rest: Iterator[Any]): Option[SourceKind] =
+    Option(value) match
+      case Some(_: Int) => Some(SourceKind.Ints)
+      case Some((_: Int, _: Int)) => Some(SourceKind.Pairs)
+      case Some(_: String) => Some(SourceKind.Strings)
+      case Some(_) => None
+      case None => stringWitness(rest)
+
+  @tailrec
+  private def stringWitness(values: Iterator[Any]): Option[SourceKind] =
+    values.nextOption() match
+      case None => None
+      case Some(value) =>
+        Option(value) match
+          case None => stringWitness(values)
+          case Some(_: String) => Some(SourceKind.Strings)
+          case Some(_) => None
 
   private def eval(plan: Plan[_]): Columns = plan match
     case Plan.Source(partitions) =>
@@ -169,7 +176,7 @@ object ColumnarPlanner:
         case Columns.Strings(parts) =>
           val keep = predicate.asInstanceOf[String => Boolean]
           Columns.Strings(onEach(parts) { batch =>
-            ColumnKernel.filterUtf8(batch, 0, value => keep(value))
+            ColumnKernel.filterUtf8(batch, 0, cell => keep(BatchCodec.stringElement(cell)))
           })
         case Columns.Triples(_) =>
           throw new IllegalStateException("columnar filter does not accept a join result")
@@ -183,7 +190,11 @@ object ColumnarPlanner:
         case Columns.Strings(parts) =>
           val fn = mapper.asInstanceOf[String => Any]
           Columns.Strings(onEach(parts) { batch =>
-            ColumnKernel.projectUtf8(batch, 0, value => stringResult(fn(value)))
+            ColumnKernel.projectUtf8(
+              batch,
+              0,
+              cell => stringResult(fn(BatchCodec.stringElement(cell))),
+            )
           })
         case _ =>
           throw new IllegalStateException("columnar map expects ints or strings")
@@ -252,10 +263,11 @@ object ColumnarPlanner:
       BatchCodec.ints(partition.data.asInstanceOf[Iterable[Int]])
     }.toVector
 
-  private def stringResult(value: Any): String = value match
-    case text: String => text
-    case null => null
-    case _ => throw new ClassCastException
+  private def stringResult(value: Any): Option[String] =
+    Option(value) match
+      case Some(text: String) => Some(text)
+      case Some(_) => throw new ClassCastException
+      case None => None
 
   private def encodeStrings(partitions: Seq[Partition[_]]): Vector[ColumnBatch] =
     partitions.map { partition =>

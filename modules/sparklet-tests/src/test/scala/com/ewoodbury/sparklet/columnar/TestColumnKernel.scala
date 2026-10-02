@@ -205,8 +205,22 @@ class TestColumnKernel extends AnyFlatSpec with Matchers:
   it should "keep a null string when the predicate says so, and share the dictionary" in {
     val rows = Seq(Some("a"), None, Some("bb"), Some("a"))
     val input = BatchCodec.nullableStrings(rows)
-    val kept = ColumnKernel.filterUtf8(input, 0, value => keepNullOrA(value))
-    val dropped = ColumnKernel.filterUtf8(input, 0, value => presentB(value))
+    val kept = ColumnKernel.filterUtf8(
+      input,
+      0,
+      value =>
+        value match
+          case None | Some("a") => true
+          case Some(_) => false,
+    )
+    val dropped = ColumnKernel.filterUtf8(
+      input,
+      0,
+      value =>
+        value match
+          case Some(text) => text.startsWith("b")
+          case None => false,
+    )
 
     BatchCodec.decodeNullableStrings(kept) shouldBe Seq(Some("a"), None, Some("a"))
     BatchCodec.decodeNullableStrings(dropped) shouldBe Seq(Some("bb"))
@@ -270,7 +284,15 @@ class TestColumnKernel extends AnyFlatSpec with Matchers:
   it should "map null strings and build a new dictionary" in {
     val rows = Seq(Some("a"), None, Some("bb"), Some("a"))
     val input = BatchCodec.nullableStrings(rows)
-    val projected = ColumnKernel.projectUtf8(input, 0, value => rewrite(value))
+    val projected = ColumnKernel.projectUtf8(
+      input,
+      0,
+      value =>
+        value match
+          case None => Some("n")
+          case Some("bb") => None
+          case Some(text) => Some(text.toUpperCase(java.util.Locale.ENGLISH)),
+    )
     val column = utf8(projected)
 
     BatchCodec.decodeNullableStrings(projected) shouldBe Seq(Some("A"), Some("n"), None, Some("A"))
@@ -337,19 +359,3 @@ class TestColumnKernel extends AnyFlatSpec with Matchers:
     an[IllegalArgumentException] should be thrownBy ColumnKernel.projectFloat64(pairs, 0, _ * 2.0)
     an[IllegalArgumentException] should be thrownBy ColumnKernel.projectBool(ints, 0, value => value)
   }
-
-  @SuppressWarnings(Array("org.wartremover.warts.Null"))
-  private def keepNullOrA(value: String): Boolean = value match
-    case null | "a" => true
-    case _ => false
-
-  @SuppressWarnings(Array("org.wartremover.warts.Null"))
-  private def presentB(value: String): Boolean = value match
-    case null => false
-    case text => text.startsWith("b")
-
-  @SuppressWarnings(Array("org.wartremover.warts.Null"))
-  private def rewrite(value: String): String = value match
-    case null => "n"
-    case "bb" => null
-    case text => text.toUpperCase(java.util.Locale.ROOT)

@@ -1,7 +1,5 @@
 package com.ewoodbury.sparklet.columnar
 
-import scala.collection.mutable
-
 /**
  * One primitive column. The value array and the validity bitmap share one capacity. `length` is
  * the live row count and may be shorter. Slots at `length` and beyond are undefined.
@@ -160,8 +158,9 @@ object BoolColumn:
  * Dictionary-coded strings. `dictionary` holds the distinct JVM strings in first-seen order, and
  * `codes` indexes it. There is no separate UTF-8 byte buffer.
  *
- * Filter, slice, and the hash exchange keep this dictionary. Concat keeps it when every piece
- * already shares it, and otherwise builds a new one from the strings that are present.
+ * Filter, slice, and the hash exchange keep this dictionary. Concat keeps the head dictionary when
+ * every piece contains the same strings in the same order, and otherwise builds a new one from the
+ * strings that are present.
  */
 final class DictUtf8Column private (
     val dictionary: Array[String],
@@ -176,30 +175,24 @@ object DictUtf8Column:
   def apply(values: Seq[String]): DictUtf8Column = fromIterable(values)
 
   def fromNullable(values: Seq[Option[String]]): DictUtf8Column =
-    val codes = new Array[Int](values.size)
-    val present = new Array[Boolean](values.size)
-    val builder = new Builder
-    values.iterator.zipWithIndex.foreach { (cell, row) =>
-      cell.foreach(text => accept(text, codes, present, builder, row))
-    }
-    of(builder.result(), codes, Validity.pack(present.length, row => present(row)), present.length)
+    encode(values.size, values.iterator)
 
   /**
-   * One fill. `size` then the iterator, so a `Seq` is not copied twice. A null element is null.
+   * One fill. `size` then the iterator, so a `Seq` is not copied twice. Null elements are empty
+   * slots.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def fromIterable(values: Iterable[String]): DictUtf8Column =
-    val n = values.size
-    val codes = new Array[Int](n)
-    val present = new Array[Boolean](n)
-    val builder = new Builder
-    val iterator = values.iterator
-    var row = 0
-    while (row < n) {
-      accept(iterator.next(), codes, present, builder, row)
-      row += 1
+    encode(values.size, values.iterator.map(text => Option(text)))
+
+  private def encode(count: Int, cells: Iterator[Option[String]]): DictUtf8Column =
+    val codes = new Array[Int](count)
+    val present = new Array[Boolean](count)
+    val words = cells.zipWithIndex.foldLeft(Words.empty) { (words, item) =>
+      item match
+        case (Some(text), row) => assign(words, text, codes, present, row)
+        case (None, _) => words
     }
-    of(builder.result(), codes, Validity.pack(n, row => present(row)), n)
+    publish(words, codes, present)
 
   /** Retains `dictionary` and `codes`. Capacity may exceed `length`. */
   def of(
@@ -211,34 +204,31 @@ object DictUtf8Column:
     Column.check(length, codes.length, validity)
     new DictUtf8Column(dictionary, codes, validity, length)
 
-  /** A null element stays a clear bit. Pattern matching does not treat null as a `String`. */
-  @SuppressWarnings(Array("org.wartremover.warts.Null"))
-  private def accept(
+  private def assign(
+      words: Words,
       text: String,
       codes: Array[Int],
       present: Array[Boolean],
-      builder: Builder,
       row: Int,
-  ): Unit =
-    text match
-      case null => ()
-      case value =>
-        present(row) = true
-        codes(row) = builder.code(value)
+  ): Words =
+    val (next, code) = words.intern(text)
+    present(row) = true
+    codes(row) = code
+    next
 
-  /** First-seen dictionary. Not safe to publish until [[result]] is taken. */
-  @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
-  private[columnar] final class Builder:
-    private val words = mutable.ArrayBuffer.empty[String]
-    private val index = mutable.HashMap.empty[String, Int]
+  private def publish(words: Words, codes: Array[Int], present: Array[Boolean]): DictUtf8Column =
+    of(words.toArray, codes, Validity.pack(present.length, row => present(row)), present.length)
 
-    def code(text: String): Int =
-      index.getOrElseUpdate(
-        text, {
-          val assigned = words.length
-          words += text
-          assigned
-        },
-      )
+  /** First-seen strings. `entries` is newest-first until [[toArray]]. */
+  private[columnar] final case class Words(entries: List[String], index: Map[String, Int]):
+    def intern(text: String): (Words, Int) =
+      index.get(text) match
+        case Some(code) => (this, code)
+        case None =>
+          val code = index.size
+          (Words(text :: entries, index.updated(text, code)), code)
 
-    def result(): Array[String] = words.toArray
+    def toArray: Array[String] = entries.reverse.toArray
+
+  private[columnar] object Words:
+    val empty: Words = Words(Nil, Map.empty)

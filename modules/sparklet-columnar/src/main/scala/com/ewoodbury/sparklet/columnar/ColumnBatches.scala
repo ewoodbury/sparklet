@@ -148,7 +148,7 @@ object ColumnBatches:
     }
     val codes = new Array[Int](total)
     val words = Validity.allocate(total)
-    if (columns.forall(column => sameDictionary(column.dictionary, head.dictionary))) then
+    if (columns.forall(column => column.dictionary.sameElements(head.dictionary))) then
       val written = columns.foldLeft(0) { (offset, column) =>
         val length = column.length
         System.arraycopy(column.codes, 0, codes, offset, length)
@@ -158,28 +158,21 @@ object ColumnBatches:
       require(written == total, s"copied $written rows into $total")
       DictUtf8Column.of(head.dictionary, codes, Validity.fromWords(words, total), total)
     else
-      val builder = new DictUtf8Column.Builder
-      val written = columns.foldLeft(0) { (offset, column) =>
-        var row = 0
-        val length = column.length
-        val dictionary = column.dictionary
-        val columnCodes = column.codes
-        val columnWords = column.validity.words
-        while (row < length) {
-          if (Validity.isSet(columnWords, row)) then
-            codes(offset + row) = builder.code(dictionary(columnCodes(row)))
-            Validity.setBit(words, offset + row)
-          row += 1
+      val (written, interned) =
+        columns.foldLeft((0, DictUtf8Column.Words.empty)) { (state, column) =>
+          val (offset, acc) = state
+          val next = (0 until column.length).foldLeft(acc) { (acc, row) =>
+            if (Validity.isSet(column.validity.words, row)) then
+              val (updated, code) = acc.intern(column.dictionary(column.codes(row)))
+              codes(offset + row) = code
+              Validity.setBit(words, offset + row)
+              updated
+            else acc
+          }
+          (offset + column.length, next)
         }
-        offset + length
-      }
       require(written == total, s"copied $written rows into $total")
-      DictUtf8Column.of(builder.result(), codes, Validity.fromWords(words, total), total)
-
-  /** Codes stay valid only when every piece already uses this dictionary object. */
-  @SuppressWarnings(Array("org.wartremover.warts.Equals"))
-  private def sameDictionary(left: Array[String], right: Array[String]): Boolean =
-    left eq right
+      DictUtf8Column.of(interned.toArray, codes, Validity.fromWords(words, total), total)
 
   private def validityRange(from: Validity, start: Int, length: Int): Validity =
     val words = Validity.allocate(length)

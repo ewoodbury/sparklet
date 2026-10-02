@@ -129,13 +129,15 @@ object BatchCodec:
       column.values(row) != 0
     }
 
-  /** A null slot stays null. `String` null is a value, unlike a null `Int`. */
+  /** An empty cell as a `DistCollection[String]` element. */
   @SuppressWarnings(Array("org.wartremover.warts.Null"))
+  def stringElement(cell: Option[String]): String =
+    cell match
+      case Some(text) => text
+      case None => null
+
   def decodeStrings(batch: ColumnBatch): Seq[String] =
-    val column = utf8(batch)
-    Seq.tabulate(column.length) { row =>
-      if (column.isValid(row)) then column.dictionary(column.codes(row)) else null
-    }
+    decodeNullableStrings(batch).map(stringElement)
 
   def decodeNullableStrings(batch: ColumnBatch): Seq[Option[String]] =
     val column = utf8(batch)

@@ -109,7 +109,7 @@ class TestColumnBatch extends AnyFlatSpec with Matchers:
     val column = utf8(batch)
 
     BatchCodec.decodeNullableStrings(batch) shouldBe rows
-    BatchCodec.decodeStrings(batch) shouldBe withANull
+    BatchCodec.decodeStrings(batch) shouldBe rows.map(BatchCodec.stringElement)
     column.dictionary.toSeq shouldBe Seq("a", "")
     column.codes(0) shouldBe 0
     column.isValid(1) shouldBe false
@@ -172,6 +172,3 @@ class TestColumnBatch extends AnyFlatSpec with Matchers:
     batch.columns.lift(0) match
       case Some(column: DictUtf8Column) => column
       case other => fail(s"expected Utf8Dict, got $other")
-
-  @SuppressWarnings(Array("org.wartremover.warts.Null"))
-  private def withANull: Seq[String] = Seq("a", null, "a", "")
