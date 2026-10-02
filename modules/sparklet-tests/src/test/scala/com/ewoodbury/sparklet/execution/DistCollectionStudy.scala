@@ -5,15 +5,19 @@ import java.lang.management.ManagementFactory
 import com.sun.management.ThreadMXBean
 
 import com.ewoodbury.sparklet.api.DistCollection
-import com.ewoodbury.sparklet.core.SparkletConf
+import com.ewoodbury.sparklet.columnar.*
+import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf}
 import com.ewoodbury.sparklet.runtime.SparkletRuntime
 
 /**
  * Times `collect()` with columnar execution on and off. Not a test.
  *
  * The timed region is `collect()`: encode, the kernels or the row plan, and the boxed decode.
- * Narrow is `filter(_ > 0).map(_ * 2)` over 1e6 ints. `reduceByKey` is measured at 1024 groups
- * and at one group per row. The join is 50k by 50k. A million-by-million join is not run.
+ * The allocation sample is inside that region. The checksum is outside it. Narrow is
+ * `filter(_ > 0).map(_ * 2)` over 1e6 ints. `reduceByKey` is measured at 1024 groups and at one
+ * group per row, and those two also print the columnar stages under the collect line: encode,
+ * morsel partial, per-batch merge, exchange, final reduce, decode. The stage sum is the kernel
+ * pipeline, not `collect()`. The join is 50k by 50k. A million-by-million join is not run.
  *
  * {{{
  * sbt "sparklet-tests/Test/runMain com.ewoodbury.sparklet.execution.DistCollectionStudy"
@@ -28,6 +32,7 @@ object DistCollectionStudy:
   private val groups = 1024
   private val joinRows = 50000
   private val partitions = 4
+  private val stageNames = Vector("encode", "partial", "merge", "exchange", "final", "decode")
 
   def main(args: Array[String]): Unit =
     val saved = SparkletConf.get
@@ -52,6 +57,7 @@ object DistCollectionStudy:
         require(collected.size == groups, s"reduce groups ${collected.size}")
         sumReduced(collected)
       }
+      timeReduceStages("reduce1024", reducePlan, reduceSum, groups)
 
       val distinctPlan = DistCollection(Vector.tabulate(rows)(row => (row, 1)), partitions)
         .reduceByKey[Int, Int](_ + _)
@@ -59,6 +65,7 @@ object DistCollectionStudy:
         require(collected.size == rows, s"reduce groups ${collected.size}")
         sumReduced(collected)
       }
+      timeReduceStages("reduce1e6", distinctPlan, rows.toLong, rows)
 
       val side = Vector.tabulate(joinRows)(row => (row, row))
       val joinPlan = DistCollection(side, partitions).join(DistCollection(side, partitions))
@@ -89,11 +96,8 @@ object DistCollectionStudy:
       var allocated = 0L
       (0 until measure).foreach { sample =>
         SparkletRuntime.get.shuffle.clear()
-        val before = allocatedBytes
-        val start = System.nanoTime()
-        val collected = plan.collect()
-        val elapsed = System.nanoTime() - start
-        allocated += allocatedBytes - before
+        val (collected, elapsed, bytes) = timed(plan.collect())
+        allocated += bytes
         val got = checksum(collected)
         require(got == expected, s"$title $got != $expected")
         samples(sample) = elapsed
@@ -105,6 +109,130 @@ object DistCollectionStudy:
       val rate = if (p50 <= 0L) 0L else (inputRows.toLong * 1000000000L) / p50
       println(s"$title\trows=$inputRows\tp50_ns=$p50\trows_per_s=$rate\talloc_bytes=$alloc")
     }
+
+  /** Columnar reduce stages on the plan's source partitions. Not `collect()`. */
+  private def timeReduceStages(
+      name: String,
+      plan: DistCollection[(Int, Int)],
+      expected: Long,
+      groupCount: Int,
+  ): Unit =
+    val conf = SparkletConf.get
+    val batchSize = conf.columnarBatchSize
+    val parallelism = conf.threadPoolSize
+    val width = conf.defaultShufflePartitions
+    val parts = sourcePairs(plan.plan)
+    val op: HashReduce.IntBinOp = (left, right) => left + right
+    System.err.println(s"run $name-stages")
+    def run(): (Vector[Seq[(Int, Int)]], Array[Long], Array[Long]) =
+      val (encoded, encodeNs, encodeBytes) = timed {
+        parts.map(part => BatchCodec.intPairs(part.data)).toVector
+      }
+      val ((sizes, partials), partialNs, partialBytes) = timed {
+        PartialCombine.partialMorsels(
+          encoded,
+          batchSize,
+          parallelism,
+          morsel => HashReduce.int32(morsel, keyOrdinal = 0, valueOrdinal = 1, op),
+        )
+      }
+      val (merged, mergeNs, mergeBytes) = timed {
+        PartialCombine.mergeMorsels(
+          sizes,
+          partials,
+          parallelism,
+          batch => HashReduce.int32(batch, keyOrdinal = 0, valueOrdinal = 1, op),
+        )
+      }
+      val (buckets, exchangeNs, exchangeBytes) = timed {
+        HashExchange.partitionAll(merged, keyOrdinal = 0, numPartitions = width, parallelism)
+      }
+      val (reduced, finalNs, finalBytes) = timed {
+        MorselScheduler.map(buckets, parallelism) { (_, bucket) =>
+          HashReduce.int32(bucket, keyOrdinal = 0, valueOrdinal = 1, op)
+        }
+      }
+      val (decoded, decodeNs, decodeBytes) = timed {
+        reduced.map(batch => BatchCodec.decodeIntPairs(batch))
+      }
+      val elapsed = Array(encodeNs, partialNs, mergeNs, exchangeNs, finalNs, decodeNs)
+      val bytes = Array(
+        encodeBytes,
+        partialBytes,
+        mergeBytes,
+        exchangeBytes,
+        finalBytes,
+        decodeBytes,
+      )
+      (decoded, elapsed, bytes)
+    def check(decoded: Vector[Seq[(Int, Int)]], label: String): Unit =
+      val (got, count) = sumDecoded(decoded)
+      require(got == expected, s"$label $got != $expected")
+      require(count == groupCount, s"$label groups $count")
+    (0 until warmup).foreach { index =>
+      val (decoded, _, _) = run()
+      check(decoded, s"$name-stages warmup $index")
+    }
+    val samples = Array.ofDim[Long](stageNames.length, measure)
+    val allocated = Array.ofDim[Long](stageNames.length, measure)
+    val totals = new Array[Long](measure)
+    (0 until measure).foreach { sample =>
+      val (decoded, elapsed, bytes) = run()
+      check(decoded, s"$name-stages")
+      var stage = 0
+      var total = 0L
+      while (stage < elapsed.length) {
+        samples(stage)(sample) = elapsed(stage)
+        allocated(stage)(sample) = bytes(stage)
+        total += elapsed(stage)
+        stage += 1
+      }
+      totals(sample) = total
+    }
+    stageNames.zipWithIndex.foreach { (label, stage) =>
+      val column = Array.tabulate(measure)(sample => samples(stage)(sample))
+      val bytes = Array.tabulate(measure)(sample => allocated(stage)(sample))
+      println(s"$name-$label\tp50_ns=${median(column)}\talloc_bytes=${mean(bytes)}")
+    }
+    println(s"$name-kernel\tp50_ns=${median(totals)}")
+
+  private def sourcePairs(plan: Plan[(Int, Int)]): Seq[Partition[(Int, Int)]] = plan match
+    case Plan.ReduceByKeyOp(Plan.Source(parts), _) => parts
+    case _ => throw new IllegalArgumentException("stage timing expects reduceByKey of a source")
+
+  private def sumDecoded(batches: Vector[Seq[(Int, Int)]]): (Long, Int) =
+    var sum = 0L
+    var count = 0
+    val batchesIterator = batches.iterator
+    while (batchesIterator.hasNext) {
+      val pairs = batchesIterator.next().iterator
+      while (pairs.hasNext) {
+        sum += pairs.next()._2.toLong
+        count += 1
+      }
+    }
+    (sum, count)
+
+  private def timed[A](body: => A): (A, Long, Long) =
+    val before = allocatedBytes
+    val start = System.nanoTime()
+    val value = body
+    val after = allocatedBytes
+    (value, System.nanoTime() - start, after - before)
+
+  private def median(values: Array[Long]): Long =
+    val sorted = values.clone()
+    java.util.Arrays.sort(sorted)
+    sorted(values.length / 2)
+
+  private def mean(values: Array[Long]): Long =
+    var index = 0
+    var total = 0L
+    while (index < values.length) {
+      total += values(index)
+      index += 1
+    }
+    total / values.length.toLong
 
   private def sumInts(values: Iterable[Int]): Long =
     var sum = 0L

@@ -20,11 +20,35 @@ object PartialCombine:
     require(parallelism > 0, s"parallelism must be positive, got $parallelism")
     if (batches.isEmpty) then Vector.empty
     else
-      val groups = batches.map(batch => ColumnBatches.slice(batch, batchSize))
-      val partials = MorselScheduler.map(groups.flatten, parallelism) { (_, morsel) =>
-        partial(morsel)
-      }
-      val gathered = gather(groups.map(_.length), partials)
+      val (sizes, partials) = partialMorsels(batches, batchSize, parallelism, partial)
+      mergeMorsels(sizes, partials, parallelism, merge)
+
+  /** One partial per morsel, in input order. `sizes` counts the morsels of each input batch. */
+  def partialMorsels(
+      batches: Vector[ColumnBatch],
+      batchSize: Int,
+      parallelism: Int,
+      partial: ColumnBatch => ColumnBatch,
+  ): (Vector[Int], Vector[ColumnBatch]) =
+    require(batchSize > 0, s"batch size must be positive, got $batchSize")
+    require(parallelism > 0, s"parallelism must be positive, got $parallelism")
+    val groups = batches.map(batch => ColumnBatches.slice(batch, batchSize))
+    val partials = MorselScheduler.map(groups.flatten, parallelism) { (_, morsel) =>
+      partial(morsel)
+    }
+    (groups.map(_.length), partials)
+
+  /** Merge the morsel partials of each input batch. A single morsel stays as it is. */
+  def mergeMorsels(
+      sizes: Vector[Int],
+      partials: Vector[ColumnBatch],
+      parallelism: Int,
+      merge: ColumnBatch => ColumnBatch,
+  ): Vector[ColumnBatch] =
+    require(parallelism > 0, s"parallelism must be positive, got $parallelism")
+    if (sizes.isEmpty) then Vector.empty
+    else
+      val gathered = gather(sizes, partials)
       MorselScheduler.map(gathered.map(_.batch), parallelism) { (index, batch) =>
         val piece = gathered.lift(index).getOrElse {
           throw new IllegalArgumentException(s"missing partial $index")
