@@ -4,8 +4,10 @@ package com.ewoodbury.sparklet.columnar
  * One primitive column. The value array and the validity bitmap share one capacity. `length` is
  * the live row count and may be shorter. Slots at `length` and beyond are undefined.
  *
- * A null slot stores `0` and must not be read as a value. A boolean slot is `0` or `1`. `of` does
- * not scan those conventions: the encoders write them, and a kernel that calls `of` must too.
+ * A null slot stores `0` and must not be read as a value. A boolean slot is `0` or `1`. A
+ * dictionary string stores an int code, and code `0` is also what a null slot stores, so a reader
+ * checks the validity bit before indexing the dictionary. `of` does not scan those conventions:
+ * the encoders write them, and a kernel that calls `of` must too.
  *
  * The column keeps the arrays it is given. Callers do not mutate them after publication. Kernels
  * allocate a fresh column for their output.
@@ -151,3 +153,94 @@ object BoolColumn:
   def of(values: Array[Byte], validity: Validity, length: Int): BoolColumn =
     Column.check(length, values.length, validity)
     new BoolColumn(values, validity, length)
+
+/**
+ * Dictionary-coded strings. `dictionary` holds the distinct JVM strings in first-seen order, and
+ * `codes` indexes it. There is no separate UTF-8 byte buffer.
+ *
+ * Filter, slice, and the hash exchange keep this dictionary. Concat keeps the head dictionary when
+ * every piece contains the same strings in the same order, and otherwise remaps each present code
+ * into a new dictionary.
+ */
+final class DictUtf8Column private (
+    val dictionary: Array[String],
+    val codes: Array[Int],
+    val validity: Validity,
+    val length: Int,
+) extends Column:
+  def logicalType: LogicalType = LogicalType.Utf8Dict
+
+object DictUtf8Column:
+
+  def apply(values: Seq[String]): DictUtf8Column = fromIterable(values)
+
+  def fromNullable(values: Seq[Option[String]]): DictUtf8Column =
+    encode(values.size, values.iterator.map(BatchCodec.stringElement))
+
+  /**
+   * One fill. `size` then the iterator, so a `Seq` is not copied twice. Null elements are empty
+   * slots.
+   */
+  def fromIterable(values: Iterable[String]): DictUtf8Column =
+    encode(values.size, values.iterator)
+
+  private def encode(count: Int, cells: Iterator[String]): DictUtf8Column =
+    val codes = new Array[Int](count)
+    val present = new Array[Boolean](count)
+    val words = Words.empty
+    fill(count, cells, words, codes, present)
+    publish(words, codes, present)
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def fill(
+      count: Int,
+      cells: Iterator[String],
+      words: Words,
+      codes: Array[Int],
+      present: Array[Boolean],
+  ): Unit =
+    var row = 0
+    while (row < count) {
+      val text = cells.next()
+      if (!BatchCodec.isAbsent(text)) then
+        present(row) = true
+        codes(row) = words.intern(text)
+      row += 1
+    }
+
+  /** Retains `dictionary` and `codes`. Capacity may exceed `length`. */
+  def of(
+      dictionary: Array[String],
+      codes: Array[Int],
+      validity: Validity,
+      length: Int,
+  ): DictUtf8Column =
+    Column.check(length, codes.length, validity)
+    new DictUtf8Column(dictionary, codes, validity, length)
+
+  private def publish(words: Words, codes: Array[Int], present: Array[Boolean]): DictUtf8Column =
+    of(words.toArray, codes, Validity.pack(present.length, row => present(row)), present.length)
+
+  /**
+   * First-seen strings. The table is confined to construction. [[toArray]] is the published
+   * dictionary, in first-seen order.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
+  private[columnar] final class Words:
+    private val entries = scala.collection.mutable.ArrayBuffer.empty[String]
+    private val index = new java.util.HashMap[String, Integer]
+
+    @SuppressWarnings(Array("org.wartremover.warts.Null", "org.wartremover.warts.Equals"))
+    def intern(text: String): Int =
+      val existing = index.get(text)
+      if (existing eq null) then
+        val code = entries.length
+        entries += text
+        index.put(text, code)
+        code
+      else existing.intValue
+
+    def toArray: Array[String] = entries.toArray
+
+  private[columnar] object Words:
+    def empty: Words = new Words

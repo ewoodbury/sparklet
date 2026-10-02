@@ -107,6 +107,33 @@ class TestHashExchange extends AnyFlatSpec with Matchers:
     found(4) shouldBe (4L, 4.5, false, Math.floorMod(4, width))
   }
 
+  it should "carry a string column with its dictionary, and drop a null key" in {
+    val keys = Int32Column.fromNullable(Seq(Some(1), None, Some(2)))
+    val texts = DictUtf8Column.fromNullable(Seq(Some("a"), Some("y"), None))
+    val batch = new ColumnBatch(
+      Vector(LogicalType.Int32, LogicalType.Utf8Dict),
+      Vector(keys, texts),
+      3,
+    )
+    val parts = HashExchange.partitionInt32(batch, keyOrdinal = 0, numPartitions = 2)
+
+    parts.map(_.length).sum shouldBe 2
+    val kept = parts.zipWithIndex.flatMap { (part, bucket) =>
+      val keyColumn = int32(part, 0)
+      val textColumn = utf8(part, 1)
+      textColumn.dictionary should be theSameInstanceAs texts.dictionary
+      (0 until part.length).map { row =>
+        val text = if (textColumn.isValid(row)) Some(textColumn.dictionary(textColumn.codes(row))) else None
+        (keyColumn.values(row), text, bucket)
+      }
+    }
+
+    kept should contain theSameElementsAs Seq(
+      (1, Some("a"), Math.floorMod(1, 2)),
+      (2, None, Math.floorMod(2, 2)),
+    )
+  }
+
   it should "share the input batch when one partition has no null key" in {
     val batch = BatchCodec.ints(Seq(1, 2, 3))
     val parts = HashExchange.partitionInt32(batch, keyOrdinal = 0, numPartitions = 1)
@@ -164,6 +191,11 @@ class TestHashExchange extends AnyFlatSpec with Matchers:
     batch.columns.lift(ordinal) match
       case Some(column: Float64Column) => column
       case other => fail(s"expected Float64 at $ordinal, got $other")
+
+  private def utf8(batch: ColumnBatch, ordinal: Int): DictUtf8Column =
+    batch.columns.lift(ordinal) match
+      case Some(column: DictUtf8Column) => column
+      case other => fail(s"expected Utf8Dict at $ordinal, got $other")
 
   private def bool(batch: ColumnBatch, ordinal: Int): BoolColumn =
     batch.columns.lift(ordinal) match

@@ -5,6 +5,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.ewoodbury.sparklet.api.DistCollection
+import com.ewoodbury.sparklet.columnar.BatchCodec
 import com.ewoodbury.sparklet.core.{ExecutionService, Partition, Plan, SparkletConf}
 import com.ewoodbury.sparklet.runtime.SparkletRuntime
 
@@ -68,7 +69,7 @@ class TestColumnarSelection extends AnyFlatSpec with Matchers with BeforeAndAfte
     DistCollection(Seq(1, 2, 3), 2).map(_.toString).collect() shouldBe Seq("1", "2", "3")
   }
 
-  "string plans" should "stay on the row path" in {
+  "string keys" should "keep reduceByKey and join on the row path" in {
     val reduced = DistCollection(Seq("a" -> 1, "a" -> 2, "b" -> 3), 2).reduceByKey[String, Int](_ + _)
     reduced.collect().toMap shouldBe Map("a" -> 3, "b" -> 3)
     infoOf(reduced) shouldBe Option.empty[PartitioningInfo]
@@ -162,6 +163,57 @@ class TestColumnarSelection extends AnyFlatSpec with Matchers with BeforeAndAfte
     assertHashed(build.join(probe))
   }
 
+  "string filter" should "keep input order, nulls, and a columnar layout" in {
+    val filtered = DistCollection(texts(Some("a"), None, Some("bb"), Some("a"), Some("")), 2).filter {
+      value =>
+        Option(value) match
+          case Some("bb") => false
+          case _ => true
+    }
+
+    filtered.collect() shouldBe texts(Some("a"), None, Some("a"), Some(""))
+    assertNarrow(filtered, 2)
+  }
+
+  it should "keep order when map and filter run as morsels" in {
+    SparkletConf.set(SparkletConf.get.copy(columnarBatchSize = 2, threadPoolSize = 4))
+    val mapped = DistCollection(Seq("a", "bb", "ccc", "d", "ee"), 1)
+      .map(_.toUpperCase(java.util.Locale.ENGLISH))
+      .filter(_.length > 1)
+
+    mapped.collect() shouldBe Seq("BB", "CCC", "EE")
+    assertNarrow(mapped, 1)
+  }
+
+  it should "select strings that start with null, and leave an all-null source on the row path" in {
+    val witnessed =
+      DistCollection(texts(None, Some("a"), Some("b")), 1).filter(value => Option(value).isDefined)
+    witnessed.collect() shouldBe Seq("a", "b")
+    assertNarrow(witnessed, 1)
+
+    val unseen = DistCollection(texts(None, None), 2).filter(_ => true)
+    unseen.collect() shouldBe texts(None, None)
+    infoOf(unseen) shouldBe Option.empty[PartitioningInfo]
+  }
+
+  it should "match the row path when a map introduces and removes nulls" in {
+    val plan = DistCollection(texts(Some("a"), None, Some("bb"), Some("a")), 2).map { value =>
+      Option(value) match
+        case None => "n"
+        case Some("bb") => text(None)
+        case Some(present) => present.toUpperCase(java.util.Locale.ENGLISH)
+    }
+
+    assertNarrow(plan, 2)
+    columnar(plan.collect()) shouldBe row(plan.collect())
+  }
+
+  it should "fall back when a string map does not return a string" in {
+    val mapped = DistCollection(Seq("a", "bb"), 2).map(_.length)
+
+    mapped.collect() shouldBe Seq(1, 2)
+  }
+
   "columnar path" should "match the row path on filter, map, reduceByKey, join, and filterKeys" in {
     val ints = Seq(1, 2, 3, 4, 5, 6)
     val pairs = Seq(1 -> 10, 2 -> 20, 1 -> 3, 4 -> 1, 2 -> 5)
@@ -198,6 +250,16 @@ class TestColumnarSelection extends AnyFlatSpec with Matchers with BeforeAndAfte
     infoOf(filtered) shouldBe Option.empty[PartitioningInfo]
   }
 
+  private def columnar[A](body: => A): A =
+    SparkletRuntime.get.shuffle.clear()
+    SparkletConf.set(originalConf.copy(columnarExecution = true))
+    body
+
+  private def row[A](body: => A): A =
+    SparkletRuntime.get.shuffle.clear()
+    SparkletConf.set(originalConf.copy(columnarExecution = false))
+    body
+
   private def partitionsOf[A](collection: DistCollection[A]): Seq[Partition[A]] =
     ExecutionService.get.executePartitions(collection.plan)
 
@@ -228,6 +290,10 @@ class TestColumnarSelection extends AnyFlatSpec with Matchers with BeforeAndAfte
         Math.floorMod(key, width) shouldBe index
       }
     }
+
+  private def text(cell: Option[String]): String = BatchCodec.stringElement(cell)
+
+  private def texts(cells: Option[String]*): Seq[String] = cells.map(text)
 
   private def assertUniqueKeys[V](parts: Seq[Partition[(Int, V)]]): Unit =
     val keys = parts.flatMap(_.data.map(_._1))

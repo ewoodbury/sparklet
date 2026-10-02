@@ -103,6 +103,81 @@ class TestColumnBatch extends AnyFlatSpec with Matchers:
     }
   }
 
+  "strings" should "collapse duplicates and roundtrip nulls, including code 0" in {
+    val rows = Seq(Some("a"), None, Some("a"), Some(""))
+    val batch = BatchCodec.nullableStrings(rows)
+    val column = utf8(batch)
+
+    BatchCodec.decodeNullableStrings(batch) shouldBe rows
+    BatchCodec.decodeStrings(batch) shouldBe rows.map(BatchCodec.stringElement)
+    column.dictionary.toSeq shouldBe Seq("a", "")
+    column.codes(0) shouldBe 0
+    column.isValid(1) shouldBe false
+    column.codes(1) shouldBe 0
+    column.isValid(3) shouldBe true
+    column.codes(3) shouldBe 1
+  }
+
+  it should "keep presence bits across a 64-row word boundary" in {
+    val rows = (0 until 70).map { row =>
+      if (row == 63 || row == 64) None else Some(if (row % 3 == 0) "a" else s"k$row")
+    }
+
+    BatchCodec.decodeNullableStrings(BatchCodec.nullableStrings(rows)) shouldBe rows
+  }
+
+  it should "share the dictionary across a slice and rebuild it when batches differ" in {
+    val values = (0 until 5).map(row => if (row % 2 == 0) "a" else "b")
+    val batch = BatchCodec.strings(values)
+    val column = utf8(batch)
+    val sliced = ColumnBatches.slice(batch, batchSize = 2)
+    val joined = ColumnBatches.concat(sliced)
+
+    sliced.length shouldBe 3
+    sliced.foreach { part =>
+      utf8(part).dictionary should be theSameInstanceAs column.dictionary
+    }
+    BatchCodec.decodeStrings(joined) shouldBe values
+    utf8(joined).dictionary should be theSameInstanceAs column.dictionary
+
+    val left = BatchCodec.strings(Seq("b", "a"))
+    val right = BatchCodec.strings(Seq("a", "c"))
+    val merged = ColumnBatches.concat(Vector(left, right))
+
+    BatchCodec.decodeStrings(merged) shouldBe Seq("b", "a", "a", "c")
+    utf8(merged).dictionary.toSeq shouldBe Seq("b", "a", "c")
+
+    val copy = BatchCodec.strings(Seq("a", "b"))
+    val shared = ColumnBatches.concat(Vector(batch, copy))
+    utf8(shared).dictionary should be theSameInstanceAs column.dictionary
+    BatchCodec.decodeStrings(shared) shouldBe values ++ Seq("a", "b")
+  }
+
+  it should "drop unused dictionary entries when a concat remaps" in {
+    val sparse = DictUtf8Column.of(
+      Array("a", "b"),
+      Array(0, 1),
+      Validity.pack(2, row => row == 1),
+      length = 2,
+    )
+    val left = new ColumnBatch(Vector(LogicalType.Utf8Dict), Vector(sparse), sparse.length)
+    val right = BatchCodec.strings(Seq("c", "a"))
+    val merged = ColumnBatches.concat(Vector(left, right))
+
+    BatchCodec.decodeNullableStrings(merged) shouldBe Seq(None, Some("b"), Some("c"), Some("a"))
+    utf8(merged).dictionary.toSeq shouldBe Seq("b", "c", "a")
+    utf8(merged).isValid(0) shouldBe false
+    utf8(merged).codes(0) shouldBe 0
+  }
+
+  it should "ignore slots past the live row count" in {
+    val dictionary = Array("a", "z")
+    val column = DictUtf8Column.of(dictionary, Array(0, 1, 0), Validity.allValid(3), length = 2)
+    val batch = new ColumnBatch(Vector(LogicalType.Utf8Dict), Vector(column), length = 2)
+
+    BatchCodec.decodeStrings(batch) shouldBe Seq("a", "z")
+  }
+
   "batch construction" should "reject a column that does not match the schema or the row count" in {
     val one = Int32Column(Seq(1))
     val two = Int32Column(Seq(1, 2))
@@ -114,3 +189,8 @@ class TestColumnBatch extends AnyFlatSpec with Matchers:
       new ColumnBatch(Vector(LogicalType.Int32, LogicalType.Int32), Vector(one, two), length = 1)
     }
   }
+
+  private def utf8(batch: ColumnBatch): DictUtf8Column =
+    batch.columns.lift(0) match
+      case Some(column: DictUtf8Column) => column
+      case other => fail(s"expected Utf8Dict, got $other")

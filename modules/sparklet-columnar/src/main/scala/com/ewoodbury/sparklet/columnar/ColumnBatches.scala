@@ -62,6 +62,15 @@ object ColumnBatches:
         val values = new Array[Byte](length)
         System.arraycopy(bool.values, start, values, 0, length)
         BoolColumn.of(values, validityRange(bool.validity, start, length), length)
+      case utf8: DictUtf8Column =>
+        val codes = new Array[Int](length)
+        System.arraycopy(utf8.codes, start, codes, 0, length)
+        DictUtf8Column.of(
+          utf8.dictionary,
+          codes,
+          validityRange(utf8.validity, start, length),
+          length,
+        )
 
   private def columnAt(batch: ColumnBatch, ordinal: Int): Column =
     batch.columns.lift(ordinal).getOrElse {
@@ -80,6 +89,8 @@ object ColumnBatches:
         appendFloat64(columns.collect { case column: Float64Column => column }, total)
       case Some(_: BoolColumn) =>
         appendBool(columns.collect { case column: BoolColumn => column }, total)
+      case Some(_: DictUtf8Column) =>
+        appendUtf8(columns.collect { case column: DictUtf8Column => column }, total)
       case None =>
         throw new IllegalArgumentException("concat needs a column")
 
@@ -130,6 +141,88 @@ object ColumnBatches:
     }
     require(written == total, s"copied $written rows into $total")
     BoolColumn.of(values, Validity.fromWords(words, total), total)
+
+  private def appendUtf8(columns: Vector[DictUtf8Column], total: Int): DictUtf8Column =
+    val head = columns.headOption.getOrElse {
+      throw new IllegalArgumentException("concat needs a column")
+    }
+    val codes = new Array[Int](total)
+    val words = Validity.allocate(total)
+    if (columns.forall(column => sameDictionary(column.dictionary, head.dictionary))) then
+      val written = columns.foldLeft(0) { (offset, column) =>
+        val length = column.length
+        System.arraycopy(column.codes, 0, codes, offset, length)
+        copyBits(column.validity, 0, words, offset, length)
+        offset + length
+      }
+      require(written == total, s"copied $written rows into $total")
+      DictUtf8Column.of(head.dictionary, codes, Validity.fromWords(words, total), total)
+    else remapUtf8(columns, codes, words, total)
+
+  /**
+   * The same array, or the same strings in the same order. Reference equality is the slice,
+   * filter, and exchange case.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Equals"))
+  private def sameDictionary(left: Array[String], right: Array[String]): Boolean =
+    (left eq right) || left.sameElements(right)
+
+  /** Intern each used dictionary entry once, then translate rows through that code map. */
+  private def remapUtf8(
+      columns: Vector[DictUtf8Column],
+      codes: Array[Int],
+      dstWords: Array[Long],
+      total: Int,
+  ): DictUtf8Column =
+    val pieces = columns.toArray
+    val remaps = new Array[Array[Int]](pieces.length)
+    val acc = DictUtf8Column.Words.empty
+    var index = 0
+    while (index < pieces.length) {
+      val column = pieces(index)
+      val dictionary = column.dictionary
+      val used = usedCodes(column)
+      val remap = new Array[Int](dictionary.length)
+      var code = 0
+      while (code < dictionary.length) {
+        if (used(code)) then remap(code) = acc.intern(dictionary(code))
+        code += 1
+      }
+      remaps(index) = remap
+      index += 1
+    }
+    var offset = 0
+    index = 0
+    while (index < pieces.length) {
+      val column = pieces(index)
+      val remap = remaps(index)
+      val src = column.codes
+      val srcWords = column.validity.words
+      val live = column.length
+      var row = 0
+      while (row < live) {
+        if (Validity.isSet(srcWords, row)) then
+          codes(offset + row) = remap(src(row))
+          Validity.setBit(dstWords, offset + row)
+        row += 1
+      }
+      offset += live
+      index += 1
+    }
+    require(offset == total, s"copied $offset rows into $total")
+    DictUtf8Column.of(acc.toArray, codes, Validity.fromWords(dstWords, total), total)
+
+  private def usedCodes(column: DictUtf8Column): Array[Boolean] =
+    val used = new Array[Boolean](column.dictionary.length)
+    val src = column.codes
+    val srcWords = column.validity.words
+    val live = column.length
+    var row = 0
+    while (row < live) {
+      if (Validity.isSet(srcWords, row)) then used(src(row)) = true
+      row += 1
+    }
+    used
 
   private def validityRange(from: Validity, start: Int, length: Int): Validity =
     val words = Validity.allocate(length)
