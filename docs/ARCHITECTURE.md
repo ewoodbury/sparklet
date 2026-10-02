@@ -27,7 +27,11 @@ Two vocabularies, separated at the module level:
   `DistCollection` transformations only prepend nodes; nothing runs until an action.
 - **Physical** (`sparklet-execution`): `StageGraph` — stages, dependencies, shuffle boundaries.
   Narrow operations are fused into stages; wide operations become shuffle stages carrying a
-  structured `WideOp` record.
+  structured `WideOp` record. The columnar path has a second tree, `PhysicalOp`: one node per
+  supported operator (`Scan`, `Filter`, `Project`, `Exchange`, `HashAggregate`, `HashJoin`).
+  `ColumnarPlanner.lower` builds it and does not run user functions. Interpretation calls one
+  kernel per node. A chain of maps is four projects, not one loop. `Exchange` is the boundary
+  under an aggregate and on each side of a join; those kernels perform the shuffle.
 
 The rule: `Plan` is legal in the compiler (`StageBuilder` reads it to compile), illegal in the
 executor (`StageExecutor`/`ShuffleHandler`/`ExecutionPlanner` dispatch only on `WideOp`).
@@ -39,7 +43,7 @@ DistCollection action
   -> ExecutionService (SPI, registered by the execution module)
   -> DefaultExecutionService
        bare Plan.Source: return its partitions
-       ColumnarPlanner.tryRun for an encodable Int or (Int, Int) plan
+       ColumnarPlanner.tryRun: lower an encodable Int or (Int, Int) plan to PhysicalOp, then interpret
        otherwise DAGScheduler.executePartitions
             -> StageBuilder.buildStageGraph
             -> TopologicalSort
@@ -156,7 +160,7 @@ Roadmap and sequencing are tracked externally; the headline items:
 
 - No cross-branch dedup: reusing a `DistCollection` in two places recomputes it; at most one
   shuffle write per stage.
-- No rule-based logical optimizer (predicate/projection pushdown) — the `PhysicalPlan` layer
-  precedes this work.
+- Columnar operators are one `PhysicalOp` each. Filter and project are not fused into one loop.
+  There is no cost model and no predicate pushdown.
 - Sort-merge join is a hash grouping wearing a sort-merge name; a true typed sort-merge join is
   deferred.
