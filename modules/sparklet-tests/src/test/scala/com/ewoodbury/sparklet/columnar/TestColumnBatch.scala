@@ -146,6 +146,28 @@ class TestColumnBatch extends AnyFlatSpec with Matchers:
 
     BatchCodec.decodeStrings(merged) shouldBe Seq("b", "a", "a", "c")
     utf8(merged).dictionary.toSeq shouldBe Seq("b", "a", "c")
+
+    val copy = BatchCodec.strings(Seq("a", "b"))
+    val shared = ColumnBatches.concat(Vector(batch, copy))
+    utf8(shared).dictionary should be theSameInstanceAs column.dictionary
+    BatchCodec.decodeStrings(shared) shouldBe values ++ Seq("a", "b")
+  }
+
+  it should "drop unused dictionary entries when a concat remaps" in {
+    val sparse = DictUtf8Column.of(
+      Array("a", "b"),
+      Array(0, 1),
+      Validity.pack(2, row => row == 1),
+      length = 2,
+    )
+    val left = new ColumnBatch(Vector(LogicalType.Utf8Dict), Vector(sparse), sparse.length)
+    val right = BatchCodec.strings(Seq("c", "a"))
+    val merged = ColumnBatches.concat(Vector(left, right))
+
+    BatchCodec.decodeNullableStrings(merged) shouldBe Seq(None, Some("b"), Some("c"), Some("a"))
+    utf8(merged).dictionary.toSeq shouldBe Seq("b", "c", "a")
+    utf8(merged).isValid(0) shouldBe false
+    utf8(merged).codes(0) shouldBe 0
   }
 
   it should "ignore slots past the live row count" in {

@@ -176,7 +176,7 @@ object ColumnarPlanner:
         case Columns.Strings(parts) =>
           val keep = predicate.asInstanceOf[String => Boolean]
           Columns.Strings(onEach(parts) { batch =>
-            ColumnKernel.filterUtf8(batch, 0, cell => keep(BatchCodec.stringElement(cell)))
+            ColumnKernel.filterUtf8(batch, 0, value => keep(value))
           })
         case Columns.Triples(_) =>
           throw new IllegalStateException("columnar filter does not accept a join result")
@@ -190,11 +190,7 @@ object ColumnarPlanner:
         case Columns.Strings(parts) =>
           val fn = mapper.asInstanceOf[String => Any]
           Columns.Strings(onEach(parts) { batch =>
-            ColumnKernel.projectUtf8(
-              batch,
-              0,
-              cell => stringResult(fn(BatchCodec.stringElement(cell))),
-            )
+            ColumnKernel.projectUtf8(batch, 0, value => stringResult(fn(value)))
           })
         case _ =>
           throw new IllegalStateException("columnar map expects ints or strings")
@@ -263,11 +259,14 @@ object ColumnarPlanner:
       BatchCodec.ints(partition.data.asInstanceOf[Iterable[Int]])
     }.toVector
 
-  private def stringResult(value: Any): Option[String] =
-    Option(value) match
-      case Some(text: String) => Some(text)
-      case Some(_) => throw new ClassCastException
-      case None => None
+  @SuppressWarnings(Array("org.wartremover.warts.Null"))
+  private def stringResult(value: Any): String = value match
+    case null => null
+    case text: String => text
+    case other =>
+      throw new ClassCastException(
+        s"columnar string map expected a String, found ${other.getClass.getName}",
+      )
 
   private def encodeStrings(partitions: Seq[Partition[_]]): Vector[ColumnBatch] =
     partitions.map { partition =>

@@ -136,8 +136,16 @@ object BatchCodec:
       case Some(text) => text
       case None => null
 
+  /** A `DistCollection[String]` element that is an empty cell. */
+  @SuppressWarnings(Array("org.wartremover.warts.Null", "org.wartremover.warts.Equals"))
+  def isAbsent(text: String): Boolean = text eq null
+
   def decodeStrings(batch: ColumnBatch): Seq[String] =
-    decodeNullableStrings(batch).map(stringElement)
+    val column = utf8(batch)
+    Seq.tabulate(column.length) { row =>
+      if (column.isValid(row)) then column.dictionary(column.codes(row))
+      else stringElement(None)
+    }
 
   def decodeNullableStrings(batch: ColumnBatch): Seq[Option[String]] =
     val column = utf8(batch)

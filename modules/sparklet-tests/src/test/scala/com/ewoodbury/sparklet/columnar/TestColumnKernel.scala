@@ -209,7 +209,7 @@ class TestColumnKernel extends AnyFlatSpec with Matchers:
       input,
       0,
       value =>
-        value match
+        Option(value) match
           case None | Some("a") => true
           case Some(_) => false,
     )
@@ -217,7 +217,7 @@ class TestColumnKernel extends AnyFlatSpec with Matchers:
       input,
       0,
       value =>
-        value match
+        Option(value) match
           case Some(text) => text.startsWith("b")
           case None => false,
     )
@@ -288,10 +288,10 @@ class TestColumnKernel extends AnyFlatSpec with Matchers:
       input,
       0,
       value =>
-        value match
-          case None => Some("n")
-          case Some("bb") => None
-          case Some(text) => Some(text.toUpperCase(java.util.Locale.ENGLISH)),
+        Option(value) match
+          case None => "n"
+          case Some("bb") => BatchCodec.stringElement(None)
+          case Some(text) => text.toUpperCase(java.util.Locale.ENGLISH),
     )
     val column = utf8(projected)
 

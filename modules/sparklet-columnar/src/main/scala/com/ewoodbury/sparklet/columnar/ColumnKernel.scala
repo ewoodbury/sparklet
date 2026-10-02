@@ -46,10 +46,10 @@ object ColumnKernel:
     def apply(value: Boolean): Boolean
 
   trait Utf8Predicate:
-    def apply(value: Option[String]): Boolean
+    def apply(value: String): Boolean
 
   trait Utf8Map:
-    def apply(value: Option[String]): Option[String]
+    def apply(value: String): String
 
   def filterInt32(batch: ColumnBatch, ordinal: Int, predicate: Int32Predicate): ColumnBatch =
     val column = asInt32(columnAt(batch, ordinal), ordinal)
@@ -234,7 +234,7 @@ object ColumnKernel:
     var written = 0
     var row = 0
     while (row < live) {
-      if (predicate(utf8Value(column, row))) then
+      if (predicate(utf8String(column, row))) then
         inline if (record) then selection(written) = row
         if (Validity.isSet(words, row)) then
           out(written) = in(row)
@@ -304,21 +304,21 @@ object ColumnKernel:
     val capacity = column.codes.length
     val out = new Array[Int](capacity)
     val dstWords = Validity.allocate(capacity)
-    val words = (0 until live).foldLeft(DictUtf8Column.Words.empty) { (words, row) =>
-      mapper(utf8Value(column, row)) match
-        case Some(text) =>
-          val (next, code) = words.intern(text)
-          out(row) = code
-          Validity.setBit(dstWords, row)
-          next
-        case None => words
+    val words = DictUtf8Column.Words.empty
+    var row = 0
+    while (row < live) {
+      val text = mapper(utf8String(column, row))
+      if (!BatchCodec.isAbsent(text)) then
+        out(row) = words.intern(text)
+        Validity.setBit(dstWords, row)
+      row += 1
     }
     DictUtf8Column.of(words.toArray, out, Validity.fromWords(dstWords, capacity), live)
 
   /** An empty cell does not index the dictionary. */
-  private def utf8Value(column: DictUtf8Column, row: Int): Option[String] =
-    if (Validity.isSet(column.validity.words, row)) then Some(column.dictionary(column.codes(row)))
-    else None
+  private def utf8String(column: DictUtf8Column, row: Int): String =
+    if (Validity.isSet(column.validity.words, row)) then column.dictionary(column.codes(row))
+    else BatchCodec.stringElement(None)
 
   private def assemble(
       batch: ColumnBatch,

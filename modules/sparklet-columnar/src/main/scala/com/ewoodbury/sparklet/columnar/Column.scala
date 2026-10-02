@@ -159,8 +159,8 @@ object BoolColumn:
  * `codes` indexes it. There is no separate UTF-8 byte buffer.
  *
  * Filter, slice, and the hash exchange keep this dictionary. Concat keeps the head dictionary when
- * every piece contains the same strings in the same order, and otherwise builds a new one from the
- * strings that are present.
+ * every piece contains the same strings in the same order, and otherwise remaps each present code
+ * into a new dictionary.
  */
 final class DictUtf8Column private (
     val dictionary: Array[String],
@@ -175,24 +175,38 @@ object DictUtf8Column:
   def apply(values: Seq[String]): DictUtf8Column = fromIterable(values)
 
   def fromNullable(values: Seq[Option[String]]): DictUtf8Column =
-    encode(values.size, values.iterator)
+    encode(values.size, values.iterator.map(BatchCodec.stringElement))
 
   /**
    * One fill. `size` then the iterator, so a `Seq` is not copied twice. Null elements are empty
    * slots.
    */
   def fromIterable(values: Iterable[String]): DictUtf8Column =
-    encode(values.size, values.iterator.map(text => Option(text)))
+    encode(values.size, values.iterator)
 
-  private def encode(count: Int, cells: Iterator[Option[String]]): DictUtf8Column =
+  private def encode(count: Int, cells: Iterator[String]): DictUtf8Column =
     val codes = new Array[Int](count)
     val present = new Array[Boolean](count)
-    val words = cells.zipWithIndex.foldLeft(Words.empty) { (words, item) =>
-      item match
-        case (Some(text), row) => assign(words, text, codes, present, row)
-        case (None, _) => words
-    }
+    val words = Words.empty
+    fill(count, cells, words, codes, present)
     publish(words, codes, present)
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def fill(
+      count: Int,
+      cells: Iterator[String],
+      words: Words,
+      codes: Array[Int],
+      present: Array[Boolean],
+  ): Unit =
+    var row = 0
+    while (row < count) {
+      val text = cells.next()
+      if (!BatchCodec.isAbsent(text)) then
+        present(row) = true
+        codes(row) = words.intern(text)
+      row += 1
+    }
 
   /** Retains `dictionary` and `codes`. Capacity may exceed `length`. */
   def of(
@@ -204,31 +218,29 @@ object DictUtf8Column:
     Column.check(length, codes.length, validity)
     new DictUtf8Column(dictionary, codes, validity, length)
 
-  private def assign(
-      words: Words,
-      text: String,
-      codes: Array[Int],
-      present: Array[Boolean],
-      row: Int,
-  ): Words =
-    val (next, code) = words.intern(text)
-    present(row) = true
-    codes(row) = code
-    next
-
   private def publish(words: Words, codes: Array[Int], present: Array[Boolean]): DictUtf8Column =
     of(words.toArray, codes, Validity.pack(present.length, row => present(row)), present.length)
 
-  /** First-seen strings. `entries` is newest-first until [[toArray]]. */
-  private[columnar] final case class Words(entries: List[String], index: Map[String, Int]):
-    def intern(text: String): (Words, Int) =
-      index.get(text) match
-        case Some(code) => (this, code)
-        case None =>
-          val code = index.size
-          (Words(text :: entries, index.updated(text, code)), code)
+  /**
+   * First-seen strings. The table is confined to construction. [[toArray]] is the published
+   * dictionary, in first-seen order.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.MutableDataStructures"))
+  private[columnar] final class Words:
+    private val entries = scala.collection.mutable.ArrayBuffer.empty[String]
+    private val index = new java.util.HashMap[String, Integer]
 
-    def toArray: Array[String] = entries.reverse.toArray
+    @SuppressWarnings(Array("org.wartremover.warts.Null", "org.wartremover.warts.Equals"))
+    def intern(text: String): Int =
+      val existing = index.get(text)
+      if (existing eq null) then
+        val code = entries.length
+        entries += text
+        index.put(text, code)
+        code
+      else existing.intValue
+
+    def toArray: Array[String] = entries.toArray
 
   private[columnar] object Words:
-    val empty: Words = Words(Nil, Map.empty)
+    def empty: Words = new Words
