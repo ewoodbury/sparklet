@@ -4,23 +4,28 @@ import com.ewoodbury.sparklet.columnar.*
 import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf}
 
 /**
- * Runs `Int` and `(Int, Int)` plans on the columnar kernels.
+ * Runs `Int`, `(Int, Int)`, and `String` plans on the columnar kernels.
  *
  * Named erasure boundary. `Plan` is invariant and its element type is erased, so a source is
- * classified by reading one value, and user functions are then cast to `Int` operations. A
- * function that does not return `Int` throws `ClassCastException`. [[tryRun]] catches that and
+ * classified by reading one value, and user functions are then cast to that operation. A function
+ * that does not return the selected type throws `ClassCastException`. [[tryRun]] catches that and
  * returns `None`, and the row path runs the whole plan. Any unsupported node (union, flatMap,
- * distinct, sort, a map that is not fed by `Int`, and the rest) makes the whole plan ineligible,
- * so a supported prefix is not executed on its own.
+ * distinct, sort, a map that is not fed by `Int` or `String`, and the rest) makes the whole plan
+ * ineligible, so a supported prefix is not executed on its own.
  *
- * Narrow map and filter keep input order and the input partition count. `reduceByKey` applies the
- * user's function and wraps at `Int`. `join` hash-partitions both sides and probes one bucket at a
- * time. Output width for those two is `defaultShufflePartitions`.
+ * Narrow map and filter keep input order and the input partition count. `String` selects filter
+ * and map only. `reduceByKey` applies the user's function and wraps at `Int`. `join`
+ * hash-partitions both sides and probes one bucket at a time. Output width for those two is
+ * `defaultShufflePartitions`.
+ *
+ * A null string is a value. Classification skips a leading null and keeps looking for a `String`.
+ * An all-null source stays on the row path, because there is no witness.
  */
 @SuppressWarnings(
   Array(
     "org.wartremover.warts.Any",
     "org.wartremover.warts.AsInstanceOf",
+    "org.wartremover.warts.Null",
     "org.wartremover.warts.Throw",
   ),
 )
@@ -32,8 +37,8 @@ object ColumnarPlanner:
   /**
    * Run `plan` on the columnar path. `None` means the caller should use the row path. The single
    * result cast is safe when selection succeeded: the decoded partitions have the plan's element
-   * type. A `ClassCastException` from a function that is not actually `Int => Int` is a row-path
-   * fallback, and user side effects in that function may already have run.
+   * type. A `ClassCastException` from a function that is not actually the selected type is a
+   * row-path fallback, and user side effects in that function may already have run.
    */
   def tryRun[A](plan: Plan[A]): Option[Seq[Partition[A]]] =
     if (selected(plan).isEmpty) then None
@@ -42,15 +47,16 @@ object ColumnarPlanner:
       catch case _: ClassCastException => None
 
   private enum SourceKind:
-    case Ints, Pairs
+    case Ints, Pairs, Strings
 
   private enum OutputKind:
-    case Ints, Pairs, Triples
+    case Ints, Pairs, Triples, Strings
 
   private enum Columns:
     case Ints(parts: Vector[ColumnBatch])
     case Pairs(parts: Vector[ColumnBatch])
     case Triples(parts: Vector[ColumnBatch])
+    case Strings(parts: Vector[ColumnBatch])
 
   private enum Route:
     case Skip
@@ -76,15 +82,19 @@ object ColumnarPlanner:
           Route.Run(narrow(Distribution.Unknown(partitions.length)), OutputKind.Ints)
         case Some(SourceKind.Pairs) =>
           Route.Run(narrow(Distribution.Unknown(partitions.length)), OutputKind.Pairs)
+        case Some(SourceKind.Strings) =>
+          Route.Run(narrow(Distribution.Unknown(partitions.length)), OutputKind.Strings)
         case None => Route.Skip
     case Plan.FilterOp(source, _) =>
       route(source) match
         case Route.Run(info, OutputKind.Ints) => Route.Run(info, OutputKind.Ints)
         case Route.Run(info, OutputKind.Pairs) => Route.Run(info, OutputKind.Pairs)
+        case Route.Run(info, OutputKind.Strings) => Route.Run(info, OutputKind.Strings)
         case _ => Route.Skip
     case Plan.MapOp(source, _) =>
       route(source) match
         case Route.Run(info, OutputKind.Ints) => Route.Run(info, OutputKind.Ints)
+        case Route.Run(info, OutputKind.Strings) => Route.Run(info, OutputKind.Strings)
         case _ => Route.Skip
     case Plan.FilterKeysOp(source, _) =>
       keepPairs(route(source))
@@ -120,9 +130,20 @@ object ColumnarPlanner:
   private def encodedSource(partitions: Seq[Partition[_]]): Option[SourceKind] =
     if (partitions.isEmpty) then None
     else
-      partitions.iterator.map(_.data.iterator).flatten.nextOption() match
+      val values = partitions.iterator.flatMap(_.data.iterator)
+      values.nextOption() match
         case Some(_: Int) => Some(SourceKind.Ints)
         case Some((_: Int, _: Int)) => Some(SourceKind.Pairs)
+        case Some(_: String) => Some(SourceKind.Strings)
+        case Some(null) =>
+          values
+            .dropWhile {
+              case null => true
+              case _ => false
+            }
+            .nextOption() match
+            case Some(_: String) => Some(SourceKind.Strings)
+            case _ => None
         case _ => None
 
   private def eval(plan: Plan[_]): Columns = plan match
@@ -130,7 +151,8 @@ object ColumnarPlanner:
       encodedSource(partitions) match
         case Some(SourceKind.Ints) => Columns.Ints(encodeInts(partitions))
         case Some(SourceKind.Pairs) => Columns.Pairs(encodePairs(partitions))
-        case None => throw new IllegalStateException("columnar source has no int values")
+        case Some(SourceKind.Strings) => Columns.Strings(encodeStrings(partitions))
+        case None => throw new IllegalStateException("columnar source has no encodable values")
     case Plan.FilterOp(source, predicate) =>
       eval(source) match
         case Columns.Ints(parts) =>
@@ -144,17 +166,27 @@ object ColumnarPlanner:
           Columns.Pairs(onEach(parts) { batch =>
             PairKernel.filter(batch, (key, value) => keep((key, value)))
           })
+        case Columns.Strings(parts) =>
+          val keep = predicate.asInstanceOf[String => Boolean]
+          Columns.Strings(onEach(parts) { batch =>
+            ColumnKernel.filterUtf8(batch, 0, value => keep(value))
+          })
         case Columns.Triples(_) =>
           throw new IllegalStateException("columnar filter does not accept a join result")
     case Plan.MapOp(source, mapper) =>
-      val fn = mapper.asInstanceOf[Int => Int]
       eval(source) match
         case Columns.Ints(parts) =>
+          val fn = mapper.asInstanceOf[Int => Int]
           Columns.Ints(onEach(parts) { batch =>
             ColumnKernel.projectInt32(batch, 0, value => fn(value))
           })
+        case Columns.Strings(parts) =>
+          val fn = mapper.asInstanceOf[String => Any]
+          Columns.Strings(onEach(parts) { batch =>
+            ColumnKernel.projectUtf8(batch, 0, value => stringResult(fn(value)))
+          })
         case _ =>
-          throw new IllegalStateException("columnar map expects ints")
+          throw new IllegalStateException("columnar map expects ints or strings")
     case Plan.FilterKeysOp(source, predicate) =>
       val keep = predicate.asInstanceOf[Int => Boolean]
       Columns.Pairs(onEach(pairsOf(eval(source))) { batch =>
@@ -220,6 +252,16 @@ object ColumnarPlanner:
       BatchCodec.ints(partition.data.asInstanceOf[Iterable[Int]])
     }.toVector
 
+  private def stringResult(value: Any): String = value match
+    case text: String => text
+    case null => null
+    case _ => throw new ClassCastException
+
+  private def encodeStrings(partitions: Seq[Partition[_]]): Vector[ColumnBatch] =
+    partitions.map { partition =>
+      BatchCodec.strings(partition.data.asInstanceOf[Iterable[String]])
+    }.toVector
+
   private def encodePairs(partitions: Seq[Partition[_]]): Vector[ColumnBatch] =
     partitions.map { partition =>
       BatchCodec.intPairs(partition.data.asInstanceOf[Iterable[(Int, Int)]])
@@ -232,6 +274,8 @@ object ColumnarPlanner:
       parts.map(batch => Partition(BatchCodec.decodeIntPairs(batch)))
     case Columns.Triples(parts) =>
       parts.map(batch => Partition(BatchCodec.decodeIntTriples(batch)))
+    case Columns.Strings(parts) =>
+      parts.map(batch => Partition(BatchCodec.decodeStrings(batch)))
 
   private def batchSize: Int =
     val size = SparkletConf.get.columnarBatchSize

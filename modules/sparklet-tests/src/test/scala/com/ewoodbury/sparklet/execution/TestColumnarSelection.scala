@@ -68,7 +68,7 @@ class TestColumnarSelection extends AnyFlatSpec with Matchers with BeforeAndAfte
     DistCollection(Seq(1, 2, 3), 2).map(_.toString).collect() shouldBe Seq("1", "2", "3")
   }
 
-  "string plans" should "stay on the row path" in {
+  "string keys" should "keep reduceByKey and join on the row path" in {
     val reduced = DistCollection(Seq("a" -> 1, "a" -> 2, "b" -> 3), 2).reduceByKey[String, Int](_ + _)
     reduced.collect().toMap shouldBe Map("a" -> 3, "b" -> 3)
     infoOf(reduced) shouldBe Option.empty[PartitioningInfo]
@@ -162,6 +162,54 @@ class TestColumnarSelection extends AnyFlatSpec with Matchers with BeforeAndAfte
     assertHashed(build.join(probe))
   }
 
+  "string filter" should "keep input order, nulls, and a columnar layout" in {
+    val filtered = DistCollection(mixedStrings, 2).filter(keepNullOrNotBb)
+
+    filtered.collect() shouldBe keptStrings
+    assertNarrow(filtered, 2)
+  }
+
+  it should "keep order when map and filter run as morsels" in {
+    SparkletConf.set(SparkletConf.get.copy(columnarBatchSize = 2, threadPoolSize = 4))
+    val mapped = DistCollection(Seq("a", "bb", "ccc", "d", "ee"), 1)
+      .map(_.toUpperCase(java.util.Locale.ROOT))
+      .filter(_.length > 1)
+
+    mapped.collect() shouldBe Seq("BB", "CCC", "EE")
+    assertNarrow(mapped, 1)
+  }
+
+  it should "select strings that start with null, and leave an all-null source on the row path" in {
+    val witnessed = DistCollection(leadingNull, 1).filter(presentString)
+    witnessed.collect() shouldBe Seq("a", "b")
+    assertNarrow(witnessed, 1)
+
+    val unseen = DistCollection(onlyNulls, 2).filter(_ => true)
+    unseen.collect() shouldBe onlyNulls
+    infoOf(unseen) shouldBe Option.empty[PartitioningInfo]
+  }
+
+  it should "match the row path when a map introduces and removes nulls" in {
+    val plan = DistCollection(rewriteInput, 2).map(rewrite)
+
+    assertNarrow(plan, 2)
+    columnar(plan.collect()) shouldBe row(plan.collect())
+  }
+
+  it should "leave string reduceByKey on the row path" in {
+    val pairs = Seq("a" -> 1, "a" -> 2, "b" -> 3)
+    val reduced = DistCollection(pairs, 2).reduceByKey[String, Int](_ + _)
+
+    reduced.collect().toMap shouldBe Map("a" -> 3, "b" -> 3)
+    infoOf(reduced) shouldBe Option.empty[PartitioningInfo]
+  }
+
+  it should "fall back when a string map does not return a string" in {
+    val mapped = DistCollection(Seq("a", "bb"), 2).map(_.length)
+
+    mapped.collect() shouldBe Seq(1, 2)
+  }
+
   "columnar path" should "match the row path on filter, map, reduceByKey, join, and filterKeys" in {
     val ints = Seq(1, 2, 3, 4, 5, 6)
     val pairs = Seq(1 -> 10, 2 -> 20, 1 -> 3, 4 -> 1, 2 -> 5)
@@ -198,6 +246,16 @@ class TestColumnarSelection extends AnyFlatSpec with Matchers with BeforeAndAfte
     infoOf(filtered) shouldBe Option.empty[PartitioningInfo]
   }
 
+  private def columnar[A](body: => A): A =
+    SparkletRuntime.get.shuffle.clear()
+    SparkletConf.set(originalConf.copy(columnarExecution = true))
+    body
+
+  private def row[A](body: => A): A =
+    SparkletRuntime.get.shuffle.clear()
+    SparkletConf.set(originalConf.copy(columnarExecution = false))
+    body
+
   private def partitionsOf[A](collection: DistCollection[A]): Seq[Partition[A]] =
     ExecutionService.get.executePartitions(collection.plan)
 
@@ -228,6 +286,38 @@ class TestColumnarSelection extends AnyFlatSpec with Matchers with BeforeAndAfte
         Math.floorMod(key, width) shouldBe index
       }
     }
+
+  @SuppressWarnings(Array("org.wartremover.warts.Null"))
+  private def mixedStrings: Seq[String] = Seq("a", null, "bb", "a", "")
+
+  @SuppressWarnings(Array("org.wartremover.warts.Null"))
+  private def keptStrings: Seq[String] = Seq("a", null, "a", "")
+
+  @SuppressWarnings(Array("org.wartremover.warts.Null"))
+  private def leadingNull: Seq[String] = Seq(null, "a", "b")
+
+  @SuppressWarnings(Array("org.wartremover.warts.Null"))
+  private def onlyNulls: Seq[String] = Seq(null, null)
+
+  @SuppressWarnings(Array("org.wartremover.warts.Null"))
+  private def rewriteInput: Seq[String] = Seq("a", null, "bb", "a")
+
+  @SuppressWarnings(Array("org.wartremover.warts.Null"))
+  private def keepNullOrNotBb(value: String): Boolean = value match
+    case null => true
+    case "bb" => false
+    case _ => true
+
+  @SuppressWarnings(Array("org.wartremover.warts.Null"))
+  private def presentString(value: String): Boolean = value match
+    case null => false
+    case _ => true
+
+  @SuppressWarnings(Array("org.wartremover.warts.Null"))
+  private def rewrite(value: String): String = value match
+    case null => "n"
+    case "bb" => null
+    case text => text.toUpperCase(java.util.Locale.ROOT)
 
   private def assertUniqueKeys[V](parts: Seq[Partition[(Int, V)]]): Unit =
     val keys = parts.flatMap(_.data.map(_._1))

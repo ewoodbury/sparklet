@@ -62,6 +62,15 @@ object ColumnBatches:
         val values = new Array[Byte](length)
         System.arraycopy(bool.values, start, values, 0, length)
         BoolColumn.of(values, validityRange(bool.validity, start, length), length)
+      case utf8: DictUtf8Column =>
+        val codes = new Array[Int](length)
+        System.arraycopy(utf8.codes, start, codes, 0, length)
+        DictUtf8Column.of(
+          utf8.dictionary,
+          codes,
+          validityRange(utf8.validity, start, length),
+          length,
+        )
 
   private def columnAt(batch: ColumnBatch, ordinal: Int): Column =
     batch.columns.lift(ordinal).getOrElse {
@@ -80,6 +89,8 @@ object ColumnBatches:
         appendFloat64(columns.collect { case column: Float64Column => column }, total)
       case Some(_: BoolColumn) =>
         appendBool(columns.collect { case column: BoolColumn => column }, total)
+      case Some(_: DictUtf8Column) =>
+        appendUtf8(columns.collect { case column: DictUtf8Column => column }, total)
       case None =>
         throw new IllegalArgumentException("concat needs a column")
 
@@ -130,6 +141,45 @@ object ColumnBatches:
     }
     require(written == total, s"copied $written rows into $total")
     BoolColumn.of(values, Validity.fromWords(words, total), total)
+
+  private def appendUtf8(columns: Vector[DictUtf8Column], total: Int): DictUtf8Column =
+    val head = columns.headOption.getOrElse {
+      throw new IllegalArgumentException("concat needs a column")
+    }
+    val codes = new Array[Int](total)
+    val words = Validity.allocate(total)
+    if (columns.forall(column => sameDictionary(column.dictionary, head.dictionary))) then
+      val written = columns.foldLeft(0) { (offset, column) =>
+        val length = column.length
+        System.arraycopy(column.codes, 0, codes, offset, length)
+        copyBits(column.validity, 0, words, offset, length)
+        offset + length
+      }
+      require(written == total, s"copied $written rows into $total")
+      DictUtf8Column.of(head.dictionary, codes, Validity.fromWords(words, total), total)
+    else
+      val builder = new DictUtf8Column.Builder
+      val written = columns.foldLeft(0) { (offset, column) =>
+        var row = 0
+        val length = column.length
+        val dictionary = column.dictionary
+        val columnCodes = column.codes
+        val columnWords = column.validity.words
+        while (row < length) {
+          if (Validity.isSet(columnWords, row)) then
+            codes(offset + row) = builder.code(dictionary(columnCodes(row)))
+            Validity.setBit(words, offset + row)
+          row += 1
+        }
+        offset + length
+      }
+      require(written == total, s"copied $written rows into $total")
+      DictUtf8Column.of(builder.result(), codes, Validity.fromWords(words, total), total)
+
+  /** Codes stay valid only when every piece already uses this dictionary object. */
+  @SuppressWarnings(Array("org.wartremover.warts.Equals"))
+  private def sameDictionary(left: Array[String], right: Array[String]): Boolean =
+    left eq right
 
   private def validityRange(from: Validity, start: Int, length: Int): Validity =
     val words = Validity.allocate(length)
