@@ -10,6 +10,11 @@ class TestColumnKernel extends AnyFlatSpec with Matchers:
 
   private def utf8(batch: ColumnBatch): DictUtf8Column = utf8At(batch, 0)
 
+  private def int32(batch: ColumnBatch): Int32Column =
+    at(batch, 0) match
+      case column: Int32Column => column
+      case other => fail(s"expected Int32, got $other")
+
   private def utf8At(batch: ColumnBatch, ordinal: Int): DictUtf8Column =
     at(batch, ordinal) match
       case column: DictUtf8Column => column
@@ -349,7 +354,42 @@ class TestColumnKernel extends AnyFlatSpec with Matchers:
     BatchCodec.decodeNullableInts(batch) shouldBe expected
   }
 
-  "kernels" should "reject a bad ordinal or a column of the wrong type" in {
+  it should "fuse filters and projects without invoking functions for nulls" in {
+    val column = Int32Column.of(Array(2, 42, 3), Validity.pack(3, row => row != 1), 3)
+    val batch = single(column)
+    val fusedFilter = ColumnKernel.pipelineInt32FP(
+      batch,
+      _ > 0,
+      value =>
+        if (value == 42) then throw new IllegalStateException("mapper saw a null slot")
+        else value * 10,
+    )
+    val fusedProjects = ColumnKernel.pipelineInt32PP(
+      batch,
+      _ + 1,
+      value =>
+        if (value == 42) then throw new IllegalStateException("mapper saw a null slot")
+        else value + 1,
+    )
+
+    BatchCodec.decodeNullableInts(fusedFilter) shouldBe Seq(Some(20), Some(30))
+    BatchCodec.decodeNullableInts(fusedProjects) shouldBe Seq(Some(4), None, Some(5))
+  }
+
+  it should "size compacted pipeline buffers to the live rows" in {
+    val input = Int32Column.of(Array(1, 2, 3, 99, 100), Validity.allValid(5), length = 3)
+    val first = ColumnKernel.pipelineInt32FP(single(input), _ > 1, value => value)
+    val second = ColumnKernel.pipelineInt32FP(first, _ > 2, _ + 1)
+
+    BatchCodec.decodeInts(first) shouldBe Seq(2, 3)
+    BatchCodec.decodeInts(second) shouldBe Seq(4)
+    int32(first).values.length shouldBe 3
+    int32(first).validity.capacity shouldBe 3
+    int32(second).values.length shouldBe 2
+    int32(second).validity.capacity shouldBe 2
+  }
+
+  "kernels" should "reject invalid ordinals, column types, or pipeline widths" in {
     val ints = BatchCodec.ints(Seq(1))
     val pairs = BatchCodec.intPairs(Seq((1, 2)))
 
@@ -358,4 +398,6 @@ class TestColumnKernel extends AnyFlatSpec with Matchers:
     an[IllegalArgumentException] should be thrownBy ColumnKernel.filterInt64(ints, 0, _ > 0L)
     an[IllegalArgumentException] should be thrownBy ColumnKernel.projectFloat64(pairs, 0, _ * 2.0)
     an[IllegalArgumentException] should be thrownBy ColumnKernel.projectBool(ints, 0, value => value)
+    an[IllegalArgumentException] should be thrownBy
+      ColumnKernel.pipelineInt32PP(pairs, _ + 1, _ + 1)
   }

@@ -16,7 +16,8 @@ package com.ewoodbury.sparklet.columnar
  * published bitmap.
  *
  * Primitive loops keep the row index in a `var` so the bodies stay allocation-free. Each primitive
- * has its own loop so the copy stays monomorphic.
+ * has its own loop so the copy stays monomorphic. The inline int pipeline loop expands each
+ * concrete filter/project pattern at its call site.
  */
 @SuppressWarnings(Array("org.wartremover.warts.Var"))
 object ColumnKernel:
@@ -107,6 +108,418 @@ object ColumnKernel:
 
   def projectInt32(batch: ColumnBatch, ordinal: Int, mapper: Int32Map): ColumnBatch =
     replace(batch, ordinal, mapInt32(asInt32(columnAt(batch, ordinal), ordinal), mapper))
+
+  def pipelineInt32FF(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value => if (first(value) && second(value)) then accepted(value) else 0L,
+    )
+
+  def pipelineInt32FP(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(batch, true, value => if (first(value)) then accepted(second(value)) else 0L)
+
+  def pipelineInt32PF(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = first(value)
+        if (second(mapped)) then accepted(mapped) else 0L,
+    )
+
+  def pipelineInt32PP(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Map,
+  ): ColumnBatch = fuseInt32(batch, false, value => accepted(second(first(value))))
+
+  def pipelineInt32FFF(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Predicate,
+      third: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value => if (first(value) && second(value) && third(value)) then accepted(value) else 0L,
+    )
+
+  def pipelineInt32FFP(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Predicate,
+      third: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value => if (first(value) && second(value)) then accepted(third(value)) else 0L,
+    )
+
+  def pipelineInt32FPF(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Map,
+      third: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        if (first(value)) then
+          val mapped = second(value)
+          if (third(mapped)) then accepted(mapped) else 0L
+        else 0L,
+    )
+
+  def pipelineInt32FPP(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Map,
+      third: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(batch, true, value => if (first(value)) then accepted(third(second(value))) else 0L)
+
+  def pipelineInt32PFF(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Predicate,
+      third: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = first(value)
+        if (second(mapped) && third(mapped)) then accepted(mapped) else 0L,
+    )
+
+  def pipelineInt32PFP(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Predicate,
+      third: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = first(value)
+        if (second(mapped)) then accepted(third(mapped)) else 0L,
+    )
+
+  def pipelineInt32PPF(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Map,
+      third: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = second(first(value))
+        if (third(mapped)) then accepted(mapped) else 0L,
+    )
+
+  def pipelineInt32PPP(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Map,
+      third: Int32Map,
+  ): ColumnBatch = fuseInt32(batch, false, value => accepted(third(second(first(value)))))
+
+  def pipelineInt32FFFF(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Predicate,
+      third: Int32Predicate,
+      fourth: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        if (first(value) && second(value) && third(value) && fourth(value)) then accepted(value)
+        else 0L,
+    )
+
+  def pipelineInt32FFFP(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Predicate,
+      third: Int32Predicate,
+      fourth: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        if (first(value) && second(value) && third(value)) then accepted(fourth(value)) else 0L,
+    )
+
+  def pipelineInt32FFPF(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Predicate,
+      third: Int32Map,
+      fourth: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        if (first(value) && second(value)) then
+          val mapped = third(value)
+          if (fourth(mapped)) then accepted(mapped) else 0L
+        else 0L,
+    )
+
+  def pipelineInt32FFPP(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Predicate,
+      third: Int32Map,
+      fourth: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value => if (first(value) && second(value)) then accepted(fourth(third(value))) else 0L,
+    )
+
+  def pipelineInt32FPFF(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Map,
+      third: Int32Predicate,
+      fourth: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        if (first(value)) then
+          val mapped = second(value)
+          if (third(mapped) && fourth(mapped)) then accepted(mapped) else 0L
+        else 0L,
+    )
+
+  def pipelineInt32FPFP(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Map,
+      third: Int32Predicate,
+      fourth: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        if (first(value)) then
+          val mapped = second(value)
+          if (third(mapped)) then accepted(fourth(mapped)) else 0L
+        else 0L,
+    )
+
+  def pipelineInt32FPPF(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Map,
+      third: Int32Map,
+      fourth: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        if (first(value)) then
+          val mapped = third(second(value))
+          if (fourth(mapped)) then accepted(mapped) else 0L
+        else 0L,
+    )
+
+  def pipelineInt32FPPP(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Map,
+      third: Int32Map,
+      fourth: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value => if (first(value)) then accepted(fourth(third(second(value)))) else 0L,
+    )
+
+  def pipelineInt32PFFF(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Predicate,
+      third: Int32Predicate,
+      fourth: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = first(value)
+        if (second(mapped) && third(mapped) && fourth(mapped)) then accepted(mapped) else 0L,
+    )
+
+  def pipelineInt32PFFP(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Predicate,
+      third: Int32Predicate,
+      fourth: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = first(value)
+        if (second(mapped) && third(mapped)) then accepted(fourth(mapped)) else 0L,
+    )
+
+  def pipelineInt32PFPF(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Predicate,
+      third: Int32Map,
+      fourth: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = first(value)
+        if (second(mapped)) then
+          val next = third(mapped)
+          if (fourth(next)) then accepted(next) else 0L
+        else 0L,
+    )
+
+  def pipelineInt32PFPP(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Predicate,
+      third: Int32Map,
+      fourth: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = first(value)
+        if (second(mapped)) then accepted(fourth(third(mapped))) else 0L,
+    )
+
+  def pipelineInt32PPFF(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Map,
+      third: Int32Predicate,
+      fourth: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = second(first(value))
+        if (third(mapped) && fourth(mapped)) then accepted(mapped) else 0L,
+    )
+
+  def pipelineInt32PPFP(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Map,
+      third: Int32Predicate,
+      fourth: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = second(first(value))
+        if (third(mapped)) then accepted(fourth(mapped)) else 0L,
+    )
+
+  def pipelineInt32PPPF(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Map,
+      third: Int32Map,
+      fourth: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = third(second(first(value)))
+        if (fourth(mapped)) then accepted(mapped) else 0L,
+    )
+
+  def pipelineInt32PPPP(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Map,
+      third: Int32Map,
+      fourth: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(batch, false, value => accepted(fourth(third(second(first(value))))))
+
+  private inline def fuseInt32(
+      batch: ColumnBatch,
+      inline compact: Boolean,
+      inline process: Int => Long,
+  ): ColumnBatch =
+    require(
+      batch.columns.length == 1,
+      s"int pipeline expects a single-column batch, got ${batch.columns.length}",
+    )
+    val column = asInt32(columnAt(batch, 0), 0)
+    val live = column.length
+    val in = column.values
+    val words = column.validity.words
+    // Compaction only needs live-row capacity; map-only pipelines preserve input capacity.
+    val capacity = inline if (compact) then live else in.length
+    val out = new Array[Int](capacity)
+    var written = 0
+    var row = 0
+    while (row < live) {
+      if (Validity.isSet(words, row)) then
+        val result = process(in(row))
+        inline if (compact) then
+          if ((result & 1L) != 0L) then
+            out(written) = (result >> 1).toInt
+            written += 1
+        else out(row) = (result >> 1).toInt
+      row += 1
+    }
+    val length = inline if (compact) then written else live
+    val validity =
+      inline if (compact) then Validity.prefixValid(capacity, written)
+      else column.validity
+    val result = Int32Column.of(out, validity, length)
+    new ColumnBatch(batch.schema, Vector(result), length)
+
+  // The low bit marks a surviving row; the remaining bits preserve the signed int payload.
+  private inline def accepted(value: Int): Long = (value.toLong << 1) | 1L
 
   def projectInt64(batch: ColumnBatch, ordinal: Int, mapper: Int64Map): ColumnBatch =
     replace(batch, ordinal, mapInt64(asInt64(columnAt(batch, ordinal), ordinal), mapper))

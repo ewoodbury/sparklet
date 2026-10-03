@@ -12,8 +12,7 @@ import com.ewoodbury.sparklet.core.SparkletConf
 import com.ewoodbury.sparklet.runtime.SparkletRuntime
 
 /**
- * The columnar path lowers one physical node per operator and runs that tree. Fusion is not this
- * step.
+ * The columnar path lowers physical trees and fuses short int filter/project runs.
  */
 class TestPhysicalPlan extends AnyFlatSpec with Matchers with BeforeAndAfterEach:
 
@@ -24,7 +23,8 @@ class TestPhysicalPlan extends AnyFlatSpec with Matchers with BeforeAndAfterEach
     SparkletConf.set(originalConf)
     ()
 
-  "an int pipeline" should "keep one project per map" in {
+  "an int pipeline" should "fuse four maps into one project loop" in {
+    shape(DistCollection(Seq(1, 2, 3), 1).map(_ + 1)) shouldBe "Project(Scan)"
     val calls = new AtomicInteger
     val mapped = DistCollection(Seq(1, 2, 3), 1)
       .map { value =>
@@ -34,16 +34,53 @@ class TestPhysicalPlan extends AnyFlatSpec with Matchers with BeforeAndAfterEach
       .map(_ + 1)
       .map(_ + 1)
       .map(_ + 1)
-    shape(mapped) shouldBe "Project(Project(Project(Project(Scan))))"
+    shape(mapped) shouldBe "Pipeline4(Scan)"
     calls.get() shouldBe 0
     mapped.collect() shouldBe Seq(5, 6, 7)
     calls.get() shouldBe 3
   }
 
-  it should "keep filter and project as separate nodes" in {
+  it should "fuse a filter and project" in {
     val pipeline = DistCollection(Seq(1, 2, 3, 4), 2).filter(_ % 2 == 0).map(_ * 10)
-    shape(pipeline) shouldBe "Project(Filter(Scan))"
+    shape(pipeline) shouldBe "Pipeline2(Scan)"
     pipeline.collect() shouldBe Seq(20, 40)
+  }
+
+  it should "cut long runs into source-ordered groups of four" in {
+    val five = DistCollection(Seq(1, 2, 3), 1)
+      .map(_ + 1)
+      .map(_ + 1)
+      .map(_ + 1)
+      .map(_ + 1)
+      .map(_ + 1)
+    val six = five.map(_ + 1)
+
+    shape(five) shouldBe "Project(Pipeline4(Scan))"
+    shape(six) shouldBe "Pipeline2(Pipeline4(Scan))"
+    six.collect() shouldBe Seq(7, 8, 9)
+    SparkletConf.set(SparkletConf.get.copy(columnarExecution = false))
+    six.collect() shouldBe Seq(7, 8, 9)
+  }
+
+  it should "dispatch every two-, three-, and four-step pattern" in {
+    val pipelines = for
+      length <- 2 to 4
+      pattern <- 0 until (1 << length)
+    yield
+      val plan = (0 until length).foldLeft(DistCollection(Seq(-2, -1, 0, 1, 2, 3), 1)) {
+        (current, index) =>
+          if (((pattern >>> index) & 1) == 0) then current.filter(_ > 0)
+          else current.map(_ + 3)
+      }
+      (length, plan)
+
+    pipelines.length shouldBe 28
+    pipelines.foreach { (length, plan) =>
+      shape(plan) shouldBe s"Pipeline$length(Scan)"
+    }
+    val columnar = pipelines.map((_, plan) => plan.collect())
+    SparkletConf.set(SparkletConf.get.copy(columnarExecution = false))
+    columnar shouldBe pipelines.map((_, plan) => plan.collect())
   }
 
   "a pair plan" should "stop a filter at the aggregate" in {
