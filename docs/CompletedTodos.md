@@ -5,7 +5,7 @@ longer exist are marked superseded; see ARCHITECTURE.md for the current system a
 limitations. Deferred work is tracked in the external roadmap.
 
 ## Project 1 — Foundation & Hygiene
-- [x] Central config (`SparkletConf`)
+- [x] Central config (`ScarletConf`)
   - [x] Default shuffle partitions, default parallelism, thread pool size
   - [x] Inject into `StageBuilder` and `DAGScheduler`; remove magic `4`
 - [x] Replace `println` with pluggable logging
@@ -17,7 +17,7 @@ limitations. Deferred work is tracked in the external roadmap.
 - [x] Thread-safe `ShuffleManager`
   - [x] Use concurrent map with thread locks
   - [x] Re-enable `Test / parallelExecution := true` when safe
-  - SUPERSEDED: tests stay sequential while `SparkletConf`/`SparkletRuntime` are process-global;
+  - SUPERSEDED: tests stay sequential while `ScarletConf`/`ScarletRuntime` are process-global;
     parallelism returns with dependency injection (deferred)
 - [x] Union correctness
   - [x] Implement union as true concatenation of inputs (not “pick left”)
@@ -41,10 +41,10 @@ limitations. Deferred work is tracked in the external roadmap.
   - [x] `runtime-local`: thread pool scheduler/executor
   - [x] `shuffle-local`: in-memory shuffle storage
 - [x] Multi-module sbt reorg
-  - SUPERSEDED module names: the build defines five modules — `sparklet-api`, `sparklet-core`,
-    `sparklet-execution`, `sparklet-runtime`, `sparklet-tests`. The planner and shuffle work
-    landed inside `sparklet-execution` and `sparklet-runtime` respectively; no
-    `sparklet-dataset` module exists.
+  - SUPERSEDED module names: the build defines five modules — `scarlet-api`, `scarlet-core`,
+    `scarlet-execution`, `scarlet-runtime`, `scarlet-tests`. The planner and shuffle work
+    landed inside `scarlet-execution` and `scarlet-runtime` respectively; no
+    `scarlet-dataset` module exists.
 
 ## Project 3 — Execution Correctness & Performance
 - [x] Iterator-based execution
@@ -69,7 +69,7 @@ limitations. Deferred work is tracked in the external roadmap.
 ## Project 4 - Hygiene, Fault Tolerance, and Reliability
 
 ### Phase 1: Basic Retry Logic
-- [x] `SparkletConf` fault tolerance settings: `maxTaskRetries`, `baseRetryDelayMs`,
+- [x] `ScarletConf` fault tolerance settings: `maxTaskRetries`, `baseRetryDelayMs`,
   `maxRetryDelayMs` (wired into `LocalTaskScheduler.submit` as of Milestone 1)
   - SUPERSEDED conf fields: `enableLineageRecovery`, `taskTimeoutMs`,
     `enableSpeculativeExecution`, `speculativeExecutionThreshold` removed in Milestone 1 —
@@ -90,7 +90,7 @@ limitations. Deferred work is tracked in the external roadmap.
 - [x] `LocalTaskScheduler` with fault tolerance integration
   - [x] Semaphore-based bounded parallelism
   - SUPERSEDED: `enableRecovery` constructor flag removed in Milestone 1; submission now
-    applies the `SparkletConf`-derived retry policy at submission time
+    applies the `ScarletConf`-derived retry policy at submission time
 - [x] `Task` trait lineage support (`LineageInfo`, `TaskResult`)
   - REMOVED in Milestone 2
 

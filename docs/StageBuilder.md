@@ -1,8 +1,8 @@
 # StageBuilder
 
 `StageBuilder` compiles logical plans into executable stage graphs. It is the boundary between
-the logical `Plan` vocabulary (sparklet-core) and the physical `Stage`/`Operation`/`WideOp`
-vocabulary (sparklet-execution).
+the logical `Plan` vocabulary (scarlet-core) and the physical `Stage`/`Operation`/`WideOp`
+vocabulary (scarlet-execution).
 
 ## Output model
 

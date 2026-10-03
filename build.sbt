@@ -63,68 +63,68 @@ lazy val scalatest = "org.scalatest" %% "scalatest" % "3.2.17"
 lazy val ceTesting = "org.typelevel" %% "cats-effect-testing-scalatest" % "1.5.0"
 
 // User-facing API (clean interface)
-lazy val `sparklet-api` = (project in file("modules/sparklet-api"))
+lazy val `scarlet-api` = (project in file("modules/scarlet-api"))
   .settings(
-    name := "sparklet-api",
+    name := "scarlet-api",
     commonSettings,
     libraryDependencies ++= Seq(scalaLogging)
   )
-  .dependsOn(`sparklet-core`)
+  .dependsOn(`scarlet-core`)
 
 // Core model and logical plan
-lazy val `sparklet-core` = (project in file("modules/sparklet-core"))
+lazy val `scarlet-core` = (project in file("modules/scarlet-core"))
   .settings(
-    name := "sparklet-core",
+    name := "scarlet-core",
     commonSettings,
     libraryDependencies ++= Seq(catsCore, catsEffect, scalaLogging, log4jApi, log4jCore, log4jSlf4j, disruptor)
   )
 
 // Runtime SPI (RunnableTask, TaskScheduler, ExecutorBackend, Partitioner, ShuffleService)
-lazy val `sparklet-runtime` = (project in file("modules/sparklet-runtime"))
+lazy val `scarlet-runtime` = (project in file("modules/scarlet-runtime"))
   .settings(
-    name := "sparklet-runtime",
+    name := "scarlet-runtime",
     commonSettings,
     libraryDependencies ++= Seq(scalaLogging)
   )
-  .dependsOn(`sparklet-core`)
+  .dependsOn(`scarlet-core`)
 
 // Execution engine (Stage, Task, DAGScheduler, StageBuilder, DistCollection, Executor)
-lazy val `sparklet-execution` = (project in file("modules/sparklet-execution"))
+lazy val `scarlet-execution` = (project in file("modules/scarlet-execution"))
   .settings(
-    name := "sparklet-execution",
+    name := "scarlet-execution",
     commonSettings,
     libraryDependencies ++= Seq(catsCore, catsEffect, scalaLogging, log4jApi, log4jCore, log4jSlf4j, disruptor)
   )
-  .dependsOn(`sparklet-api`, `sparklet-core`, `sparklet-runtime`, `sparklet-columnar`)
+  .dependsOn(`scarlet-api`, `scarlet-core`, `scarlet-runtime`, `scarlet-columnar`)
 
 // Column batches. No dependency on the logical plan or the row executor.
-lazy val `sparklet-columnar` = (project in file("modules/sparklet-columnar"))
+lazy val `scarlet-columnar` = (project in file("modules/scarlet-columnar"))
   .settings(
-    name := "sparklet-columnar",
+    name := "scarlet-columnar",
     commonSettings
   )
 
 // Test module aggregating all tests
-lazy val `sparklet-tests` = (project in file("modules/sparklet-tests"))
+lazy val `scarlet-tests` = (project in file("modules/scarlet-tests"))
   .settings(
-    name := "sparklet-tests",
+    name := "scarlet-tests",
     commonSettings,
     libraryDependencies ++= Seq(scalatest % Test, ceTesting % Test)
   )
-  .dependsOn(`sparklet-api`, `sparklet-execution`, `sparklet-runtime`, `sparklet-columnar`)
+  .dependsOn(`scarlet-api`, `scarlet-execution`, `scarlet-runtime`, `scarlet-columnar`)
 
 // Root aggregator
 lazy val root = (project in file("."))
   .aggregate(
-    `sparklet-api`,
-    `sparklet-core`,
-    `sparklet-runtime`,
-    `sparklet-execution`,
-    `sparklet-columnar`,
-    `sparklet-tests`
+    `scarlet-api`,
+    `scarlet-core`,
+    `scarlet-runtime`,
+    `scarlet-execution`,
+    `scarlet-columnar`,
+    `scarlet-tests`
   )
   .settings(
-    name := "sparklet",
+    name := "scarlet",
     publish / skip := true,
     Compile / sources := Seq.empty,
     Test / sources := Seq.empty,

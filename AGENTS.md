@@ -8,19 +8,19 @@ Environment
 - sbt and Java 17 are preinstalled and on PATH (user-local via coursier). Do not export JAVA_HOME or install anything.
 - sbt 1.10.11 is pinned in project/build.properties; the launcher binary is sbt 2.x. Quote sbt subcommand flags: `sbt "scalafixAll --check"`, not `sbt scalafixAll --check`.
 - Never run `sbt clean` — incremental compilation is the fast path.
-- Test logs are silenced to WARN via modules/sparklet-tests/src/test/resources/log4j2-test.xml. Do not raise levels to debug a failure; run the single suite and read the stack trace instead.
+- Test logs are silenced to WARN via modules/scarlet-tests/src/test/resources/log4j2-test.xml. Do not raise levels to debug a failure; run the single suite and read the stack trace instead.
 
 Commands (fast feedback loop)
-- Iterate on one suite: `make test-one T=com.ewoodbury.sparklet.core.TestActionContracts` (substitute the suite you changed).
+- Iterate on one suite: `make test-one T=com.ewoodbury.scarlet.core.TestActionContracts` (substitute the suite you changed).
 - Full suite before declaring anything done: `make test` (268 tests, ~30s).
 - Lint fix / lint check: `make lint` / `make test-lint`. Always run `make lint` before committing; it rewrites formatting.
 - Run all three gates before opening or updating a PR.
 
 Testing Conventions
 - Tests run sequentially (Test / parallelExecution := false); do not enable parallelism.
-- `SparkletConf` is global mutable state: tests that change it must restore defaults in afterEach.
-- Retry-related tests must set short delays (baseRetryDelayMs = 1L) via SparkletConf, or they take seconds.
-- SparkletRuntime is a global singleton; TestPluggability shows the set/restore pattern for swapping implementations.
+- `ScarletConf` is global mutable state: tests that change it must restore defaults in afterEach.
+- Retry-related tests must set short delays (baseRetryDelayMs = 1L) via ScarletConf, or they take seconds.
+- ScarletRuntime is a global singleton; TestPluggability shows the set/restore pattern for swapping implementations.
 - Cover behavior through the public API (DistCollection) when possible; unit-test internals only for invariants (graph structure, partitioning, sorting).
 
 Code Style

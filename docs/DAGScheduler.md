@@ -79,7 +79,7 @@ order-independence.
 
 ## Configuration
 
-`SparkletConf` controls shuffle output width (`defaultShufflePartitions`), join strategy
+`ScarletConf` controls shuffle output width (`defaultShufflePartitions`), join strategy
 thresholds (`broadcastJoinThreshold`, `enableSortMergeJoin`), sort sampling
 (`sortSamplePerPartition`, `sortMaxSample`), and retry behavior (`maxTaskRetries`,
-`baseRetryDelayMs`, `maxRetryDelayMs`). Runtime components come from `SparkletRuntime`.
+`baseRetryDelayMs`, `maxRetryDelayMs`). Runtime components come from `ScarletRuntime`.
