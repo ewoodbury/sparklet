@@ -25,8 +25,18 @@ object BatchCodec:
   def nullableLongs(values: Seq[Option[Long]]): ColumnBatch =
     batch(Int64Column.fromNullable(values))
 
-  def float64s(values: Seq[Double]): ColumnBatch =
-    batch(Float64Column(values))
+  /** One array fill. `size` then the iterator, so a `Seq` is not copied twice. */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  def float64s(values: Iterable[Double]): ColumnBatch =
+    val n = values.size
+    val buffer = new Array[Double](n)
+    val iterator = values.iterator
+    var row = 0
+    while (row < n) {
+      buffer(row) = iterator.next()
+      row += 1
+    }
+    batch(Float64Column.of(buffer, Validity.allValid(n), n))
 
   def nullableFloat64s(values: Seq[Option[Double]]): ColumnBatch =
     batch(Float64Column.fromNullable(values))
