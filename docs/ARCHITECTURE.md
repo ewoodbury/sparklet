@@ -28,11 +28,13 @@ Two vocabularies, separated at the module level:
   `DistCollection` transformations only prepend nodes; nothing runs until an action.
 - **Physical** (`scarlet-execution`): `StageGraph` — stages, dependencies, shuffle boundaries.
   Narrow operations are fused into stages; wide operations become shuffle stages carrying a
-  structured `WideOp` record. The columnar path has a second tree, `PhysicalOp`: one node per
-  supported operator (`Scan`, `Filter`, `Project`, `Exchange`, `HashAggregate`, `HashJoin`).
-  `ColumnarPlanner.lower` builds it and does not run user functions. Interpretation calls one
-  kernel per node. A chain of maps is four projects, not one loop. `Exchange` is the boundary
-  under an aggregate and on each side of a join; those kernels perform the shuffle.
+  structured `WideOp` record. The columnar path has a second tree, `PhysicalOp`, with `Scan`,
+  `Filter`, `Project`, `Pipeline`, `Exchange`, `HashAggregate`, and `HashJoin` nodes.
+  `ColumnarPlanner.lower` builds it and does not run user functions. Straight int, double, and
+  string filter/project runs of two to four steps use one fused pipeline kernel; longer runs are
+  cut into chunks of four. Pair operations, aggregates, and joins remain separate nodes.
+  `Exchange` is the boundary under an aggregate and on each side of a join; those kernels perform
+  the shuffle.
 
 The rule: `Plan` is legal in the compiler (`StageBuilder` reads it to compile), illegal in the
 executor (`StageExecutor`/`ShuffleHandler`/`ExecutionPlanner` dispatch only on `WideOp`).
@@ -44,7 +46,7 @@ DistCollection action
   -> ExecutionService (SPI, registered by the execution module)
   -> DefaultExecutionService
        bare Plan.Source: return its partitions
-       ColumnarPlanner.tryRun: lower an encodable Int, (Int, Int), or String plan to PhysicalOp, then interpret
+       ColumnarPlanner.tryRun: lower an encodable Int, Double, (Int, Int), or String plan to PhysicalOp, then interpret
        otherwise DAGScheduler.executePartitions
             -> StageBuilder.buildStageGraph
             -> TopologicalSort
@@ -57,8 +59,9 @@ DistCollection action
 
 A bare `Plan.Source` short-circuits to its partitions. `ColumnarPlanner` runs filter, map,
 filterKeys, filterValues, reduceByKey, and inner join when the values it sees are `Int` or
-`(Int, Int)`, and filter and map when they are `String`, if `ScarletConf.columnarExecution`
-is true (the default). Any other node keeps the whole plan on the row path. Strings are a
+`(Int, Int)`, and filter and map when they are `Double` or `String`, if
+`ScarletConf.columnarExecution` is true (the default). Any other node keeps the whole plan on
+the row path. `Double` is the float64 column. A 32-bit `Float` stays on the row path. Strings are a
 dictionary of JVM strings plus int codes (`Utf8Dict`). A null string is a value, so filter and
 map see it. Group-by and join stay on int keys. Narrow columnar ops keep input order and the
 input partition count. `reduceByKey` and `join` hash with `floorMod` into
@@ -164,7 +167,7 @@ Roadmap and sequencing are tracked externally; the headline items:
 
 - No cross-branch dedup: reusing a `DistCollection` in two places recomputes it; at most one
   shuffle write per stage.
-- Columnar operators are one `PhysicalOp` each. Filter and project are not fused into one loop.
+- Fusion is limited to straight int, double, and string filter/project runs of up to four steps.
   There is no cost model and no predicate pushdown.
 - Sort-merge join is a hash grouping wearing a sort-merge name; a true typed sort-merge join is
   deferred.

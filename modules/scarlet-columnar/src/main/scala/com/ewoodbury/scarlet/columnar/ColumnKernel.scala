@@ -16,7 +16,10 @@ package com.ewoodbury.scarlet.columnar
  * published bitmap.
  *
  * Primitive loops keep the row index in a `var` so the bodies stay allocation-free. Each primitive
- * has its own loop so the copy stays monomorphic.
+ * has its own loop so the copy stays monomorphic. A pipeline loop expands one filter/project
+ * pattern at its call site. Int and float nulls are dropped by a filter and skipped by a project,
+ * and those functions are not called. A string pipeline calls its functions on empty cells. A
+ * filter-only string pipeline keeps the input dictionary.
  */
 @SuppressWarnings(Array("org.wartremover.warts.Var"))
 object ColumnKernel:
@@ -119,6 +122,1436 @@ object ColumnKernel:
 
   def projectUtf8(batch: ColumnBatch, ordinal: Int, mapper: Utf8Map): ColumnBatch =
     replace(batch, ordinal, mapUtf8(asUtf8(columnAt(batch, ordinal), ordinal), mapper))
+
+  def pipelineInt32FF(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value => if (first(value) && second(value)) then accepted(value) else 0L,
+    )
+
+  def pipelineInt32FP(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(batch, true, value => if (first(value)) then accepted(second(value)) else 0L)
+
+  def pipelineInt32PF(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = first(value)
+        if (second(mapped)) then accepted(mapped) else 0L,
+    )
+
+  def pipelineInt32PP(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Map,
+  ): ColumnBatch = fuseInt32(batch, false, value => accepted(second(first(value))))
+
+  def pipelineInt32FFF(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Predicate,
+      third: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value => if (first(value) && second(value) && third(value)) then accepted(value) else 0L,
+    )
+
+  def pipelineInt32FFP(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Predicate,
+      third: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value => if (first(value) && second(value)) then accepted(third(value)) else 0L,
+    )
+
+  def pipelineInt32FPF(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Map,
+      third: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        if (first(value)) then
+          val mapped = second(value)
+          if (third(mapped)) then accepted(mapped) else 0L
+        else 0L,
+    )
+
+  def pipelineInt32FPP(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Map,
+      third: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(batch, true, value => if (first(value)) then accepted(third(second(value))) else 0L)
+
+  def pipelineInt32PFF(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Predicate,
+      third: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = first(value)
+        if (second(mapped) && third(mapped)) then accepted(mapped) else 0L,
+    )
+
+  def pipelineInt32PFP(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Predicate,
+      third: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = first(value)
+        if (second(mapped)) then accepted(third(mapped)) else 0L,
+    )
+
+  def pipelineInt32PPF(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Map,
+      third: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = second(first(value))
+        if (third(mapped)) then accepted(mapped) else 0L,
+    )
+
+  def pipelineInt32PPP(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Map,
+      third: Int32Map,
+  ): ColumnBatch = fuseInt32(batch, false, value => accepted(third(second(first(value)))))
+
+  def pipelineInt32FFFF(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Predicate,
+      third: Int32Predicate,
+      fourth: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        if (first(value) && second(value) && third(value) && fourth(value)) then accepted(value)
+        else 0L,
+    )
+
+  def pipelineInt32FFFP(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Predicate,
+      third: Int32Predicate,
+      fourth: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        if (first(value) && second(value) && third(value)) then accepted(fourth(value)) else 0L,
+    )
+
+  def pipelineInt32FFPF(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Predicate,
+      third: Int32Map,
+      fourth: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        if (first(value) && second(value)) then
+          val mapped = third(value)
+          if (fourth(mapped)) then accepted(mapped) else 0L
+        else 0L,
+    )
+
+  def pipelineInt32FFPP(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Predicate,
+      third: Int32Map,
+      fourth: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value => if (first(value) && second(value)) then accepted(fourth(third(value))) else 0L,
+    )
+
+  def pipelineInt32FPFF(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Map,
+      third: Int32Predicate,
+      fourth: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        if (first(value)) then
+          val mapped = second(value)
+          if (third(mapped) && fourth(mapped)) then accepted(mapped) else 0L
+        else 0L,
+    )
+
+  def pipelineInt32FPFP(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Map,
+      third: Int32Predicate,
+      fourth: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        if (first(value)) then
+          val mapped = second(value)
+          if (third(mapped)) then accepted(fourth(mapped)) else 0L
+        else 0L,
+    )
+
+  def pipelineInt32FPPF(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Map,
+      third: Int32Map,
+      fourth: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        if (first(value)) then
+          val mapped = third(second(value))
+          if (fourth(mapped)) then accepted(mapped) else 0L
+        else 0L,
+    )
+
+  def pipelineInt32FPPP(
+      batch: ColumnBatch,
+      first: Int32Predicate,
+      second: Int32Map,
+      third: Int32Map,
+      fourth: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value => if (first(value)) then accepted(fourth(third(second(value)))) else 0L,
+    )
+
+  def pipelineInt32PFFF(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Predicate,
+      third: Int32Predicate,
+      fourth: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = first(value)
+        if (second(mapped) && third(mapped) && fourth(mapped)) then accepted(mapped) else 0L,
+    )
+
+  def pipelineInt32PFFP(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Predicate,
+      third: Int32Predicate,
+      fourth: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = first(value)
+        if (second(mapped) && third(mapped)) then accepted(fourth(mapped)) else 0L,
+    )
+
+  def pipelineInt32PFPF(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Predicate,
+      third: Int32Map,
+      fourth: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = first(value)
+        if (second(mapped)) then
+          val next = third(mapped)
+          if (fourth(next)) then accepted(next) else 0L
+        else 0L,
+    )
+
+  def pipelineInt32PFPP(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Predicate,
+      third: Int32Map,
+      fourth: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = first(value)
+        if (second(mapped)) then accepted(fourth(third(mapped))) else 0L,
+    )
+
+  def pipelineInt32PPFF(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Map,
+      third: Int32Predicate,
+      fourth: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = second(first(value))
+        if (third(mapped) && fourth(mapped)) then accepted(mapped) else 0L,
+    )
+
+  def pipelineInt32PPFP(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Map,
+      third: Int32Predicate,
+      fourth: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = second(first(value))
+        if (third(mapped)) then accepted(fourth(mapped)) else 0L,
+    )
+
+  def pipelineInt32PPPF(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Map,
+      third: Int32Map,
+      fourth: Int32Predicate,
+  ): ColumnBatch =
+    fuseInt32(
+      batch,
+      true,
+      value =>
+        val mapped = third(second(first(value)))
+        if (fourth(mapped)) then accepted(mapped) else 0L,
+    )
+
+  def pipelineInt32PPPP(
+      batch: ColumnBatch,
+      first: Int32Map,
+      second: Int32Map,
+      third: Int32Map,
+      fourth: Int32Map,
+  ): ColumnBatch =
+    fuseInt32(batch, false, value => accepted(fourth(third(second(first(value))))))
+
+  private inline def fuseInt32(
+      batch: ColumnBatch,
+      inline compact: Boolean,
+      inline process: Int => Long,
+  ): ColumnBatch =
+    require(
+      batch.columns.length == 1,
+      s"int pipeline expects a single-column batch, got ${batch.columns.length}",
+    )
+    val column = asInt32(columnAt(batch, 0), 0)
+    val live = column.length
+    val in = column.values
+    val words = column.validity.words
+    // Compaction only needs live-row capacity; map-only pipelines preserve input capacity.
+    val capacity = inline if (compact) then live else in.length
+    val out = new Array[Int](capacity)
+    var written = 0
+    var row = 0
+    while (row < live) {
+      if (Validity.isSet(words, row)) then
+        val result = process(in(row))
+        inline if (compact) then
+          if ((result & 1L) != 0L) then
+            out(written) = (result >> 1).toInt
+            written += 1
+        else out(row) = (result >> 1).toInt
+      row += 1
+    }
+    val length = inline if (compact) then written else live
+    val validity =
+      inline if (compact) then Validity.prefixValid(capacity, written)
+      else column.validity
+    val result = Int32Column.of(out, validity, length)
+    new ColumnBatch(batch.schema, Vector(result), length)
+
+  // The low bit marks a surviving row; the remaining bits preserve the signed int payload.
+  private inline def accepted(value: Int): Long = (value.toLong << 1) | 1L
+
+  def pipelineFloat64FF(
+      batch: ColumnBatch,
+      first: Float64Predicate,
+      second: Float64Predicate,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        if (first(value)) then if (second(value)) then acceptFloat(gate, value) else false
+        else false,
+    )
+
+  def pipelineFloat64PF(
+      batch: ColumnBatch,
+      first: Float64Map,
+      second: Float64Predicate,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        val mapped0 = first(value)
+        if (second(mapped0)) then acceptFloat(gate, mapped0) else false,
+    )
+
+  def pipelineFloat64FP(
+      batch: ColumnBatch,
+      first: Float64Predicate,
+      second: Float64Map,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) => if (first(value)) then acceptFloat(gate, second(value)) else false,
+    )
+
+  def pipelineFloat64PP(
+      batch: ColumnBatch,
+      first: Float64Map,
+      second: Float64Map,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      false,
+      (value, gate) =>
+        val mapped0 = first(value)
+        acceptFloat(gate, second(mapped0)),
+    )
+
+  def pipelineFloat64FFF(
+      batch: ColumnBatch,
+      first: Float64Predicate,
+      second: Float64Predicate,
+      third: Float64Predicate,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        if (first(value)) then
+          if (second(value)) then if (third(value)) then acceptFloat(gate, value) else false
+          else false
+        else false,
+    )
+
+  def pipelineFloat64PFF(
+      batch: ColumnBatch,
+      first: Float64Map,
+      second: Float64Predicate,
+      third: Float64Predicate,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        val mapped0 = first(value)
+        if (second(mapped0)) then if (third(mapped0)) then acceptFloat(gate, mapped0) else false
+        else false,
+    )
+
+  def pipelineFloat64FPF(
+      batch: ColumnBatch,
+      first: Float64Predicate,
+      second: Float64Map,
+      third: Float64Predicate,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        if (first(value)) then
+          val mapped1 = second(value)
+          if (third(mapped1)) then acceptFloat(gate, mapped1) else false
+        else false,
+    )
+
+  def pipelineFloat64PPF(
+      batch: ColumnBatch,
+      first: Float64Map,
+      second: Float64Map,
+      third: Float64Predicate,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        val mapped0 = first(value)
+        val mapped1 = second(mapped0)
+        if (third(mapped1)) then acceptFloat(gate, mapped1) else false,
+    )
+
+  def pipelineFloat64FFP(
+      batch: ColumnBatch,
+      first: Float64Predicate,
+      second: Float64Predicate,
+      third: Float64Map,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        if (first(value)) then if (second(value)) then acceptFloat(gate, third(value)) else false
+        else false,
+    )
+
+  def pipelineFloat64PFP(
+      batch: ColumnBatch,
+      first: Float64Map,
+      second: Float64Predicate,
+      third: Float64Map,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        val mapped0 = first(value)
+        if (second(mapped0)) then acceptFloat(gate, third(mapped0)) else false,
+    )
+
+  def pipelineFloat64FPP(
+      batch: ColumnBatch,
+      first: Float64Predicate,
+      second: Float64Map,
+      third: Float64Map,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        if (first(value)) then
+          val mapped1 = second(value)
+          acceptFloat(gate, third(mapped1))
+        else false,
+    )
+
+  def pipelineFloat64PPP(
+      batch: ColumnBatch,
+      first: Float64Map,
+      second: Float64Map,
+      third: Float64Map,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      false,
+      (value, gate) =>
+        val mapped0 = first(value)
+        val mapped1 = second(mapped0)
+        acceptFloat(gate, third(mapped1)),
+    )
+
+  def pipelineFloat64FFFF(
+      batch: ColumnBatch,
+      first: Float64Predicate,
+      second: Float64Predicate,
+      third: Float64Predicate,
+      fourth: Float64Predicate,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        if (first(value)) then
+          if (second(value)) then
+            if (third(value)) then if (fourth(value)) then acceptFloat(gate, value) else false
+            else false
+          else false
+        else false,
+    )
+
+  def pipelineFloat64PFFF(
+      batch: ColumnBatch,
+      first: Float64Map,
+      second: Float64Predicate,
+      third: Float64Predicate,
+      fourth: Float64Predicate,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        val mapped0 = first(value)
+        if (second(mapped0)) then
+          if (third(mapped0)) then if (fourth(mapped0)) then acceptFloat(gate, mapped0) else false
+          else false
+        else false,
+    )
+
+  def pipelineFloat64FPFF(
+      batch: ColumnBatch,
+      first: Float64Predicate,
+      second: Float64Map,
+      third: Float64Predicate,
+      fourth: Float64Predicate,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        if (first(value)) then
+          val mapped1 = second(value)
+          if (third(mapped1)) then if (fourth(mapped1)) then acceptFloat(gate, mapped1) else false
+          else false
+        else false,
+    )
+
+  def pipelineFloat64PPFF(
+      batch: ColumnBatch,
+      first: Float64Map,
+      second: Float64Map,
+      third: Float64Predicate,
+      fourth: Float64Predicate,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        val mapped0 = first(value)
+        val mapped1 = second(mapped0)
+        if (third(mapped1)) then if (fourth(mapped1)) then acceptFloat(gate, mapped1) else false
+        else false,
+    )
+
+  def pipelineFloat64FFPF(
+      batch: ColumnBatch,
+      first: Float64Predicate,
+      second: Float64Predicate,
+      third: Float64Map,
+      fourth: Float64Predicate,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        if (first(value)) then
+          if (second(value)) then
+            val mapped2 = third(value)
+            if (fourth(mapped2)) then acceptFloat(gate, mapped2) else false
+          else false
+        else false,
+    )
+
+  def pipelineFloat64PFPF(
+      batch: ColumnBatch,
+      first: Float64Map,
+      second: Float64Predicate,
+      third: Float64Map,
+      fourth: Float64Predicate,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        val mapped0 = first(value)
+        if (second(mapped0)) then
+          val mapped2 = third(mapped0)
+          if (fourth(mapped2)) then acceptFloat(gate, mapped2) else false
+        else false,
+    )
+
+  def pipelineFloat64FPPF(
+      batch: ColumnBatch,
+      first: Float64Predicate,
+      second: Float64Map,
+      third: Float64Map,
+      fourth: Float64Predicate,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        if (first(value)) then
+          val mapped1 = second(value)
+          val mapped2 = third(mapped1)
+          if (fourth(mapped2)) then acceptFloat(gate, mapped2) else false
+        else false,
+    )
+
+  def pipelineFloat64PPPF(
+      batch: ColumnBatch,
+      first: Float64Map,
+      second: Float64Map,
+      third: Float64Map,
+      fourth: Float64Predicate,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        val mapped0 = first(value)
+        val mapped1 = second(mapped0)
+        val mapped2 = third(mapped1)
+        if (fourth(mapped2)) then acceptFloat(gate, mapped2) else false,
+    )
+
+  def pipelineFloat64FFFP(
+      batch: ColumnBatch,
+      first: Float64Predicate,
+      second: Float64Predicate,
+      third: Float64Predicate,
+      fourth: Float64Map,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        if (first(value)) then
+          if (second(value)) then
+            if (third(value)) then acceptFloat(gate, fourth(value)) else false
+          else false
+        else false,
+    )
+
+  def pipelineFloat64PFFP(
+      batch: ColumnBatch,
+      first: Float64Map,
+      second: Float64Predicate,
+      third: Float64Predicate,
+      fourth: Float64Map,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        val mapped0 = first(value)
+        if (second(mapped0)) then
+          if (third(mapped0)) then acceptFloat(gate, fourth(mapped0)) else false
+        else false,
+    )
+
+  def pipelineFloat64FPFP(
+      batch: ColumnBatch,
+      first: Float64Predicate,
+      second: Float64Map,
+      third: Float64Predicate,
+      fourth: Float64Map,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        if (first(value)) then
+          val mapped1 = second(value)
+          if (third(mapped1)) then acceptFloat(gate, fourth(mapped1)) else false
+        else false,
+    )
+
+  def pipelineFloat64PPFP(
+      batch: ColumnBatch,
+      first: Float64Map,
+      second: Float64Map,
+      third: Float64Predicate,
+      fourth: Float64Map,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        val mapped0 = first(value)
+        val mapped1 = second(mapped0)
+        if (third(mapped1)) then acceptFloat(gate, fourth(mapped1)) else false,
+    )
+
+  def pipelineFloat64FFPP(
+      batch: ColumnBatch,
+      first: Float64Predicate,
+      second: Float64Predicate,
+      third: Float64Map,
+      fourth: Float64Map,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        if (first(value)) then
+          if (second(value)) then
+            val mapped2 = third(value)
+            acceptFloat(gate, fourth(mapped2))
+          else false
+        else false,
+    )
+
+  def pipelineFloat64PFPP(
+      batch: ColumnBatch,
+      first: Float64Map,
+      second: Float64Predicate,
+      third: Float64Map,
+      fourth: Float64Map,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        val mapped0 = first(value)
+        if (second(mapped0)) then
+          val mapped2 = third(mapped0)
+          acceptFloat(gate, fourth(mapped2))
+        else false,
+    )
+
+  def pipelineFloat64FPPP(
+      batch: ColumnBatch,
+      first: Float64Predicate,
+      second: Float64Map,
+      third: Float64Map,
+      fourth: Float64Map,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      true,
+      (value, gate) =>
+        if (first(value)) then
+          val mapped1 = second(value)
+          val mapped2 = third(mapped1)
+          acceptFloat(gate, fourth(mapped2))
+        else false,
+    )
+
+  def pipelineFloat64PPPP(
+      batch: ColumnBatch,
+      first: Float64Map,
+      second: Float64Map,
+      third: Float64Map,
+      fourth: Float64Map,
+  ): ColumnBatch =
+    fuseFloat64(
+      batch,
+      false,
+      (value, gate) =>
+        val mapped0 = first(value)
+        val mapped1 = second(mapped0)
+        val mapped2 = third(mapped1)
+        acceptFloat(gate, fourth(mapped2)),
+    )
+
+  def pipelineUtf8FF(
+      batch: ColumnBatch,
+      first: Utf8Predicate,
+      second: Utf8Predicate,
+  ): ColumnBatch =
+    fuseUtf8Filters(batch, text => first(text) && second(text))
+
+  def pipelineUtf8PF(
+      batch: ColumnBatch,
+      first: Utf8Map,
+      second: Utf8Predicate,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        val mapped0 = first(text)
+        if (second(mapped0)) then acceptUtf8(gate, mapped0) else false,
+    )
+
+  def pipelineUtf8FP(
+      batch: ColumnBatch,
+      first: Utf8Predicate,
+      second: Utf8Map,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) => if (first(text)) then acceptUtf8(gate, second(text)) else false,
+    )
+
+  def pipelineUtf8PP(
+      batch: ColumnBatch,
+      first: Utf8Map,
+      second: Utf8Map,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      false,
+      (text, gate) =>
+        val mapped0 = first(text)
+        acceptUtf8(gate, second(mapped0)),
+    )
+
+  def pipelineUtf8FFF(
+      batch: ColumnBatch,
+      first: Utf8Predicate,
+      second: Utf8Predicate,
+      third: Utf8Predicate,
+  ): ColumnBatch =
+    fuseUtf8Filters(batch, text => first(text) && second(text) && third(text))
+
+  def pipelineUtf8PFF(
+      batch: ColumnBatch,
+      first: Utf8Map,
+      second: Utf8Predicate,
+      third: Utf8Predicate,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        val mapped0 = first(text)
+        if (second(mapped0)) then if (third(mapped0)) then acceptUtf8(gate, mapped0) else false
+        else false,
+    )
+
+  def pipelineUtf8FPF(
+      batch: ColumnBatch,
+      first: Utf8Predicate,
+      second: Utf8Map,
+      third: Utf8Predicate,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        if (first(text)) then
+          val mapped1 = second(text)
+          if (third(mapped1)) then acceptUtf8(gate, mapped1) else false
+        else false,
+    )
+
+  def pipelineUtf8PPF(
+      batch: ColumnBatch,
+      first: Utf8Map,
+      second: Utf8Map,
+      third: Utf8Predicate,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        val mapped0 = first(text)
+        val mapped1 = second(mapped0)
+        if (third(mapped1)) then acceptUtf8(gate, mapped1) else false,
+    )
+
+  def pipelineUtf8FFP(
+      batch: ColumnBatch,
+      first: Utf8Predicate,
+      second: Utf8Predicate,
+      third: Utf8Map,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        if (first(text)) then if (second(text)) then acceptUtf8(gate, third(text)) else false
+        else false,
+    )
+
+  def pipelineUtf8PFP(
+      batch: ColumnBatch,
+      first: Utf8Map,
+      second: Utf8Predicate,
+      third: Utf8Map,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        val mapped0 = first(text)
+        if (second(mapped0)) then acceptUtf8(gate, third(mapped0)) else false,
+    )
+
+  def pipelineUtf8FPP(
+      batch: ColumnBatch,
+      first: Utf8Predicate,
+      second: Utf8Map,
+      third: Utf8Map,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        if (first(text)) then
+          val mapped1 = second(text)
+          acceptUtf8(gate, third(mapped1))
+        else false,
+    )
+
+  def pipelineUtf8PPP(
+      batch: ColumnBatch,
+      first: Utf8Map,
+      second: Utf8Map,
+      third: Utf8Map,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      false,
+      (text, gate) =>
+        val mapped0 = first(text)
+        val mapped1 = second(mapped0)
+        acceptUtf8(gate, third(mapped1)),
+    )
+
+  def pipelineUtf8FFFF(
+      batch: ColumnBatch,
+      first: Utf8Predicate,
+      second: Utf8Predicate,
+      third: Utf8Predicate,
+      fourth: Utf8Predicate,
+  ): ColumnBatch =
+    fuseUtf8Filters(batch, text => first(text) && second(text) && third(text) && fourth(text))
+
+  def pipelineUtf8PFFF(
+      batch: ColumnBatch,
+      first: Utf8Map,
+      second: Utf8Predicate,
+      third: Utf8Predicate,
+      fourth: Utf8Predicate,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        val mapped0 = first(text)
+        if (second(mapped0)) then
+          if (third(mapped0)) then if (fourth(mapped0)) then acceptUtf8(gate, mapped0) else false
+          else false
+        else false,
+    )
+
+  def pipelineUtf8FPFF(
+      batch: ColumnBatch,
+      first: Utf8Predicate,
+      second: Utf8Map,
+      third: Utf8Predicate,
+      fourth: Utf8Predicate,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        if (first(text)) then
+          val mapped1 = second(text)
+          if (third(mapped1)) then if (fourth(mapped1)) then acceptUtf8(gate, mapped1) else false
+          else false
+        else false,
+    )
+
+  def pipelineUtf8PPFF(
+      batch: ColumnBatch,
+      first: Utf8Map,
+      second: Utf8Map,
+      third: Utf8Predicate,
+      fourth: Utf8Predicate,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        val mapped0 = first(text)
+        val mapped1 = second(mapped0)
+        if (third(mapped1)) then if (fourth(mapped1)) then acceptUtf8(gate, mapped1) else false
+        else false,
+    )
+
+  def pipelineUtf8FFPF(
+      batch: ColumnBatch,
+      first: Utf8Predicate,
+      second: Utf8Predicate,
+      third: Utf8Map,
+      fourth: Utf8Predicate,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        if (first(text)) then
+          if (second(text)) then
+            val mapped2 = third(text)
+            if (fourth(mapped2)) then acceptUtf8(gate, mapped2) else false
+          else false
+        else false,
+    )
+
+  def pipelineUtf8PFPF(
+      batch: ColumnBatch,
+      first: Utf8Map,
+      second: Utf8Predicate,
+      third: Utf8Map,
+      fourth: Utf8Predicate,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        val mapped0 = first(text)
+        if (second(mapped0)) then
+          val mapped2 = third(mapped0)
+          if (fourth(mapped2)) then acceptUtf8(gate, mapped2) else false
+        else false,
+    )
+
+  def pipelineUtf8FPPF(
+      batch: ColumnBatch,
+      first: Utf8Predicate,
+      second: Utf8Map,
+      third: Utf8Map,
+      fourth: Utf8Predicate,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        if (first(text)) then
+          val mapped1 = second(text)
+          val mapped2 = third(mapped1)
+          if (fourth(mapped2)) then acceptUtf8(gate, mapped2) else false
+        else false,
+    )
+
+  def pipelineUtf8PPPF(
+      batch: ColumnBatch,
+      first: Utf8Map,
+      second: Utf8Map,
+      third: Utf8Map,
+      fourth: Utf8Predicate,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        val mapped0 = first(text)
+        val mapped1 = second(mapped0)
+        val mapped2 = third(mapped1)
+        if (fourth(mapped2)) then acceptUtf8(gate, mapped2) else false,
+    )
+
+  def pipelineUtf8FFFP(
+      batch: ColumnBatch,
+      first: Utf8Predicate,
+      second: Utf8Predicate,
+      third: Utf8Predicate,
+      fourth: Utf8Map,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        if (first(text)) then
+          if (second(text)) then if (third(text)) then acceptUtf8(gate, fourth(text)) else false
+          else false
+        else false,
+    )
+
+  def pipelineUtf8PFFP(
+      batch: ColumnBatch,
+      first: Utf8Map,
+      second: Utf8Predicate,
+      third: Utf8Predicate,
+      fourth: Utf8Map,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        val mapped0 = first(text)
+        if (second(mapped0)) then
+          if (third(mapped0)) then acceptUtf8(gate, fourth(mapped0)) else false
+        else false,
+    )
+
+  def pipelineUtf8FPFP(
+      batch: ColumnBatch,
+      first: Utf8Predicate,
+      second: Utf8Map,
+      third: Utf8Predicate,
+      fourth: Utf8Map,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        if (first(text)) then
+          val mapped1 = second(text)
+          if (third(mapped1)) then acceptUtf8(gate, fourth(mapped1)) else false
+        else false,
+    )
+
+  def pipelineUtf8PPFP(
+      batch: ColumnBatch,
+      first: Utf8Map,
+      second: Utf8Map,
+      third: Utf8Predicate,
+      fourth: Utf8Map,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        val mapped0 = first(text)
+        val mapped1 = second(mapped0)
+        if (third(mapped1)) then acceptUtf8(gate, fourth(mapped1)) else false,
+    )
+
+  def pipelineUtf8FFPP(
+      batch: ColumnBatch,
+      first: Utf8Predicate,
+      second: Utf8Predicate,
+      third: Utf8Map,
+      fourth: Utf8Map,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        if (first(text)) then
+          if (second(text)) then
+            val mapped2 = third(text)
+            acceptUtf8(gate, fourth(mapped2))
+          else false
+        else false,
+    )
+
+  def pipelineUtf8PFPP(
+      batch: ColumnBatch,
+      first: Utf8Map,
+      second: Utf8Predicate,
+      third: Utf8Map,
+      fourth: Utf8Map,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        val mapped0 = first(text)
+        if (second(mapped0)) then
+          val mapped2 = third(mapped0)
+          acceptUtf8(gate, fourth(mapped2))
+        else false,
+    )
+
+  def pipelineUtf8FPPP(
+      batch: ColumnBatch,
+      first: Utf8Predicate,
+      second: Utf8Map,
+      third: Utf8Map,
+      fourth: Utf8Map,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      true,
+      (text, gate) =>
+        if (first(text)) then
+          val mapped1 = second(text)
+          val mapped2 = third(mapped1)
+          acceptUtf8(gate, fourth(mapped2))
+        else false,
+    )
+
+  def pipelineUtf8PPPP(
+      batch: ColumnBatch,
+      first: Utf8Map,
+      second: Utf8Map,
+      third: Utf8Map,
+      fourth: Utf8Map,
+  ): ColumnBatch =
+    fuseUtf8Mapped(
+      batch,
+      false,
+      (text, gate) =>
+        val mapped0 = first(text)
+        val mapped1 = second(mapped0)
+        val mapped2 = third(mapped1)
+        acceptUtf8(gate, fourth(mapped2)),
+    )
+
+  /**
+   * One gate per batch, outside the row loop. An int packs the keep bit beside the payload. A
+   * double and a string return that decision and store only the payload here.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private final class FloatGate:
+    var value: Double = 0.0
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private final class Utf8Gate:
+    var present: Boolean = false
+    var text: String = ""
+
+  /** Returns whether the row survives, so a pattern that forgets the decision does not compile. */
+  private inline def acceptFloat(gate: FloatGate, value: Double): Boolean =
+    gate.value = value
+    true
+
+  /** Returns whether the row survives, so a pattern that forgets the decision does not compile. */
+  private inline def acceptUtf8(gate: Utf8Gate, value: String): Boolean =
+    if (BatchCodec.isAbsent(value)) then gate.present = false
+    else
+      gate.present = true
+      gate.text = value
+    true
+
+  private inline def fuseFloat64(
+      batch: ColumnBatch,
+      inline compact: Boolean,
+      inline step: (Double, FloatGate) => Boolean,
+  ): ColumnBatch =
+    require(
+      batch.columns.length == 1,
+      s"float pipeline expects a single-column batch, got ${batch.columns.length}",
+    )
+    val column = asFloat64(columnAt(batch, 0), 0)
+    val live = column.length
+    val in = column.values
+    val words = column.validity.words
+    val capacity = inline if (compact) then live else in.length
+    val out = new Array[Double](capacity)
+    val gate = new FloatGate
+    var written = 0
+    var row = 0
+    while (row < live) {
+      if (Validity.isSet(words, row)) then
+        val kept = step(in(row), gate)
+        inline if (compact) then
+          if (kept) then
+            out(written) = gate.value
+            written += 1
+        else if (kept) then out(row) = gate.value
+      row += 1
+    }
+    val length = inline if (compact) then written else live
+    val validity =
+      inline if (compact) then Validity.prefixValid(capacity, written) else column.validity
+    val result = Float64Column.of(out, validity, length)
+    new ColumnBatch(batch.schema, Vector(result), length)
+
+  private inline def fuseUtf8Filters(
+      batch: ColumnBatch,
+      inline keep: String => Boolean,
+  ): ColumnBatch =
+    require(
+      batch.columns.length == 1,
+      s"utf8 pipeline expects a single-column batch, got ${batch.columns.length}",
+    )
+    val column = asUtf8(columnAt(batch, 0), 0)
+    val live = column.length
+    val codes = column.codes
+    val words = column.validity.words
+    val out = new Array[Int](live)
+    val dstWords = Validity.allocate(live)
+    var written = 0
+    var row = 0
+    while (row < live) {
+      if (keep(utf8String(column, row))) then
+        if (Validity.isSet(words, row)) then
+          out(written) = codes(row)
+          Validity.setBit(dstWords, written)
+        written += 1
+      row += 1
+    }
+    val result = DictUtf8Column.of(
+      column.dictionary,
+      out,
+      Validity.fromWords(dstWords, live),
+      written,
+    )
+    new ColumnBatch(batch.schema, Vector(result), written)
+
+  /**
+   * Projects build one dictionary of the strings this loop stores. A later filter therefore does
+   * not retain a string it dropped, because the intermediate column never existed.
+   */
+  private inline def fuseUtf8Mapped(
+      batch: ColumnBatch,
+      inline compact: Boolean,
+      inline step: (String, Utf8Gate) => Boolean,
+  ): ColumnBatch =
+    require(
+      batch.columns.length == 1,
+      s"utf8 pipeline expects a single-column batch, got ${batch.columns.length}",
+    )
+    val column = asUtf8(columnAt(batch, 0), 0)
+    val live = column.length
+    val capacity = inline if (compact) then live else column.codes.length
+    val out = new Array[Int](capacity)
+    val dstWords = Validity.allocate(capacity)
+    val words = DictUtf8Column.Words.empty
+    val gate = new Utf8Gate
+    var written = 0
+    var row = 0
+    while (row < live) {
+      gate.present = false
+      val kept = step(utf8String(column, row), gate)
+      inline if (compact) then
+        if (kept) then
+          if (gate.present) then
+            out(written) = words.intern(gate.text)
+            Validity.setBit(dstWords, written)
+          written += 1
+      else if (kept && gate.present) then
+        out(row) = words.intern(gate.text)
+        Validity.setBit(dstWords, row)
+      row += 1
+    }
+    val length = inline if (compact) then written else live
+    val result =
+      DictUtf8Column.of(words.toArray, out, Validity.fromWords(dstWords, capacity), length)
+    new ColumnBatch(batch.schema, Vector(result), length)
 
   private val noSelection: Array[Int] = Array.emptyIntArray
 
