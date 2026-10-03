@@ -13,8 +13,8 @@ test: ## Run tests
 	sbt test
 
 .PHONY: test-one
-test-one: ## Run a single suite: make test-one T=com.ewoodbury.sparklet.core.TestLocalActions
-	sbt "sparklet-tests/testOnly $(T)"
+test-one: ## Run a single suite: make test-one T=com.ewoodbury.scarlet.core.TestLocalActions
+	sbt "scarlet-tests/testOnly $(T)"
 
 .PHONY: help
 help: ## Display this help

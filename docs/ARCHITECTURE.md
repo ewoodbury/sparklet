@@ -1,6 +1,6 @@
 # Architecture
 
-Sparklet is a data processing engine inspired by Spark, written in pure functional Scala 3. This
+Scarlet is a data processing engine inspired by Spark, written in pure functional Scala 3. This
 document describes the system as it exists today: a row path and a columnar path for `Int`,
 `(Int, Int)`, and `String` filter and map, a clean logical/physical split, and type erasure
 confined to named boundaries.
@@ -9,12 +9,12 @@ confined to named boundaries.
 
 | Module | Responsibility |
 |---|---|
-| `sparklet-api` | `DistCollection`: the user-facing lazy API. Builds `Plan` trees, triggers actions. |
-| `sparklet-core` | `Plan` ADT, `PlanWide`, `Partition`, `SparkletConf`, `ExecutionService` SPI, IDs. |
-| `sparklet-execution` | The compiler and runtime: `StageBuilder`, `Stage`, `Operation`/`WideOp`, `DAGScheduler`, `ExecutionPlanner`, `StageExecutor`, `ShuffleHandler`, `JoinExecutor`, `Task`. |
-| `sparklet-runtime` | Execution SPIs (`TaskScheduler`, `ShuffleService`, `Partitioner`, `BroadcastService`) and local in-memory implementations. |
-| `sparklet-columnar` | Column batches, vector kernels, hash aggregate and join, and a local hash exchange. |
-| `sparklet-tests` | Aggregated ScalaTest suite (sequential by design; see Testing notes). |
+| `scarlet-api` | `DistCollection`: the user-facing lazy API. Builds `Plan` trees, triggers actions. |
+| `scarlet-core` | `Plan` ADT, `PlanWide`, `Partition`, `ScarletConf`, `ExecutionService` SPI, IDs. |
+| `scarlet-execution` | The compiler and runtime: `StageBuilder`, `Stage`, `Operation`/`WideOp`, `DAGScheduler`, `ExecutionPlanner`, `StageExecutor`, `ShuffleHandler`, `JoinExecutor`, `Task`. |
+| `scarlet-runtime` | Execution SPIs (`TaskScheduler`, `ShuffleService`, `Partitioner`, `BroadcastService`) and local in-memory implementations. |
+| `scarlet-columnar` | Column batches, vector kernels, hash aggregate and join, and a local hash exchange. |
+| `scarlet-tests` | Aggregated ScalaTest suite (sequential by design; see Testing notes). |
 
 Dependency direction: `api -> core`; `execution -> api, core, runtime, columnar`; `runtime -> core`;
 `columnar` depends on nothing. The logical layer cannot name physical types — the split is
@@ -24,9 +24,9 @@ enforced by the build.
 
 Two vocabularies, separated at the module level:
 
-- **Logical** (`sparklet-core`): `Plan[A]` — an immutable, lazy tree of what the user asked for.
+- **Logical** (`scarlet-core`): `Plan[A]` — an immutable, lazy tree of what the user asked for.
   `DistCollection` transformations only prepend nodes; nothing runs until an action.
-- **Physical** (`sparklet-execution`): `StageGraph` — stages, dependencies, shuffle boundaries.
+- **Physical** (`scarlet-execution`): `StageGraph` — stages, dependencies, shuffle boundaries.
   Narrow operations are fused into stages; wide operations become shuffle stages carrying a
   structured `WideOp` record. The columnar path has a second tree, `PhysicalOp`: one node per
   supported operator (`Scan`, `Filter`, `Project`, `Exchange`, `HashAggregate`, `HashJoin`).
@@ -57,7 +57,7 @@ DistCollection action
 
 A bare `Plan.Source` short-circuits to its partitions. `ColumnarPlanner` runs filter, map,
 filterKeys, filterValues, reduceByKey, and inner join when the values it sees are `Int` or
-`(Int, Int)`, and filter and map when they are `String`, if `SparkletConf.columnarExecution`
+`(Int, Int)`, and filter and map when they are `String`, if `ScarletConf.columnarExecution`
 is true (the default). Any other node keeps the whole plan on the row path. Strings are a
 dictionary of JVM strings plus int codes (`Utf8Dict`). A null string is a value, so filter and
 map see it. Group-by and join stay on int keys. Narrow columnar ops keep input order and the
@@ -123,17 +123,17 @@ Policy (compiler-enforced — `Wart.AsInstanceOf` and `Wart.Any` are errors):
 
 | SPI | Local impl | Role |
 |---|---|---|
-| `TaskScheduler[F]` | `LocalTaskScheduler` (thread pool, bounded parallelism) | Runs tasks; applies the `SparkletConf`-derived retry policy at submission time |
+| `TaskScheduler[F]` | `LocalTaskScheduler` (thread pool, bounded parallelism) | Runs tasks; applies the `ScarletConf`-derived retry policy at submission time |
 | `ShuffleService` | `LocalShuffleService` (in-memory, concurrent map) | Shuffle write/read keyed by `ShuffleId` + `PartitionId` |
 | `Partitioner` | `HashPartitioner` (`floorMod` — safe for negative hashes) | Key -> partition assignment |
 | `BroadcastService` | `LocalBroadcastService` | Broadcast join support |
 
-`SparkletRuntime` wires these into `RuntimeComponents` (a global holder with a thread-local
+`ScarletRuntime` wires these into `RuntimeComponents` (a global holder with a thread-local
 override used by tests).
 
 ## Failure handling
 
-Tasks retry per `SparkletConf` (`maxTaskRetries`, exponential backoff) inside
+Tasks retry per `ScarletConf` (`maxTaskRetries`, exponential backoff) inside
 `TaskExecutionWrapper`; permanent failure propagates to the caller. Lineage-based recovery was
 removed: it could not safely reconstruct arbitrary user functions. Retry is honest and tested
 (`TestLocalTaskSchedulerRetry`).
@@ -151,12 +151,12 @@ removed: it could not safely reconstruct arbitrary user functions. Retry is hone
 
 ## Testing notes
 
-- Tests run sequentially (`Test / parallelExecution := false`): `SparkletConf`,
-  `SparkletRuntime`, and `ExecutionService` are process-global; suites mutate them. Parallelism
+- Tests run sequentially (`Test / parallelExecution := false`): `ScarletConf`,
+  `ScarletRuntime`, and `ExecutionService` are process-global; suites mutate them. Parallelism
   returns when global state becomes injected (deferred).
-- `SparkletConf` is global mutable state: tests that change it restore defaults in `afterEach`.
+- `ScarletConf` is global mutable state: tests that change it restore defaults in `afterEach`.
 - Retry tests set `baseRetryDelayMs = 1L` or they take seconds.
-- Test logs are silenced to WARN via `modules/sparklet-tests/src/test/resources/log4j2-test.xml`.
+- Test logs are silenced to WARN via `modules/scarlet-tests/src/test/resources/log4j2-test.xml`.
 
 ## Known limitations (deferred work)
 
