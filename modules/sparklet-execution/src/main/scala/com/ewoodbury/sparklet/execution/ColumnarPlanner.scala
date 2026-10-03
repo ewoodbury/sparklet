@@ -79,29 +79,13 @@ object ColumnarPlanner:
     lower(plan).filter(op => infoOf(op).invalidReason.isEmpty)
 
   private def lowerPlan(plan: Plan[_]): Option[PhysicalOp] =
-    val (base, steps) = elementSteps(plan)
-    if (steps.length >= 2) then
-      lowerPlanNode(base).filter { op =>
-        op.kind match
-          case PhysicalOp.Kind.Ints => true
-          case _ => false
-      } match
-        case Some(child) => Some(lowerIntPipeline(child, steps))
-        case None => lowerPlanNode(plan)
-    else lowerPlanNode(plan)
+    val (base, steps) = elementSteps(plan, Int.MaxValue)
+    if (steps.isEmpty) then lowerPlanNode(base)
+    else lowerPlan(base).flatMap(child => lowerElementSteps(child, steps))
 
   private def lowerPlanNode(plan: Plan[_]): Option[PhysicalOp] = plan match
     case Plan.Source(partitions) =>
       classify(partitions).map(kind => PhysicalOp.Scan(kind, partitions))
-    case Plan.FilterOp(source, _) =>
-      lowerPlan(source).flatMap(child => filterOf(child))
-    case Plan.MapOp(source, _) =>
-      lowerPlan(source).flatMap { child =>
-        child.kind match
-          case PhysicalOp.Kind.Ints | PhysicalOp.Kind.Strings =>
-            Some(PhysicalOp.Project(child))
-          case _ => None
-      }
     case Plan.FilterKeysOp(source, _) =>
       columnFilter(source, PhysicalOp.Slot.Key)
     case Plan.FilterValuesOp(source, _) =>
@@ -123,17 +107,49 @@ object ColumnarPlanner:
         case _ => None
     case _ => None
 
-  private def elementSteps(plan: Plan[_]): (Plan[_], List[ElementStep]) =
+  private def elementSteps(
+      plan: Plan[_],
+      limit: Int,
+  ): (Plan[_], List[ElementStep]) =
     @tailrec
-    def collect(current: Plan[_], steps: List[ElementStep]): (Plan[_], List[ElementStep]) =
-      current match
-        case Plan.FilterOp(source, predicate) =>
-          collect(source, ElementStep.Filter(predicate) :: steps)
-        case Plan.MapOp(source, mapper) =>
-          collect(source, ElementStep.Project(mapper) :: steps)
-        case _ => (current, steps)
+    def collect(
+        current: Plan[_],
+        remaining: Int,
+        steps: List[ElementStep],
+    ): (Plan[_], List[ElementStep]) =
+      if (remaining == 0) then (current, steps)
+      else
+        current match
+          case Plan.FilterOp(source, predicate) =>
+            collect(source, remaining - 1, ElementStep.Filter(predicate) :: steps)
+          case Plan.MapOp(source, mapper) =>
+            collect(source, remaining - 1, ElementStep.Project(mapper) :: steps)
+          case _ => (current, steps)
 
-    collect(plan, Nil)
+    collect(plan, limit, Nil)
+
+  private def lowerElementSteps(
+      child: PhysicalOp,
+      steps: List[ElementStep],
+  ): Option[PhysicalOp] = child.kind match
+    case PhysicalOp.Kind.Ints => Some(lowerIntPipeline(child, steps))
+    case _ =>
+      steps.foldLeft(Option(child)) { (current, step) =>
+        current.flatMap(op => lowerElementStep(op, step))
+      }
+
+  private def lowerElementStep(child: PhysicalOp, step: ElementStep): Option[PhysicalOp] =
+    step match
+      case ElementStep.Filter(_) =>
+        child.kind match
+          case PhysicalOp.Kind.Ints | PhysicalOp.Kind.Strings =>
+            Some(PhysicalOp.Filter(child, PhysicalOp.Slot.Element))
+          case PhysicalOp.Kind.Pairs => Some(PhysicalOp.Filter(child, PhysicalOp.Slot.Row))
+          case PhysicalOp.Kind.Triples => None
+      case ElementStep.Project(_) =>
+        child.kind match
+          case PhysicalOp.Kind.Ints | PhysicalOp.Kind.Strings => Some(PhysicalOp.Project(child))
+          case _ => None
 
   private def lowerIntPipeline(child: PhysicalOp, steps: List[ElementStep]): PhysicalOp =
     steps.grouped(4).foldLeft(child) { (current, group) =>
@@ -144,14 +160,6 @@ object ColumnarPlanner:
             case ElementStep.Project(_) => PhysicalOp.Project(current)
         case _ => PhysicalOp.Pipeline(current, group.length)
     }
-
-  private def filterOf(child: PhysicalOp): Option[PhysicalOp] =
-    child.kind match
-      case PhysicalOp.Kind.Ints | PhysicalOp.Kind.Strings =>
-        Some(PhysicalOp.Filter(child, PhysicalOp.Slot.Element))
-      case PhysicalOp.Kind.Pairs =>
-        Some(PhysicalOp.Filter(child, PhysicalOp.Slot.Row))
-      case PhysicalOp.Kind.Triples => None
 
   private def columnFilter(source: Plan[_], slot: PhysicalOp.Slot): Option[PhysicalOp] =
     lowerPlan(source).flatMap { child =>
@@ -248,23 +256,10 @@ object ColumnarPlanner:
       )
 
   private def interpretPipeline(plan: Plan[_], child: PhysicalOp, length: Int): Columns =
-    @tailrec
-    def collect(
-        current: Plan[_],
-        remaining: Int,
-        steps: List[ElementStep],
-    ): (Plan[_], List[ElementStep]) =
-      if (remaining == 0) then (current, steps)
-      else
-        current match
-          case Plan.FilterOp(source, predicate) =>
-            collect(source, remaining - 1, ElementStep.Filter(predicate) :: steps)
-          case Plan.MapOp(source, mapper) =>
-            collect(source, remaining - 1, ElementStep.Project(mapper) :: steps)
-          case _ =>
-            throw new IllegalStateException("pipeline does not match logical element steps")
-
-    val (source, steps) = collect(plan, length, Nil)
+    val (source, steps) = elementSteps(plan, length)
+    if (steps.length < length) then
+      // Lowering uses this same collector, so this only guards a malformed physical tree.
+      throw new IllegalStateException("pipeline does not match logical element steps")
     pipeline(interpret(source, child), steps)
 
   private def pipeline(columns: Columns, steps: List[ElementStep]): Columns = columns match
@@ -422,6 +417,7 @@ object ColumnarPlanner:
       case List(Project(m1), Project(m2), Project(m3), Project(m4)) =>
         ColumnKernel.pipelineInt32PPPP(batch, intMap(m1), intMap(m2), intMap(m3), intMap(m4))
       case _ =>
+        // Lowering emits only lengths 2-4; the physical-plan test exercises every pattern.
         throw new IllegalStateException(
           s"unsupported int pipeline pattern of length ${steps.length}",
         )

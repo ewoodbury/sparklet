@@ -488,11 +488,17 @@ object ColumnKernel:
       inline compact: Boolean,
       inline process: Int => Long,
   ): ColumnBatch =
+    require(
+      batch.columns.length == 1,
+      s"int pipeline expects a single-column batch, got ${batch.columns.length}",
+    )
     val column = asInt32(columnAt(batch, 0), 0)
     val live = column.length
     val in = column.values
     val words = column.validity.words
-    val out = new Array[Int](in.length)
+    // Compaction only needs live-row capacity; map-only pipelines preserve input capacity.
+    val capacity = inline if (compact) then live else in.length
+    val out = new Array[Int](capacity)
     var written = 0
     var row = 0
     while (row < live) {
@@ -507,7 +513,7 @@ object ColumnKernel:
     }
     val length = inline if (compact) then written else live
     val validity =
-      inline if (compact) then Validity.prefixValid(in.length, written)
+      inline if (compact) then Validity.prefixValid(capacity, written)
       else column.validity
     val result = Int32Column.of(out, validity, length)
     new ColumnBatch(batch.schema, Vector(result), length)

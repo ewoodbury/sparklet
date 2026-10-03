@@ -67,18 +67,20 @@ class TestPhysicalPlan extends AnyFlatSpec with Matchers with BeforeAndAfterEach
       length <- 2 to 4
       pattern <- 0 until (1 << length)
     yield
-      (0 until length).foldLeft(DistCollection(Seq(-2, -1, 0, 1, 2, 3), 1)) {
+      val plan = (0 until length).foldLeft(DistCollection(Seq(-2, -1, 0, 1, 2, 3), 1)) {
         (current, index) =>
           if (((pattern >>> index) & 1) == 0) then current.filter(_ > 0)
           else current.map(_ + 3)
       }
+      (length, plan)
 
-    pipelines.foreach { pipeline =>
-      shape(pipeline) should startWith("Pipeline")
+    pipelines.length shouldBe 28
+    pipelines.foreach { (length, plan) =>
+      shape(plan) shouldBe s"Pipeline$length(Scan)"
     }
-    val columnar = pipelines.map(_.collect())
+    val columnar = pipelines.map((_, plan) => plan.collect())
     SparkletConf.set(SparkletConf.get.copy(columnarExecution = false))
-    columnar shouldBe pipelines.map(_.collect())
+    columnar shouldBe pipelines.map((_, plan) => plan.collect())
   }
 
   "a pair plan" should "stop a filter at the aggregate" in {

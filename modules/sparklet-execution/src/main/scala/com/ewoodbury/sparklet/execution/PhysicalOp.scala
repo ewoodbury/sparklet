@@ -16,6 +16,11 @@ enum PhysicalOp:
   case Scan(sourceKind: PhysicalOp.Kind, partitions: Seq[Partition[_]])
   case Filter(child: PhysicalOp, slot: PhysicalOp.Slot)
   case Project(child: PhysicalOp)
+
+  /**
+   * An int element pipeline for the outer `length` consecutive logical FilterOp/MapOp nodes.
+   * Interpretation re-derives their kinds and reads their functions from Plan.
+   */
   case Pipeline(child: PhysicalOp, length: Int)
   case Exchange(child: PhysicalOp)
   case HashAggregate(child: PhysicalOp)
