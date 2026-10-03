@@ -5,10 +5,11 @@ import com.ewoodbury.sparklet.core.Partition
 /**
  * One columnar operator, lowered from a logical [[com.ewoodbury.sparklet.core.Plan]].
  *
- * User functions stay on the logical plan. A filter and project chain is one node per step.
- * [[PhysicalOp.Exchange]] sits under [[PhysicalOp.HashAggregate]] and on each side of
- * [[PhysicalOp.HashJoin]]. Those kernels perform the shuffle. Interpreting the boundary on its own
- * does not.
+ * User functions stay on the logical plan, so lowering and interpretation have to agree node for
+ * node. A filter and project chain is one node per step. [[PhysicalOp.Project]] keeps the child
+ * kind, and lowering builds it only for an int or a string column. [[PhysicalOp.Exchange]] sits
+ * under [[PhysicalOp.HashAggregate]] and on each side of [[PhysicalOp.HashJoin]]. Those kernels
+ * perform the shuffle. Interpreting the boundary on its own does not.
  */
 enum PhysicalOp:
   case Scan(sourceKind: PhysicalOp.Kind, partitions: Seq[Partition[_]])
@@ -21,7 +22,7 @@ enum PhysicalOp:
   def kind: PhysicalOp.Kind = this match
     case Scan(sourceKind, _) => sourceKind
     case Filter(child, _) => child.kind
-    case Project(_) => PhysicalOp.Kind.Ints
+    case Project(child) => child.kind
     case Exchange(child) => child.kind
     case HashAggregate(_) => PhysicalOp.Kind.Pairs
     case HashJoin(_, _) => PhysicalOp.Kind.Triples
@@ -37,8 +38,12 @@ enum PhysicalOp:
 
 object PhysicalOp:
   enum Kind:
-    case Ints, Pairs, Triples
+    case Ints, Pairs, Triples, Strings
 
+  /**
+   * `Element` is the single column, an int or a string, and its shape label is `Filter`. `Row` is
+   * a predicate on both columns of a pair. `Key` and `Value` name which pair column.
+   */
   enum Slot:
     case Element, Row, Key, Value
 

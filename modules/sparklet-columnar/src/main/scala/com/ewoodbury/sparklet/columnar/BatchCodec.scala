@@ -37,6 +37,12 @@ object BatchCodec:
   def nullableBools(values: Seq[Option[Boolean]]): ColumnBatch =
     batch(BoolColumn.fromNullable(values))
 
+  def strings(values: Iterable[String]): ColumnBatch =
+    batch(DictUtf8Column.fromIterable(values))
+
+  def nullableStrings(values: Seq[Option[String]]): ColumnBatch =
+    batch(DictUtf8Column.fromNullable(values))
+
   /** One fill of each column. `size` then the iterator, so a `Seq` is not copied twice. */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def intPairs(values: Iterable[(Int, Int)]): ColumnBatch =
@@ -121,6 +127,30 @@ object BatchCodec:
     Seq.tabulate(column.length) { row =>
       require(column.isValid(row), s"null Bool at row $row")
       column.values(row) != 0
+    }
+
+  /** An empty cell as a `DistCollection[String]` element. */
+  @SuppressWarnings(Array("org.wartremover.warts.Null"))
+  def stringElement(cell: Option[String]): String =
+    cell match
+      case Some(text) => text
+      case None => null
+
+  /** A `DistCollection[String]` element that is an empty cell. */
+  @SuppressWarnings(Array("org.wartremover.warts.Null", "org.wartremover.warts.Equals"))
+  def isAbsent(text: String): Boolean = text eq null
+
+  def decodeStrings(batch: ColumnBatch): Seq[String] =
+    val column = utf8(batch)
+    Seq.tabulate(column.length) { row =>
+      if (column.isValid(row)) then column.dictionary(column.codes(row))
+      else stringElement(None)
+    }
+
+  def decodeNullableStrings(batch: ColumnBatch): Seq[Option[String]] =
+    val column = utf8(batch)
+    Seq.tabulate(column.length) { row =>
+      if (column.isValid(row)) Some(column.dictionary(column.codes(row))) else None
     }
 
   def decodeNullableBools(batch: ColumnBatch): Seq[Option[Boolean]] =
@@ -226,6 +256,12 @@ object BatchCodec:
       case Seq(column: BoolColumn) => column
       case _ =>
         throw new IllegalArgumentException(s"expected one Bool column, got ${batch.schema}")
+
+  private def utf8(batch: ColumnBatch): DictUtf8Column =
+    batch.columns match
+      case Seq(column: DictUtf8Column) => column
+      case _ =>
+        throw new IllegalArgumentException(s"expected one Utf8Dict column, got ${batch.schema}")
 
   private def intPair(batch: ColumnBatch): (Int32Column, Int32Column) =
     batch.columns match

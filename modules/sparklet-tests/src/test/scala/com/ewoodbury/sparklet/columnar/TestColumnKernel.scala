@@ -8,6 +8,13 @@ class TestColumnKernel extends AnyFlatSpec with Matchers:
   private def single(column: Column): ColumnBatch =
     new ColumnBatch(Vector(column.logicalType), Vector(column), column.length)
 
+  private def utf8(batch: ColumnBatch): DictUtf8Column = utf8At(batch, 0)
+
+  private def utf8At(batch: ColumnBatch, ordinal: Int): DictUtf8Column =
+    at(batch, ordinal) match
+      case column: DictUtf8Column => column
+      case other => fail(s"expected Utf8Dict, got $other")
+
   private def at(batch: ColumnBatch, ordinal: Int): Column =
     batch.columns.lift(ordinal).getOrElse(fail(s"missing column $ordinal"))
 
@@ -195,6 +202,53 @@ class TestColumnKernel extends AnyFlatSpec with Matchers:
     BatchCodec.decodeIntPairs(pairs) shouldBe Seq.empty[(Int, Int)]
   }
 
+  it should "keep a null string when the predicate says so, and share the dictionary" in {
+    val rows = Seq(Some("a"), None, Some("bb"), Some("a"))
+    val input = BatchCodec.nullableStrings(rows)
+    val kept = ColumnKernel.filterUtf8(
+      input,
+      0,
+      value =>
+        Option(value) match
+          case None | Some("a") => true
+          case Some(_) => false,
+    )
+    val dropped = ColumnKernel.filterUtf8(
+      input,
+      0,
+      value =>
+        Option(value) match
+          case Some(text) => text.startsWith("b")
+          case None => false,
+    )
+
+    BatchCodec.decodeNullableStrings(kept) shouldBe Seq(Some("a"), None, Some("a"))
+    BatchCodec.decodeNullableStrings(dropped) shouldBe Seq(Some("bb"))
+    utf8(kept).dictionary should be theSameInstanceAs utf8(input).dictionary
+    utf8(kept).isValid(1) shouldBe false
+    utf8(kept).codes(1) shouldBe 0
+  }
+
+  it should "compact a string column beside the predicate and keep its null" in {
+    val keys = Int32Column.of(Array(1, 2, 3), Validity.allValid(3), 3)
+    val texts = DictUtf8Column.fromNullable(Seq(Some("a"), None, Some("b")))
+    val batch = new ColumnBatch(
+      Vector(LogicalType.Int32, LogicalType.Utf8Dict),
+      Vector(keys, texts),
+      3,
+    )
+
+    val filtered = ColumnKernel.filterInt32(batch, 0, _ >= 2)
+
+    filtered.length shouldBe 2
+    val column = utf8At(filtered, 1)
+    column.dictionary should be theSameInstanceAs texts.dictionary
+    column.isValid(0) shouldBe false
+    column.codes(0) shouldBe 0
+    column.isValid(1) shouldBe true
+    column.dictionary(column.codes(1)) shouldBe "b"
+  }
+
   "project" should "map present values and keep nulls as zero" in {
     val ints = Seq(Some(2), None, Some(0))
     val longs = Seq(Some(Long.MinValue), None)
@@ -225,6 +279,28 @@ class TestColumnKernel extends AnyFlatSpec with Matchers:
         column.values(1) shouldBe 0.toByte
         column.values(2) shouldBe 1.toByte
       case other => fail(s"expected Bool, got $other")
+  }
+
+  it should "map null strings and build a new dictionary" in {
+    val rows = Seq(Some("a"), None, Some("bb"), Some("a"))
+    val input = BatchCodec.nullableStrings(rows)
+    val projected = ColumnKernel.projectUtf8(
+      input,
+      0,
+      value =>
+        Option(value) match
+          case None => "n"
+          case Some("bb") => BatchCodec.stringElement(None)
+          case Some(text) => text.toUpperCase(java.util.Locale.ENGLISH),
+    )
+    val column = utf8(projected)
+
+    BatchCodec.decodeNullableStrings(projected) shouldBe Seq(Some("A"), Some("n"), None, Some("A"))
+    column.dictionary.toSeq shouldBe Seq("A", "n")
+    column.dictionary shouldNot be theSameInstanceAs utf8(input).dictionary
+    column.isValid(2) shouldBe false
+    column.codes(2) shouldBe 0
+    column.codes(3) shouldBe column.codes(0)
   }
 
   it should "not call the function on a null, and should repair a nonzero null slot" in {

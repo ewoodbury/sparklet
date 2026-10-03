@@ -1,8 +1,9 @@
 # Architecture
 
 Sparklet is a data processing engine inspired by Spark, written in pure functional Scala 3. This
-document describes the system as it exists today: a row path and a columnar path for `Int` and
-`(Int, Int)`, a clean logical/physical split, and type erasure confined to named boundaries.
+document describes the system as it exists today: a row path and a columnar path for `Int`,
+`(Int, Int)`, and `String` filter and map, a clean logical/physical split, and type erasure
+confined to named boundaries.
 
 ## Module layout
 
@@ -43,7 +44,7 @@ DistCollection action
   -> ExecutionService (SPI, registered by the execution module)
   -> DefaultExecutionService
        bare Plan.Source: return its partitions
-       ColumnarPlanner.tryRun: lower an encodable Int or (Int, Int) plan to PhysicalOp, then interpret
+       ColumnarPlanner.tryRun: lower an encodable Int, (Int, Int), or String plan to PhysicalOp, then interpret
        otherwise DAGScheduler.executePartitions
             -> StageBuilder.buildStageGraph
             -> TopologicalSort
@@ -56,9 +57,12 @@ DistCollection action
 
 A bare `Plan.Source` short-circuits to its partitions. `ColumnarPlanner` runs filter, map,
 filterKeys, filterValues, reduceByKey, and inner join when the values it sees are `Int` or
-`(Int, Int)` and `SparkletConf.columnarExecution` is true (the default). Any other node keeps
-the whole plan on the row path. Narrow columnar ops keep input order and the input partition
-count. `reduceByKey` and `join` hash with `floorMod` into `defaultShufflePartitions`.
+`(Int, Int)`, and filter and map when they are `String`, if `SparkletConf.columnarExecution`
+is true (the default). Any other node keeps the whole plan on the row path. Strings are a
+dictionary of JVM strings plus int codes (`Utf8Dict`). A null string is a value, so filter and
+map see it. Group-by and join stay on int keys. Narrow columnar ops keep input order and the
+input partition count. `reduceByKey` and `join` hash with `floorMod` into
+`defaultShufflePartitions`.
 `columnarBatchSize` (default 8192) is the morsel width. Set `columnarExecution` false to force
 the row path.
 

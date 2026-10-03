@@ -1,19 +1,22 @@
 package com.ewoodbury.sparklet.columnar
 
 /**
- * Filter and project over primitive columns.
+ * Filter and project over columns.
  *
- * Filter builds a selection of rows whose predicate column is present and passes the predicate.
- * Nulls are dropped, and the predicate is not called on them. Survivors stay in input order. Every
- * column is compacted. The output capacity is the input live length, and the output length is the
- * survivor count.
+ * Filter builds a selection of rows whose predicate column passes the predicate. For ints, longs,
+ * floats, and bools, nulls are dropped and the predicate is not called. A string filter calls the
+ * predicate on every row, including an empty cell, and an empty cell may survive. Survivors stay
+ * in input order. Every column is compacted. The output capacity is the input live length, and the
+ * output length is the survivor count. A string filter keeps the input dictionary.
  *
- * Project maps one column and shares the others. A null stays null, the new slot stores `0`, and
- * the function is not called. The mapped column reuses the input validity bitmap, so null
- * positions do not change. Callers do not mutate a published bitmap.
+ * Project maps one column and shares the others. For the primitive columns, a null stays null, the
+ * new slot stores `0`, and the function is not called. The mapped column reuses the input validity
+ * bitmap, so null positions do not change. A string project calls the function on every row,
+ * stores an empty result as an empty cell, and builds a new dictionary. Callers do not mutate a
+ * published bitmap.
  *
- * Loops keep the row index in a `var` so the bodies stay allocation-free. Each primitive has its
- * own loop so the copy stays monomorphic.
+ * Primitive loops keep the row index in a `var` so the bodies stay allocation-free. Each primitive
+ * has its own loop so the copy stays monomorphic.
  */
 @SuppressWarnings(Array("org.wartremover.warts.Var"))
 object ColumnKernel:
@@ -41,6 +44,12 @@ object ColumnKernel:
 
   trait BoolMap:
     def apply(value: Boolean): Boolean
+
+  trait Utf8Predicate:
+    def apply(value: String): Boolean
+
+  trait Utf8Map:
+    def apply(value: String): String
 
   def filterInt32(batch: ColumnBatch, ordinal: Int, predicate: Int32Predicate): ColumnBatch =
     val column = asInt32(columnAt(batch, ordinal), ordinal)
@@ -76,6 +85,16 @@ object ColumnKernel:
       val scanned = scanFloat64(column, predicate, record = true, selection = selection)
       assemble(batch, ordinal, scanned.column, selection, scanned.count)
 
+  def filterUtf8(batch: ColumnBatch, ordinal: Int, predicate: Utf8Predicate): ColumnBatch =
+    val column = asUtf8(columnAt(batch, ordinal), ordinal)
+    if (batch.columns.length == 1) then
+      val scanned = scanUtf8(column, predicate, record = false, selection = noSelection)
+      publish(batch, scanned.column, scanned.count)
+    else
+      val selection = new Array[Int](batch.length)
+      val scanned = scanUtf8(column, predicate, record = true, selection = selection)
+      assemble(batch, ordinal, scanned.column, selection, scanned.count)
+
   def filterBool(batch: ColumnBatch, ordinal: Int, predicate: BoolPredicate): ColumnBatch =
     val column = asBool(columnAt(batch, ordinal), ordinal)
     if (batch.columns.length == 1) then
@@ -97,6 +116,9 @@ object ColumnKernel:
 
   def projectBool(batch: ColumnBatch, ordinal: Int, mapper: BoolMap): ColumnBatch =
     replace(batch, ordinal, mapBool(asBool(columnAt(batch, ordinal), ordinal), mapper))
+
+  def projectUtf8(batch: ColumnBatch, ordinal: Int, mapper: Utf8Map): ColumnBatch =
+    replace(batch, ordinal, mapUtf8(asUtf8(columnAt(batch, ordinal), ordinal), mapper))
 
   private val noSelection: Array[Int] = Array.emptyIntArray
 
@@ -198,6 +220,36 @@ object ColumnKernel:
     val built = BoolColumn.of(out, Validity.prefixValid(live, written), written)
     Scanned(built, written)
 
+  private inline def scanUtf8(
+      column: DictUtf8Column,
+      predicate: Utf8Predicate,
+      inline record: Boolean,
+      selection: Array[Int],
+  ): Scanned =
+    val live = column.length
+    val in = column.codes
+    val words = column.validity.words
+    val out = new Array[Int](live)
+    val dstWords = Validity.allocate(live)
+    var written = 0
+    var row = 0
+    while (row < live) {
+      if (predicate(utf8String(column, row))) then
+        inline if (record) then selection(written) = row
+        if (Validity.isSet(words, row)) then
+          out(written) = in(row)
+          Validity.setBit(dstWords, written)
+        written += 1
+      row += 1
+    }
+    val built = DictUtf8Column.of(
+      column.dictionary,
+      out,
+      Validity.fromWords(dstWords, live),
+      written,
+    )
+    Scanned(built, written)
+
   private def mapInt32(column: Int32Column, mapper: Int32Map): Int32Column =
     val live = column.length
     val in = column.values
@@ -247,6 +299,27 @@ object ColumnKernel:
     }
     BoolColumn.of(out, column.validity, live)
 
+  private def mapUtf8(column: DictUtf8Column, mapper: Utf8Map): DictUtf8Column =
+    val live = column.length
+    val capacity = column.codes.length
+    val out = new Array[Int](capacity)
+    val dstWords = Validity.allocate(capacity)
+    val words = DictUtf8Column.Words.empty
+    var row = 0
+    while (row < live) {
+      val text = mapper(utf8String(column, row))
+      if (!BatchCodec.isAbsent(text)) then
+        out(row) = words.intern(text)
+        Validity.setBit(dstWords, row)
+      row += 1
+    }
+    DictUtf8Column.of(words.toArray, out, Validity.fromWords(dstWords, capacity), live)
+
+  /** An empty cell does not index the dictionary. */
+  private def utf8String(column: DictUtf8Column, row: Int): String =
+    if (Validity.isSet(column.validity.words, row)) then column.dictionary(column.codes(row))
+    else BatchCodec.stringElement(None)
+
   private def assemble(
       batch: ColumnBatch,
       ordinal: Int,
@@ -273,6 +346,7 @@ object ColumnKernel:
       case int64: Int64Column => compactInt64(int64, selection, count, capacity)
       case float64: Float64Column => compactFloat64(float64, selection, count, capacity)
       case bool: BoolColumn => compactBool(bool, selection, count, capacity)
+      case utf8: DictUtf8Column => compactUtf8(utf8, selection, count, capacity)
 
   private def compactInt32(
       column: Int32Column,
@@ -354,6 +428,26 @@ object ColumnKernel:
     }
     BoolColumn.of(out, Validity.fromWords(dstWords, capacity), count)
 
+  private def compactUtf8(
+      column: DictUtf8Column,
+      selection: Array[Int],
+      count: Int,
+      capacity: Int,
+  ): DictUtf8Column =
+    val in = column.codes
+    val srcWords = column.validity.words
+    val out = new Array[Int](capacity)
+    val dstWords = Validity.allocate(capacity)
+    var index = 0
+    while (index < count) {
+      val row = selection(index)
+      if (Validity.isSet(srcWords, row)) then
+        out(index) = in(row)
+        Validity.setBit(dstWords, index)
+      index += 1
+    }
+    DictUtf8Column.of(column.dictionary, out, Validity.fromWords(dstWords, capacity), count)
+
   private def publish(batch: ColumnBatch, column: Column, count: Int): ColumnBatch =
     new ColumnBatch(batch.schema, Vector(column), count)
 
@@ -400,4 +494,12 @@ object ColumnKernel:
       case other =>
         throw new IllegalArgumentException(
           s"column $ordinal is ${other.logicalType}, expected Bool",
+        )
+
+  private def asUtf8(column: Column, ordinal: Int): DictUtf8Column =
+    column match
+      case utf8: DictUtf8Column => utf8
+      case other =>
+        throw new IllegalArgumentException(
+          s"column $ordinal is ${other.logicalType}, expected Utf8Dict",
         )

@@ -1,5 +1,6 @@
 package com.ewoodbury.sparklet.execution
 
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 
 import org.scalatest.BeforeAndAfterEach
@@ -63,17 +64,19 @@ class TestPhysicalPlan extends AnyFlatSpec with Matchers with BeforeAndAfterEach
   it should "exchange each join input, including an aggregate input" in {
     val build = DistCollection(Seq(1 -> 1, 1 -> 2), 1).reduceByKey[Int, Int](_ + _)
     val probe = DistCollection(Seq(1 -> 10), 1)
-    shape(build.join(probe)) shouldBe
+    val joined = build.join(probe)
+    shape(joined) shouldBe
       "HashJoin(Exchange(HashAggregate(Exchange(Scan))), Exchange(Scan))"
+    joined.collect().toMap shouldBe Map(1 -> ((3, 10)))
   }
 
   it should "leave a pair map on the row path" in {
     val mapped = DistCollection(Seq(1 -> 1, 1 -> 2), 1).map { (key, value) =>
       (key, value + 1)
     }
-    ColumnarPlanner.lower(mapped.plan) shouldBe None
+    ColumnarPlanner.lower(mapped.plan) shouldBe rowPath
     val reduced = mapped.reduceByKey[Int, Int](_ + _)
-    ColumnarPlanner.lower(reduced.plan) shouldBe None
+    ColumnarPlanner.lower(reduced.plan) shouldBe rowPath
     reduced.collect().toMap shouldBe Map(1 -> 5)
   }
 
@@ -81,16 +84,26 @@ class TestPhysicalPlan extends AnyFlatSpec with Matchers with BeforeAndAfterEach
     val counted = DistCollection(Seq(1, 1, 2), 1)
       .map(value => (value, 1))
       .reduceByKey[Int, Int](_ + _)
-    ColumnarPlanner.lower(counted.plan) shouldBe None
+    ColumnarPlanner.lower(counted.plan) shouldBe rowPath
     counted.collect().toMap shouldBe Map(1 -> 2, 2 -> 1)
+  }
+
+  "a string pipeline" should "keep filter and project as separate nodes" in {
+    val mapped = DistCollection(Seq("aa", "b", "cc"), 1)
+      .filter(_.length == 1)
+      .map(_.toUpperCase(Locale.ENGLISH))
+    shape(mapped) shouldBe "Project(Filter(Scan))"
+    mapped.collect() shouldBe Seq("B")
   }
 
   "lowering" should "be empty when columnar execution is off" in {
     SparkletConf.set(SparkletConf.get.copy(columnarExecution = false))
     val mapped = DistCollection(Seq(1, 2), 1).map(_ + 1)
-    ColumnarPlanner.lower(mapped.plan) shouldBe None
+    ColumnarPlanner.lower(mapped.plan) shouldBe rowPath
     mapped.collect() shouldBe Seq(2, 3)
   }
+
+  private val rowPath = Option.empty[PhysicalOp]
 
   private def shape[A](collection: DistCollection[A]): String =
     ColumnarPlanner
