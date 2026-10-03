@@ -6,7 +6,8 @@ import com.ewoodbury.sparklet.columnar.*
 import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf}
 
 /**
- * Runs `Int`, `(Int, Int)`, and `String` plans on the columnar kernels.
+ * Lowers `Int`, `(Int, Int)`, and `String` plans to [[PhysicalOp]] and runs that tree on the
+ * columnar kernels.
  *
  * Named erasure boundary. `Plan` is invariant and its element type is erased, so a source is
  * classified by reading one value, and user functions are then cast to that operation. A function
@@ -15,10 +16,17 @@ import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf}
  * distinct, sort, a map that is not fed by `Int` or `String`, and the rest) makes the whole plan
  * ineligible, so a supported prefix is not executed on its own.
  *
- * Narrow map and filter keep input order and the input partition count. `String` selects filter
- * and map only. `reduceByKey` applies the user's function and wraps at `Int`. `join`
- * hash-partitions both sides and probes one bucket at a time. Output width for those two is
- * `defaultShufflePartitions`.
+ * [[lower]] and interpretation walk the same logical plan. The physical node records the operator
+ * and not the function, so each logical node is matched to the node [[lower]] built for it. A
+ * mismatch is a planner bug: interpretation throws `IllegalStateException`, and [[tryRun]] does
+ * not turn that into a row-path fallback. A `ClassCastException` from a function that is not the
+ * selected type still is a fallback, and user side effects in that function may already have run.
+ *
+ * [[lower]] does not call user functions. Interpretation is one kernel per node. Narrow map and
+ * filter keep input order and the input partition count. `String` selects filter and map only. A
+ * filter over a join result is not columnar. `reduceByKey` applies the user's function and wraps
+ * at `Int`. `join` hash-partitions both sides and probes one bucket at a time. Output width for
+ * those two is `defaultShufflePartitions`.
  *
  * A null string is a value. Classification skips a leading null and keeps looking for a `String`.
  * An all-null source stays on the row path, because there is no witness.
@@ -33,25 +41,28 @@ import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf}
 object ColumnarPlanner:
 
   /** Layout the planner would use, without running the plan. `None` means the row path. */
-  def partitioning[A](plan: Plan[A]): Option[PartitioningInfo] = selected(plan)
+  def partitioning[A](plan: Plan[A]): Option[PartitioningInfo] =
+    accepted(plan).map(infoOf)
+
+  /**
+   * The physical tree for `plan`, without running it. `None` means the row path. An invalid layout
+   * still lowers; [[partitioning]] and [[tryRun]] refuse it.
+   */
+  def lower(plan: Plan[_]): Option[PhysicalOp] =
+    if (!SparkletConf.get.columnarExecution) then None
+    else lowerPlan(plan)
 
   /**
    * Run `plan` on the columnar path. `None` means the caller should use the row path. The single
    * result cast is safe when selection succeeded: the decoded partitions have the plan's element
-   * type. A `ClassCastException` from a function that is not actually the selected type is a
-   * row-path fallback, and user side effects in that function may already have run.
+   * type.
    */
   def tryRun[A](plan: Plan[A]): Option[Seq[Partition[A]]] =
-    if (selected(plan).isEmpty) then None
-    else
-      try Some(decode(eval(plan)).asInstanceOf[Seq[Partition[A]]])
-      catch case _: ClassCastException => None
-
-  private enum SourceKind:
-    case Ints, Pairs, Strings
-
-  private enum OutputKind:
-    case Ints, Pairs, Triples, Strings
+    accepted(plan) match
+      case None => None
+      case Some(op) =>
+        try Some(decode(interpret(plan, op)).asInstanceOf[Seq[Partition[A]]])
+        catch case _: ClassCastException => None
 
   private enum Columns:
     case Ints(parts: Vector[ColumnBatch])
@@ -59,174 +70,187 @@ object ColumnarPlanner:
     case Triples(parts: Vector[ColumnBatch])
     case Strings(parts: Vector[ColumnBatch])
 
-  private enum Route:
-    case Skip
-    case Run(info: PartitioningInfo, encoded: OutputKind)
+  private def accepted(plan: Plan[_]): Option[PhysicalOp] =
+    lower(plan).filter(op => infoOf(op).invalidReason.isEmpty)
 
-  private def selected(plan: Plan[_]): Option[PartitioningInfo] =
-    if (!SparkletConf.get.columnarExecution) then None
-    else
-      describe(plan) match
-        case None => None
-        case Some(info) if info.invalidReason.isDefined => None
-        case Some(info) => Some(info)
-
-  private def describe(plan: Plan[_]): Option[PartitioningInfo] =
-    route(plan) match
-      case Route.Skip => None
-      case Route.Run(info, _) => Some(info)
-
-  private def route(plan: Plan[_]): Route = plan match
+  private def lowerPlan(plan: Plan[_]): Option[PhysicalOp] = plan match
     case Plan.Source(partitions) =>
-      encodedSource(partitions) match
-        case Some(SourceKind.Ints) =>
-          Route.Run(narrow(Distribution.Unknown(partitions.length)), OutputKind.Ints)
-        case Some(SourceKind.Pairs) =>
-          Route.Run(narrow(Distribution.Unknown(partitions.length)), OutputKind.Pairs)
-        case Some(SourceKind.Strings) =>
-          Route.Run(narrow(Distribution.Unknown(partitions.length)), OutputKind.Strings)
-        case None => Route.Skip
+      classify(partitions).map(kind => PhysicalOp.Scan(kind, partitions))
     case Plan.FilterOp(source, _) =>
-      route(source) match
-        case Route.Run(info, OutputKind.Ints) => Route.Run(info, OutputKind.Ints)
-        case Route.Run(info, OutputKind.Pairs) => Route.Run(info, OutputKind.Pairs)
-        case Route.Run(info, OutputKind.Strings) => Route.Run(info, OutputKind.Strings)
-        case _ => Route.Skip
+      lowerPlan(source).flatMap(child => filterOf(child))
     case Plan.MapOp(source, _) =>
-      route(source) match
-        case Route.Run(info, OutputKind.Ints) => Route.Run(info, OutputKind.Ints)
-        case Route.Run(info, OutputKind.Strings) => Route.Run(info, OutputKind.Strings)
-        case _ => Route.Skip
+      lowerPlan(source).flatMap { child =>
+        child.kind match
+          case PhysicalOp.Kind.Ints | PhysicalOp.Kind.Strings =>
+            Some(PhysicalOp.Project(child))
+          case _ => None
+      }
     case Plan.FilterKeysOp(source, _) =>
-      keepPairs(route(source))
+      columnFilter(source, PhysicalOp.Slot.Key)
     case Plan.FilterValuesOp(source, _) =>
-      keepPairs(route(source))
+      columnFilter(source, PhysicalOp.Slot.Value)
     case Plan.ReduceByKeyOp(source, _) =>
-      route(source) match
-        case Route.Run(_, OutputKind.Pairs) => Route.Run(hashed, OutputKind.Pairs)
-        case _ => Route.Skip
+      lowerPlan(source).flatMap { child =>
+        child.kind match
+          case PhysicalOp.Kind.Pairs =>
+            Some(PhysicalOp.HashAggregate(PhysicalOp.Exchange(child)))
+          case _ => None
+      }
     case Plan.JoinOp(left, right, _) =>
-      (route(left), route(right)) match
-        case (Route.Run(_, OutputKind.Pairs), Route.Run(_, OutputKind.Pairs)) =>
-          Route.Run(hashed, OutputKind.Triples)
-        case _ => Route.Skip
-    case _ => Route.Skip
+      (lowerPlan(left), lowerPlan(right)) match
+        case (Some(leftOp), Some(rightOp)) =>
+          (leftOp.kind, rightOp.kind) match
+            case (PhysicalOp.Kind.Pairs, PhysicalOp.Kind.Pairs) =>
+              Some(PhysicalOp.HashJoin(PhysicalOp.Exchange(leftOp), PhysicalOp.Exchange(rightOp)))
+            case _ => None
+        case _ => None
+    case _ => None
 
-  private def keepPairs(parent: Route): Route = parent match
-    case Route.Run(info, OutputKind.Pairs) => Route.Run(info, OutputKind.Pairs)
-    case _ => Route.Skip
+  private def filterOf(child: PhysicalOp): Option[PhysicalOp] =
+    child.kind match
+      case PhysicalOp.Kind.Ints | PhysicalOp.Kind.Strings =>
+        Some(PhysicalOp.Filter(child, PhysicalOp.Slot.Element))
+      case PhysicalOp.Kind.Pairs =>
+        Some(PhysicalOp.Filter(child, PhysicalOp.Slot.Row))
+      case PhysicalOp.Kind.Triples => None
 
-  private def narrow(distribution: Distribution): PartitioningInfo =
-    PartitioningInfo(distribution, OrderingTag.Unsorted, layout)
+  private def columnFilter(source: Plan[_], slot: PhysicalOp.Slot): Option[PhysicalOp] =
+    lowerPlan(source).flatMap { child =>
+      child.kind match
+        case PhysicalOp.Kind.Pairs => Some(PhysicalOp.Filter(child, slot))
+        case _ => None
+    }
 
-  private def hashed: PartitioningInfo =
-    PartitioningInfo(
-      Distribution.Hash(shuffleWidth, PartitioningInfo.RowKeyOrdinals),
-      OrderingTag.Unsorted,
-      layout,
-    )
-
-  private def layout: Layout = Layout.Columnar(SparkletConf.get.columnarBatchSize)
-
-  private def encodedSource(partitions: Seq[Partition[_]]): Option[SourceKind] =
+  private def classify(partitions: Seq[Partition[_]]): Option[PhysicalOp.Kind] =
     if (partitions.isEmpty) then None
     else
       val values = partitions.iterator.flatMap(_.data.iterator)
-      values.nextOption().flatMap(value => classify(value, values))
+      values.nextOption().flatMap(value => classifyValue(value, values))
 
   /** The first present value selects the kind. A leading empty cell can only witness a string. */
-  private def classify(value: Any, rest: Iterator[Any]): Option[SourceKind] =
+  private def classifyValue(value: Any, rest: Iterator[Any]): Option[PhysicalOp.Kind] =
     Option(value) match
-      case Some(_: Int) => Some(SourceKind.Ints)
-      case Some((_: Int, _: Int)) => Some(SourceKind.Pairs)
-      case Some(_: String) => Some(SourceKind.Strings)
+      case Some(_: Int) => Some(PhysicalOp.Kind.Ints)
+      case Some((_: Int, _: Int)) => Some(PhysicalOp.Kind.Pairs)
+      case Some(_: String) => Some(PhysicalOp.Kind.Strings)
       case Some(_) => None
       case None => stringWitness(rest)
 
   @tailrec
-  private def stringWitness(values: Iterator[Any]): Option[SourceKind] =
+  private def stringWitness(values: Iterator[Any]): Option[PhysicalOp.Kind] =
     values.nextOption() match
       case None => None
       case Some(value) =>
         Option(value) match
           case None => stringWitness(values)
-          case Some(_: String) => Some(SourceKind.Strings)
+          case Some(_: String) => Some(PhysicalOp.Kind.Strings)
           case Some(_) => None
 
-  private def eval(plan: Plan[_]): Columns = plan match
-    case Plan.Source(partitions) =>
-      encodedSource(partitions) match
-        case Some(SourceKind.Ints) => Columns.Ints(encodeInts(partitions))
-        case Some(SourceKind.Pairs) => Columns.Pairs(encodePairs(partitions))
-        case Some(SourceKind.Strings) => Columns.Strings(encodeStrings(partitions))
-        case None => throw new IllegalStateException("columnar source has no encodable values")
-    case Plan.FilterOp(source, predicate) =>
-      eval(source) match
-        case Columns.Ints(parts) =>
-          val keep = predicate.asInstanceOf[Int => Boolean]
-          Columns.Ints(onEach(parts) { batch =>
-            ColumnKernel.filterInt32(batch, 0, value => keep(value))
-          })
-        case Columns.Pairs(parts) =>
-          val keep = predicate.asInstanceOf[((Int, Int)) => Boolean]
-          // `keep` is `(Int, Int) => Boolean`, so the pair is boxed for the call.
-          Columns.Pairs(onEach(parts) { batch =>
-            PairKernel.filter(batch, (key, value) => keep((key, value)))
-          })
-        case Columns.Strings(parts) =>
-          val keep = predicate.asInstanceOf[String => Boolean]
-          Columns.Strings(onEach(parts) { batch =>
-            ColumnKernel.filterUtf8(batch, 0, value => keep(value))
-          })
-        case Columns.Triples(_) =>
-          throw new IllegalStateException("columnar filter does not accept a join result")
-    case Plan.MapOp(source, mapper) =>
-      eval(source) match
-        case Columns.Ints(parts) =>
-          val fn = mapper.asInstanceOf[Int => Int]
-          Columns.Ints(onEach(parts) { batch =>
-            ColumnKernel.projectInt32(batch, 0, value => fn(value))
-          })
-        case Columns.Strings(parts) =>
-          val fn = mapper.asInstanceOf[String => Any]
-          Columns.Strings(onEach(parts) { batch =>
-            ColumnKernel.projectUtf8(batch, 0, value => stringResult(fn(value)))
-          })
-        case _ =>
-          throw new IllegalStateException("columnar map expects ints or strings")
-    case Plan.FilterKeysOp(source, predicate) =>
-      val keep = predicate.asInstanceOf[Int => Boolean]
-      Columns.Pairs(onEach(pairsOf(eval(source))) { batch =>
-        ColumnKernel.filterInt32(batch, 0, value => keep(value))
-      })
-    case Plan.FilterValuesOp(source, predicate) =>
-      val keep = predicate.asInstanceOf[Int => Boolean]
-      Columns.Pairs(onEach(pairsOf(eval(source))) { batch =>
-        ColumnKernel.filterInt32(batch, 1, value => keep(value))
-      })
-    case Plan.ReduceByKeyOp(source, reduceFunc) =>
+  private def infoOf(op: PhysicalOp): PartitioningInfo = op match
+    case PhysicalOp.Filter(child, _) => infoOf(child)
+    case PhysicalOp.Project(child) => infoOf(child)
+    case _: PhysicalOp.HashAggregate | _: PhysicalOp.HashJoin => hashed
+    case PhysicalOp.Exchange(_) =>
+      throw new IllegalStateException("exchange is only a child of aggregate or join")
+    case PhysicalOp.Scan(_, partitions) =>
+      narrow(Distribution.Unknown(partitions.length))
+
+  private def interpret(plan: Plan[_], op: PhysicalOp): Columns = (plan, op) match
+    case (Plan.Source(partitions), PhysicalOp.Scan(PhysicalOp.Kind.Ints, _)) =>
+      Columns.Ints(encodeInts(partitions))
+    case (Plan.Source(partitions), PhysicalOp.Scan(PhysicalOp.Kind.Pairs, _)) =>
+      Columns.Pairs(encodePairs(partitions))
+    case (Plan.Source(partitions), PhysicalOp.Scan(PhysicalOp.Kind.Strings, _)) =>
+      Columns.Strings(encodeStrings(partitions))
+    case (Plan.FilterOp(source, predicate), PhysicalOp.Filter(child, slot)) =>
+      applyFilter(interpret(source, child), predicate, slot)
+    case (Plan.MapOp(source, mapper), PhysicalOp.Project(child)) =>
+      project(interpret(source, child), mapper)
+    case (Plan.FilterKeysOp(source, predicate), PhysicalOp.Filter(child, PhysicalOp.Slot.Key)) =>
+      applyFilter(interpret(source, child), predicate, PhysicalOp.Slot.Key)
+    case (
+          Plan.FilterValuesOp(source, predicate),
+          PhysicalOp.Filter(child, PhysicalOp.Slot.Value),
+        ) =>
+      applyFilter(interpret(source, child), predicate, PhysicalOp.Slot.Value)
+    case (
+          Plan.ReduceByKeyOp(source, reduceFunc),
+          PhysicalOp.HashAggregate(PhysicalOp.Exchange(child)),
+        ) =>
       val op = reduceFunc.asInstanceOf[(Int, Int) => Int]
-      val reduced = HashReduce.byKey(
-        pairsOf(eval(source)),
-        shuffleWidth,
-        parallelism,
-        batchSize,
-        (left, right) => op(left, right),
+      Columns.Pairs(
+        HashReduce.byKey(
+          pairsOf(interpret(source, child)),
+          shuffleWidth,
+          parallelism,
+          batchSize,
+          (left, right) => op(left, right),
+        ),
       )
-      Columns.Pairs(reduced)
-    case Plan.JoinOp(left, right, _) =>
-      val joined = ColumnPipeline.innerJoin(
-        pairsOf(eval(left)),
-        pairsOf(eval(right)),
-        shuffleWidth,
-        parallelism,
-        batchSize,
+    case (
+          Plan.JoinOp(left, right, _),
+          PhysicalOp.HashJoin(PhysicalOp.Exchange(leftOp), PhysicalOp.Exchange(rightOp)),
+        ) =>
+      Columns.Triples(
+        ColumnPipeline.innerJoin(
+          pairsOf(interpret(left, leftOp)),
+          pairsOf(interpret(right, rightOp)),
+          shuffleWidth,
+          parallelism,
+          batchSize,
+        ),
       )
-      Columns.Triples(joined)
     case _ =>
       throw new IllegalStateException(
-        s"columnar planner cannot run ${plan.getClass.getSimpleName}",
+        s"physical tree does not match ${plan.getClass.getSimpleName}",
       )
+
+  private def applyFilter(columns: Columns, predicate: Any, slot: PhysicalOp.Slot): Columns =
+    slot match
+      case PhysicalOp.Slot.Element =>
+        columns match
+          case Columns.Ints(parts) =>
+            val keep = predicate.asInstanceOf[Int => Boolean]
+            Columns.Ints(onEach(parts) { batch =>
+              ColumnKernel.filterInt32(batch, 0, value => keep(value))
+            })
+          case Columns.Strings(parts) =>
+            val keep = predicate.asInstanceOf[String => Boolean]
+            Columns.Strings(onEach(parts) { batch =>
+              ColumnKernel.filterUtf8(batch, 0, value => keep(value))
+            })
+          case _ =>
+            throw new IllegalStateException("columnar element filter expects ints or strings")
+      case PhysicalOp.Slot.Row =>
+        val keep = predicate.asInstanceOf[((Int, Int)) => Boolean]
+        // `keep` is `(Int, Int) => Boolean`, so the pair is boxed for the call.
+        Columns.Pairs(onEach(pairsOf(columns)) { batch =>
+          PairKernel.filter(batch, (key, value) => keep((key, value)))
+        })
+      case PhysicalOp.Slot.Key =>
+        val keep = predicate.asInstanceOf[Int => Boolean]
+        Columns.Pairs(onEach(pairsOf(columns)) { batch =>
+          ColumnKernel.filterInt32(batch, 0, value => keep(value))
+        })
+      case PhysicalOp.Slot.Value =>
+        val keep = predicate.asInstanceOf[Int => Boolean]
+        Columns.Pairs(onEach(pairsOf(columns)) { batch =>
+          ColumnKernel.filterInt32(batch, 1, value => keep(value))
+        })
+
+  private def project(columns: Columns, mapper: Any): Columns = columns match
+    case Columns.Ints(parts) =>
+      val fn = mapper.asInstanceOf[Int => Int]
+      Columns.Ints(onEach(parts) { batch =>
+        ColumnKernel.projectInt32(batch, 0, value => fn(value))
+      })
+    case Columns.Strings(parts) =>
+      val fn = mapper.asInstanceOf[String => Any]
+      Columns.Strings(onEach(parts) { batch =>
+        ColumnKernel.projectUtf8(batch, 0, value => stringResult(fn(value)))
+      })
+    case _ =>
+      throw new IllegalStateException("columnar map expects ints or strings")
 
   private def pairsOf(columns: Columns): Vector[ColumnBatch] = columns match
     case Columns.Pairs(parts) if parts.nonEmpty => parts
@@ -259,6 +283,16 @@ object ColumnarPlanner:
       BatchCodec.ints(partition.data.asInstanceOf[Iterable[Int]])
     }.toVector
 
+  private def encodePairs(partitions: Seq[Partition[_]]): Vector[ColumnBatch] =
+    partitions.map { partition =>
+      BatchCodec.intPairs(partition.data.asInstanceOf[Iterable[(Int, Int)]])
+    }.toVector
+
+  private def encodeStrings(partitions: Seq[Partition[_]]): Vector[ColumnBatch] =
+    partitions.map { partition =>
+      BatchCodec.strings(partition.data.asInstanceOf[Iterable[String]])
+    }.toVector
+
   @SuppressWarnings(Array("org.wartremover.warts.Null"))
   private def stringResult(value: Any): String = value match
     case null => null
@@ -267,16 +301,6 @@ object ColumnarPlanner:
       throw new ClassCastException(
         s"columnar string map expected a String, found ${other.getClass.getName}",
       )
-
-  private def encodeStrings(partitions: Seq[Partition[_]]): Vector[ColumnBatch] =
-    partitions.map { partition =>
-      BatchCodec.strings(partition.data.asInstanceOf[Iterable[String]])
-    }.toVector
-
-  private def encodePairs(partitions: Seq[Partition[_]]): Vector[ColumnBatch] =
-    partitions.map { partition =>
-      BatchCodec.intPairs(partition.data.asInstanceOf[Iterable[(Int, Int)]])
-    }.toVector
 
   private def decode(columns: Columns): Seq[Partition[_]] = columns match
     case Columns.Ints(parts) =>
@@ -287,6 +311,18 @@ object ColumnarPlanner:
       parts.map(batch => Partition(BatchCodec.decodeIntTriples(batch)))
     case Columns.Strings(parts) =>
       parts.map(batch => Partition(BatchCodec.decodeStrings(batch)))
+
+  private def narrow(distribution: Distribution): PartitioningInfo =
+    PartitioningInfo(distribution, OrderingTag.Unsorted, layout)
+
+  private def hashed: PartitioningInfo =
+    PartitioningInfo(
+      Distribution.Hash(shuffleWidth, PartitioningInfo.RowKeyOrdinals),
+      OrderingTag.Unsorted,
+      layout,
+    )
+
+  private def layout: Layout = Layout.Columnar(SparkletConf.get.columnarBatchSize)
 
   private def batchSize: Int =
     val size = SparkletConf.get.columnarBatchSize
