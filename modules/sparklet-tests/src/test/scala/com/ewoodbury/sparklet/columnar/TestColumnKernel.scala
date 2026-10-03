@@ -349,6 +349,28 @@ class TestColumnKernel extends AnyFlatSpec with Matchers:
     BatchCodec.decodeNullableInts(batch) shouldBe expected
   }
 
+  it should "fuse filters and projects without invoking functions for nulls" in {
+    val column = Int32Column.of(Array(2, 42, 3), Validity.pack(3, row => row != 1), 3)
+    val batch = single(column)
+    val fusedFilter = ColumnKernel.pipelineInt32FP(
+      batch,
+      _ > 0,
+      value =>
+        if (value == 42) then throw new IllegalStateException("mapper saw a null slot")
+        else value * 10,
+    )
+    val fusedProjects = ColumnKernel.pipelineInt32PP(
+      batch,
+      _ + 1,
+      value =>
+        if (value == 42) then throw new IllegalStateException("mapper saw a null slot")
+        else value + 1,
+    )
+
+    BatchCodec.decodeNullableInts(fusedFilter) shouldBe Seq(Some(20), Some(30))
+    BatchCodec.decodeNullableInts(fusedProjects) shouldBe Seq(Some(4), None, Some(5))
+  }
+
   "kernels" should "reject a bad ordinal or a column of the wrong type" in {
     val ints = BatchCodec.ints(Seq(1))
     val pairs = BatchCodec.intPairs(Seq((1, 2)))

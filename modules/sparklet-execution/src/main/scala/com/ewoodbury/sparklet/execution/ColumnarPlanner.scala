@@ -22,11 +22,12 @@ import com.ewoodbury.sparklet.core.{Partition, Plan, SparkletConf}
  * not turn that into a row-path fallback. A `ClassCastException` from a function that is not the
  * selected type still is a fallback, and user side effects in that function may already have run.
  *
- * [[lower]] does not call user functions. Interpretation is one kernel per node. Narrow map and
- * filter keep input order and the input partition count. `String` selects filter and map only. A
- * filter over a join result is not columnar. `reduceByKey` applies the user's function and wraps
- * at `Int`. `join` hash-partitions both sides and probes one bucket at a time. Output width for
- * those two is `defaultShufflePartitions`.
+ * [[lower]] does not call user functions. Straight int element runs of two to four operations use
+ * one fused kernel; other filters and maps use one kernel per node. Narrow map and filter keep
+ * input order and the input partition count. `String` selects filter and map only. A filter over a
+ * join result is not columnar. `reduceByKey` applies the user's function and wraps at `Int`.
+ * `join` hash-partitions both sides and probes one bucket at a time. Output width for those two is
+ * `defaultShufflePartitions`.
  *
  * A null string is a value. Classification skips a leading null and keeps looking for a `String`.
  * An all-null source stays on the row path, because there is no witness.
@@ -70,10 +71,26 @@ object ColumnarPlanner:
     case Triples(parts: Vector[ColumnBatch])
     case Strings(parts: Vector[ColumnBatch])
 
+  private enum ElementStep:
+    case Filter(predicate: Any)
+    case Project(mapper: Any)
+
   private def accepted(plan: Plan[_]): Option[PhysicalOp] =
     lower(plan).filter(op => infoOf(op).invalidReason.isEmpty)
 
-  private def lowerPlan(plan: Plan[_]): Option[PhysicalOp] = plan match
+  private def lowerPlan(plan: Plan[_]): Option[PhysicalOp] =
+    val (base, steps) = elementSteps(plan)
+    if (steps.length >= 2) then
+      lowerPlanNode(base).filter { op =>
+        op.kind match
+          case PhysicalOp.Kind.Ints => true
+          case _ => false
+      } match
+        case Some(child) => Some(lowerIntPipeline(child, steps))
+        case None => lowerPlanNode(plan)
+    else lowerPlanNode(plan)
+
+  private def lowerPlanNode(plan: Plan[_]): Option[PhysicalOp] = plan match
     case Plan.Source(partitions) =>
       classify(partitions).map(kind => PhysicalOp.Scan(kind, partitions))
     case Plan.FilterOp(source, _) =>
@@ -105,6 +122,28 @@ object ColumnarPlanner:
             case _ => None
         case _ => None
     case _ => None
+
+  private def elementSteps(plan: Plan[_]): (Plan[_], List[ElementStep]) =
+    @tailrec
+    def collect(current: Plan[_], steps: List[ElementStep]): (Plan[_], List[ElementStep]) =
+      current match
+        case Plan.FilterOp(source, predicate) =>
+          collect(source, ElementStep.Filter(predicate) :: steps)
+        case Plan.MapOp(source, mapper) =>
+          collect(source, ElementStep.Project(mapper) :: steps)
+        case _ => (current, steps)
+
+    collect(plan, Nil)
+
+  private def lowerIntPipeline(child: PhysicalOp, steps: List[ElementStep]): PhysicalOp =
+    steps.grouped(4).foldLeft(child) { (current, group) =>
+      group match
+        case List(step) =>
+          step match
+            case ElementStep.Filter(_) => PhysicalOp.Filter(current, PhysicalOp.Slot.Element)
+            case ElementStep.Project(_) => PhysicalOp.Project(current)
+        case _ => PhysicalOp.Pipeline(current, group.length)
+    }
 
   private def filterOf(child: PhysicalOp): Option[PhysicalOp] =
     child.kind match
@@ -149,6 +188,7 @@ object ColumnarPlanner:
   private def infoOf(op: PhysicalOp): PartitioningInfo = op match
     case PhysicalOp.Filter(child, _) => infoOf(child)
     case PhysicalOp.Project(child) => infoOf(child)
+    case PhysicalOp.Pipeline(child, _) => infoOf(child)
     case _: PhysicalOp.HashAggregate | _: PhysicalOp.HashJoin => hashed
     case PhysicalOp.Exchange(_) =>
       throw new IllegalStateException("exchange is only a child of aggregate or join")
@@ -166,6 +206,8 @@ object ColumnarPlanner:
       applyFilter(interpret(source, child), predicate, slot)
     case (Plan.MapOp(source, mapper), PhysicalOp.Project(child)) =>
       project(interpret(source, child), mapper)
+    case (logical, PhysicalOp.Pipeline(child, length)) =>
+      interpretPipeline(logical, child, length)
     case (Plan.FilterKeysOp(source, predicate), PhysicalOp.Filter(child, PhysicalOp.Slot.Key)) =>
       applyFilter(interpret(source, child), predicate, PhysicalOp.Slot.Key)
     case (
@@ -204,6 +246,193 @@ object ColumnarPlanner:
       throw new IllegalStateException(
         s"physical tree does not match ${plan.getClass.getSimpleName}",
       )
+
+  private def interpretPipeline(plan: Plan[_], child: PhysicalOp, length: Int): Columns =
+    @tailrec
+    def collect(
+        current: Plan[_],
+        remaining: Int,
+        steps: List[ElementStep],
+    ): (Plan[_], List[ElementStep]) =
+      if (remaining == 0) then (current, steps)
+      else
+        current match
+          case Plan.FilterOp(source, predicate) =>
+            collect(source, remaining - 1, ElementStep.Filter(predicate) :: steps)
+          case Plan.MapOp(source, mapper) =>
+            collect(source, remaining - 1, ElementStep.Project(mapper) :: steps)
+          case _ =>
+            throw new IllegalStateException("pipeline does not match logical element steps")
+
+    val (source, steps) = collect(plan, length, Nil)
+    pipeline(interpret(source, child), steps)
+
+  private def pipeline(columns: Columns, steps: List[ElementStep]): Columns = columns match
+    case Columns.Ints(parts) =>
+      Columns.Ints(onEach(parts)(batch => runIntPipeline(batch, steps)))
+    case _ => throw new IllegalStateException("pipeline expects an int column")
+
+  private def runIntPipeline(batch: ColumnBatch, steps: List[ElementStep]): ColumnBatch =
+    import ElementStep.*
+    steps match
+      case List(Filter(f1), Filter(f2)) =>
+        ColumnKernel.pipelineInt32FF(batch, intPredicate(f1), intPredicate(f2))
+      case List(Filter(f1), Project(m2)) =>
+        ColumnKernel.pipelineInt32FP(batch, intPredicate(f1), intMap(m2))
+      case List(Project(m1), Filter(f2)) =>
+        ColumnKernel.pipelineInt32PF(batch, intMap(m1), intPredicate(f2))
+      case List(Project(m1), Project(m2)) =>
+        ColumnKernel.pipelineInt32PP(batch, intMap(m1), intMap(m2))
+      case List(Filter(f1), Filter(f2), Filter(f3)) =>
+        ColumnKernel.pipelineInt32FFF(batch, intPredicate(f1), intPredicate(f2), intPredicate(f3))
+      case List(Filter(f1), Filter(f2), Project(m3)) =>
+        ColumnKernel.pipelineInt32FFP(batch, intPredicate(f1), intPredicate(f2), intMap(m3))
+      case List(Filter(f1), Project(m2), Filter(f3)) =>
+        ColumnKernel.pipelineInt32FPF(batch, intPredicate(f1), intMap(m2), intPredicate(f3))
+      case List(Filter(f1), Project(m2), Project(m3)) =>
+        ColumnKernel.pipelineInt32FPP(batch, intPredicate(f1), intMap(m2), intMap(m3))
+      case List(Project(m1), Filter(f2), Filter(f3)) =>
+        ColumnKernel.pipelineInt32PFF(batch, intMap(m1), intPredicate(f2), intPredicate(f3))
+      case List(Project(m1), Filter(f2), Project(m3)) =>
+        ColumnKernel.pipelineInt32PFP(batch, intMap(m1), intPredicate(f2), intMap(m3))
+      case List(Project(m1), Project(m2), Filter(f3)) =>
+        ColumnKernel.pipelineInt32PPF(batch, intMap(m1), intMap(m2), intPredicate(f3))
+      case List(Project(m1), Project(m2), Project(m3)) =>
+        ColumnKernel.pipelineInt32PPP(batch, intMap(m1), intMap(m2), intMap(m3))
+      case List(Filter(f1), Filter(f2), Filter(f3), Filter(f4)) =>
+        ColumnKernel.pipelineInt32FFFF(
+          batch,
+          intPredicate(f1),
+          intPredicate(f2),
+          intPredicate(f3),
+          intPredicate(f4),
+        )
+      case List(Filter(f1), Filter(f2), Filter(f3), Project(m4)) =>
+        ColumnKernel.pipelineInt32FFFP(
+          batch,
+          intPredicate(f1),
+          intPredicate(f2),
+          intPredicate(f3),
+          intMap(m4),
+        )
+      case List(Filter(f1), Filter(f2), Project(m3), Filter(f4)) =>
+        ColumnKernel.pipelineInt32FFPF(
+          batch,
+          intPredicate(f1),
+          intPredicate(f2),
+          intMap(m3),
+          intPredicate(f4),
+        )
+      case List(Filter(f1), Filter(f2), Project(m3), Project(m4)) =>
+        ColumnKernel.pipelineInt32FFPP(
+          batch,
+          intPredicate(f1),
+          intPredicate(f2),
+          intMap(m3),
+          intMap(m4),
+        )
+      case List(Filter(f1), Project(m2), Filter(f3), Filter(f4)) =>
+        ColumnKernel.pipelineInt32FPFF(
+          batch,
+          intPredicate(f1),
+          intMap(m2),
+          intPredicate(f3),
+          intPredicate(f4),
+        )
+      case List(Filter(f1), Project(m2), Filter(f3), Project(m4)) =>
+        ColumnKernel.pipelineInt32FPFP(
+          batch,
+          intPredicate(f1),
+          intMap(m2),
+          intPredicate(f3),
+          intMap(m4),
+        )
+      case List(Filter(f1), Project(m2), Project(m3), Filter(f4)) =>
+        ColumnKernel.pipelineInt32FPPF(
+          batch,
+          intPredicate(f1),
+          intMap(m2),
+          intMap(m3),
+          intPredicate(f4),
+        )
+      case List(Filter(f1), Project(m2), Project(m3), Project(m4)) =>
+        ColumnKernel.pipelineInt32FPPP(
+          batch,
+          intPredicate(f1),
+          intMap(m2),
+          intMap(m3),
+          intMap(m4),
+        )
+      case List(Project(m1), Filter(f2), Filter(f3), Filter(f4)) =>
+        ColumnKernel.pipelineInt32PFFF(
+          batch,
+          intMap(m1),
+          intPredicate(f2),
+          intPredicate(f3),
+          intPredicate(f4),
+        )
+      case List(Project(m1), Filter(f2), Filter(f3), Project(m4)) =>
+        ColumnKernel.pipelineInt32PFFP(
+          batch,
+          intMap(m1),
+          intPredicate(f2),
+          intPredicate(f3),
+          intMap(m4),
+        )
+      case List(Project(m1), Filter(f2), Project(m3), Filter(f4)) =>
+        ColumnKernel.pipelineInt32PFPF(
+          batch,
+          intMap(m1),
+          intPredicate(f2),
+          intMap(m3),
+          intPredicate(f4),
+        )
+      case List(Project(m1), Filter(f2), Project(m3), Project(m4)) =>
+        ColumnKernel.pipelineInt32PFPP(
+          batch,
+          intMap(m1),
+          intPredicate(f2),
+          intMap(m3),
+          intMap(m4),
+        )
+      case List(Project(m1), Project(m2), Filter(f3), Filter(f4)) =>
+        ColumnKernel.pipelineInt32PPFF(
+          batch,
+          intMap(m1),
+          intMap(m2),
+          intPredicate(f3),
+          intPredicate(f4),
+        )
+      case List(Project(m1), Project(m2), Filter(f3), Project(m4)) =>
+        ColumnKernel.pipelineInt32PPFP(
+          batch,
+          intMap(m1),
+          intMap(m2),
+          intPredicate(f3),
+          intMap(m4),
+        )
+      case List(Project(m1), Project(m2), Project(m3), Filter(f4)) =>
+        ColumnKernel.pipelineInt32PPPF(
+          batch,
+          intMap(m1),
+          intMap(m2),
+          intMap(m3),
+          intPredicate(f4),
+        )
+      case List(Project(m1), Project(m2), Project(m3), Project(m4)) =>
+        ColumnKernel.pipelineInt32PPPP(batch, intMap(m1), intMap(m2), intMap(m3), intMap(m4))
+      case _ =>
+        throw new IllegalStateException(
+          s"unsupported int pipeline pattern of length ${steps.length}",
+        )
+
+  private def intPredicate(predicate: Any): ColumnKernel.Int32Predicate =
+    val fn = predicate.asInstanceOf[Int => Boolean]
+    value => fn(value)
+
+  private def intMap(mapper: Any): ColumnKernel.Int32Map =
+    val fn = mapper.asInstanceOf[Int => Int]
+    value => fn(value)
 
   private def applyFilter(columns: Columns, predicate: Any, slot: PhysicalOp.Slot): Columns =
     slot match
